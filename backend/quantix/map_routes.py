@@ -25,7 +25,9 @@ def create_router(repo):
     def propose(tender_id: str, request: NodeInput):
         return service.propose(tender_id, request.model_dump())
 
-    @router.post("/tenders/{tender_id}/project-map/nodes/{node_id}/decision", response_model=NodeRecord)
+    @router.post(
+        "/tenders/{tender_id}/project-map/nodes/{node_id}/decision", response_model=NodeRecord
+    )
     def decide(tender_id: str, node_id: str, request: NodeDecision):
         return service.decide(tender_id, node_id, request.model_dump())
 

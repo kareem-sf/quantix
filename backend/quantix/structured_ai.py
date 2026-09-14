@@ -17,7 +17,13 @@ if TYPE_CHECKING:
     from .repository import Repository
 
 Output = TypeVar("Output", bound=BaseModel)
-USAGE_COUNTERS = ("requests", "input_tokens", "output_tokens", "cached_input_tokens", "reasoning_tokens")
+USAGE_COUNTERS = (
+    "requests",
+    "input_tokens",
+    "output_tokens",
+    "cached_input_tokens",
+    "reasoning_tokens",
+)
 
 
 def light_route(approved_route, connection, model):
@@ -31,8 +37,10 @@ def light_route(approved_route, connection, model):
     effort = route.get("reasoning")
     # Explicit token budgets stay unless the model reports a lighter named setting.
     fixed_budget = isinstance(effort, str) and effort.startswith("budget:")
-    if effort not in {"none", "disabled"} and candidate is not None and (
-        not fixed_budget or candidate in recorded
+    if (
+        effort not in {"none", "disabled"}
+        and candidate is not None
+        and (not fixed_budget or candidate in recorded)
     ):
         route["reasoning"] = candidate
     effort = route.get("reasoning")
@@ -40,14 +48,23 @@ def light_route(approved_route, connection, model):
         try:
             budget = int(effort.split(":", 1)[1])
         except ValueError:
-            raise ValueError("Review the approved thinking-token budget before this analysis.") from None
+            raise ValueError(
+                "Review the approved thinking-token budget before this analysis."
+            ) from None
         if not 1 <= budget < approved_limit:
-            raise ValueError("The approved thinking budget must remain below its approved output limit.")
+            raise ValueError(
+                "The approved thinking budget must remain below its approved output limit."
+            )
     return route
 
 
 async def ask_structured(
-    repo: "Repository", tender_id: str, run_id: str, prompt: str, output_type: type[Output], *,
+    repo: "Repository",
+    tender_id: str,
+    run_id: str,
+    prompt: str,
+    output_type: type[Output],
+    *,
     operation: str,
 ) -> tuple[Output, dict]:
     from .ai_connections import AIConnectionService
@@ -63,7 +80,10 @@ async def ask_structured(
     context = OfficeContext(repo, tender_id, run_id)
     with connections.lease(route["connection_id"]) as connection:
         policy.routes_for(tender_id)
-        model = next((m for m in connections.models(connection["id"]) if m["model_id"] == route["model_id"]), {})
+        model = next(
+            (m for m in connections.models(connection["id"]) if m["model_id"] == route["model_id"]),
+            {},
+        )
         approved_output = route["max_output_tokens"]
         # The lightest thinking level with the Tender's full approved output limit:
         # a batch of document briefs needs all of it.
@@ -95,9 +115,17 @@ async def ask_structured(
         worker_operation = "execute" if is_subscription_profile(connection) else operation
         try:
             response = await execute_api(
-                route, bounded, credentials, context, prompt, output_type,
-                definitions=[], operation=worker_operation, system_instructions="",
-                before_request=before_request, on_response=meter.on_response,
+                route,
+                bounded,
+                credentials,
+                context,
+                prompt,
+                output_type,
+                definitions=[],
+                operation=worker_operation,
+                system_instructions="",
+                before_request=before_request,
+                on_response=meter.on_response,
             )
             output = output_type.model_validate(response["output"])
         except BaseException as error:
@@ -112,6 +140,11 @@ def add_usage(total: dict, part: dict) -> dict:
     for counter in USAGE_COUNTERS:
         merged[counter] = (merged.get(counter, 0) or 0) + (part.get(counter, 0) or 0)
     merged["total_tokens"] = merged.get("input_tokens", 0) + merged.get("output_tokens", 0)
-    merged["usage_complete"] = bool(total.get("usage_complete", True) and part.get("usage_complete", True))
-    merged["request_details"] = [*total.get("request_details", []), *part.get("request_details", [])]
+    merged["usage_complete"] = bool(
+        total.get("usage_complete", True) and part.get("usage_complete", True)
+    )
+    merged["request_details"] = [
+        *total.get("request_details", []),
+        *part.get("request_details", []),
+    ]
     return merged

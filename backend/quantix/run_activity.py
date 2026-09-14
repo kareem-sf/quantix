@@ -90,7 +90,9 @@ class ActivityRecorder:
             "operation_id": operation_id,
             "parent_operation_id": parent,
             "actor_id": getattr(self.context, "actor_id", None) or "manager",
-            "actor_label": "Staff member" if getattr(self.context, "assignment_id", None) else "Tender Manager",
+            "actor_label": "Staff member"
+            if getattr(self.context, "assignment_id", None)
+            else "Tender Manager",
             "assignment_id": getattr(self.context, "assignment_id", None),
             "tool": tool,
             "provider": provider,

@@ -16,9 +16,19 @@ from quantix.jobs import JobManager
 
 
 def _plan(repo, tender_id):
-    return repo.create_plan(tender_id, "Synthetic plan", [
-        {"title": f"Review {name}", "role": name, "description": f"Review {name}", "source_ids": []}
-        for name in ("Concrete", "Rebar")])
+    return repo.create_plan(
+        tender_id,
+        "Synthetic plan",
+        [
+            {
+                "title": f"Review {name}",
+                "role": name,
+                "description": f"Review {name}",
+                "source_ids": [],
+            }
+            for name in ("Concrete", "Rebar")
+        ],
+    )
 
 
 async def _finish(jobs):
@@ -39,12 +49,18 @@ async def test_each_message_is_one_metered_manager_request(tmp_path, monkeypatch
 
     @asynccontextmanager
     async def binding(*_):
-        yield APIModelBinding(model=FunctionModel(stream_function=scripted, model_name="synthetic-model"), settings={}, client=None)
+        yield APIModelBinding(
+            model=FunctionModel(stream_function=scripted, model_name="synthetic-model"),
+            settings={},
+            client=None,
+        )
 
     monkeypatch.setattr("quantix.ai_api_engine.model_for_route", binding)
     jobs = JobManager(repo, object())
     for index in range(2):
-        response = jobs.submit_message(tender["id"], "Review concrete", idempotency_key=f"synthetic-{index}")
+        response = jobs.submit_message(
+            tender["id"], "Review concrete", idempotency_key=f"synthetic-{index}"
+        )
         run_id = response["run"]["id"]
         await _finish(jobs)
         run = repo.get_run(run_id)
@@ -63,11 +79,15 @@ def test_consumed_and_edited_idempotent_receipts_cannot_target_later_pending(tmp
     monkeypatch.setattr(jobs, "_schedule", lambda run, task_id=None: run)
     prior = repo.create_run(tender["id"], "manager")
     initial = jobs.submit_message(tender["id"], "Original", idempotency_key="original")["pending"]
-    edited = jobs.edit_pending(tender["id"], "Edited", pending_id=initial["id"], expected_revision=initial["revision"])
+    edited = jobs.edit_pending(
+        tender["id"], "Edited", pending_id=initial["id"], expected_revision=initial["revision"]
+    )
     with pytest.raises(ValueError, match="no longer identifies"):
         jobs.submit_message(tender["id"], "Original", idempotency_key="original")
     repo.update_run(prior["id"], status="completed")
-    consumed = jobs.consume_pending(tender["id"], pending_id=edited["id"], expected_revision=edited["revision"])
+    consumed = jobs.consume_pending(
+        tender["id"], pending_id=edited["id"], expected_revision=edited["revision"]
+    )
     next_pending = jobs.submit_message(tender["id"], "Later", idempotency_key="later")["pending"]
     receipt = jobs.submit_message(tender["id"], "Edited", idempotency_key=edited["idempotency_key"])
     assert receipt["run"]["id"] == consumed["run"]["id"]
@@ -90,7 +110,11 @@ async def test_interrupted_manager_request_marks_unreported_usage_uncertain(tmp_
     with pytest.raises(asyncio.CancelledError):
         await run_manager(repo, tender["id"], run["id"], "Hello")
     with repo.db.connect() as conn:
-        usage = json.loads(conn.execute("SELECT data_json FROM ai_usage WHERE run_id=?", (run["id"],)).fetchone()[0])
+        usage = json.loads(
+            conn.execute("SELECT data_json FROM ai_usage WHERE run_id=?", (run["id"],)).fetchone()[
+                0
+            ]
+        )
     assert usage["status"] == "uncertain"
     assert usage["reserved_usd"] > 0
 
@@ -108,16 +132,25 @@ def test_pending_edit_and_new_idempotency_receipt_commit_together(tmp_path, monk
         # receipt is saved. Otherwise a concurrent consume can lose its run ID
         # when this edit subsequently overwrites that receipt.
         with sqlite3.connect(repo.db.path) as reader:
-            assert reader.execute("SELECT revision FROM pending_instructions WHERE id=?", (original["id"],)).fetchone() == (original["revision"],)
+            assert reader.execute(
+                "SELECT revision FROM pending_instructions WHERE id=?", (original["id"],)
+            ).fetchone() == (original["revision"],)
         return remember(*args, **kwargs)
 
     monkeypatch.setattr(pending, "remember_idempotency", atomic_receipt)
-    edited = pending.edit(tender["id"], "Edited", pending_id=original["id"], expected_revision=original["revision"])
-    assert pending.lookup_idempotency(tender["id"], edited["idempotency_key"], "Edited")["pending_id"] == original["id"]
+    edited = pending.edit(
+        tender["id"], "Edited", pending_id=original["id"], expected_revision=original["revision"]
+    )
+    assert (
+        pending.lookup_idempotency(tender["id"], edited["idempotency_key"], "Edited")["pending_id"]
+        == original["id"]
+    )
 
 
 @pytest.mark.parametrize("status", ["failed", "cancelled", "interrupted"])
-def test_http_resume_reruns_the_manager_without_duplicate_message_or_receipt(tmp_path, monkeypatch, status):
+def test_http_resume_reruns_the_manager_without_duplicate_message_or_receipt(
+    tmp_path, monkeypatch, status
+):
 
     app = create_app(tmp_path, "synthetic-session")
     repo, tender, *_ = configured_office(tmp_path, monkeypatch, repo=app.state.repo)
@@ -125,7 +158,9 @@ def test_http_resume_reruns_the_manager_without_duplicate_message_or_receipt(tmp
     repo.add_message(tender["id"], "engineer", "Hello")
     repo.update_run(original["id"], status=status)
     jobs = app.state.jobs
-    jobs.pending.remember_idempotency(tender["id"], "original", "Hello", outcome_kind="immediate", run_id=original["id"])
+    jobs.pending.remember_idempotency(
+        tender["id"], "original", "Hello", outcome_kind="immediate", run_id=original["id"]
+    )
     pending = jobs.pending.upsert(tender["id"], "Later instruction", "later", [original["id"]])
     jobs.pending.on_run_finished(original["id"], status)
     turns = []
@@ -150,8 +185,14 @@ def test_http_resume_reruns_the_manager_without_duplicate_message_or_receipt(tmp
         assert repo.get_run(resumed["id"])["status"] == "completed"
         assert repo.get_run(original["id"])["status"] == status
         assert turns == [resumed["id"]]
-        assert [message["role"] for message in repo.messages(tender["id"])] == ["engineer", "manager"]
-        assert jobs.submit_message(tender["id"], "Hello", idempotency_key="original")["run"]["id"] == original["id"]
+        assert [message["role"] for message in repo.messages(tender["id"])] == [
+            "engineer",
+            "manager",
+        ]
+        assert (
+            jobs.submit_message(tender["id"], "Hello", idempotency_key="original")["run"]["id"]
+            == original["id"]
+        )
         assert jobs.pending.get(tender["id"])["id"] == pending["id"]
         assert jobs.pending.get(tender["id"])["status"] == "held"
         assert len(repo.list_runs(tender["id"])) == 2
@@ -161,7 +202,9 @@ def test_http_resume_rechecks_changed_account_authority(tmp_path, monkeypatch):
     from quantix.ai_models import ConnectionInput
 
     app = create_app(tmp_path, "synthetic-session")
-    repo, tender, connections, account, *_ = configured_office(tmp_path, monkeypatch, repo=app.state.repo)
+    repo, tender, connections, account, *_ = configured_office(
+        tmp_path, monkeypatch, repo=app.state.repo
+    )
     original = repo.create_run(tender["id"], "manager", "Hello")
     repo.update_run(original["id"], status="failed")
     values = {key: value for key, value in account.items() if key in ConnectionInput.model_fields}

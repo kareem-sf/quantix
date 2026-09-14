@@ -206,7 +206,6 @@ th {
 }
 
 @media (max-width: 760px) {
-
   .composer textarea {
     font-size: var(--qx-text-body);
   }
@@ -217,7 +216,7 @@ th {
     align-items: flex-start;
     flex-wrap: wrap;
   }
-  
+
   .document-row {
     gap: 12px;
   }
@@ -237,7 +236,6 @@ th {
     padding: 20px;
     max-height: calc(100dvh - 28px);
   }
-  
 }
 
 .settings-backups {
@@ -306,7 +304,6 @@ th {
   margin-top: 18px;
 }
 @media (max-width: 760px) {
-
   .backup-list > li {
     gap: 12px;
     align-items: flex-start;
@@ -338,9 +335,9 @@ th {
 .field-error::before {
   content: "";
   display: inline-block;
-  width: .4em;
-  height: .4em;
-  margin: 0 .45em .1em 0;
+  width: 0.4em;
+  height: 0.4em;
+  margin: 0 0.45em 0.1em 0;
   border-radius: 50%;
   background: currentColor;
 }

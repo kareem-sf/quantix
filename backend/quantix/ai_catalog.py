@@ -3,49 +3,123 @@
 from .ai_models import ProviderPreset
 
 
-def _preset(identifier, name, protocols, base_url, docs_url, *, auth=None,
-            billing="metered", fields=(), notes=(), kind="api"):
+def _preset(
+    identifier,
+    name,
+    protocols,
+    base_url,
+    docs_url,
+    *,
+    auth=None,
+    billing="metered",
+    fields=(),
+    notes=(),
+    kind="api",
+):
     return ProviderPreset(
-        id=identifier, name=name, kind=kind, protocols=protocols,
-        default_protocol=protocols[0], base_url=base_url,
-        auth_methods=auth or ["api_key", "environment"], billing=billing,
-        docs_url=docs_url, settings_fields=list(fields), notes=list(notes),
+        id=identifier,
+        name=name,
+        kind=kind,
+        protocols=protocols,
+        default_protocol=protocols[0],
+        base_url=base_url,
+        auth_methods=auth or ["api_key", "environment"],
+        billing=billing,
+        docs_url=docs_url,
+        settings_fields=list(fields),
+        notes=list(notes),
     ).model_dump(mode="json")
 
 
 _PRESETS = [
-    _preset("openai", "OpenAI", ["openai_responses", "openai_chat"],
-            "https://api.openai.com/v1", "https://developers.openai.com/api/docs",
-            notes=["API usage has separate billing from a ChatGPT subscription.",
-                   "Model names from the provider do not establish tool or image support."]),
-    _preset("anthropic", "Anthropic Claude", ["anthropic"],
-            "https://api.anthropic.com", "https://platform.claude.com/docs/en/api/overview",
-            notes=["Document citations and strict JSON output cannot be combined in one request.",
-                   "Native search availability depends on the model."]),
-    _preset("google", "Google Gemini API", ["google"], None,
-            "https://ai.google.dev/gemini-api/docs/api-key",
-            notes=["Use the current API key instructions in Google AI Studio.",
-                   "Unpaid and billing-enabled projects have different data terms.",
-                   "Google Search has separate billing and retention rules."]),
-    _preset("xai", "xAI Grok", ["openai_responses", "openai_chat"],
-            "https://api.x.ai/v1", "https://docs.x.ai/developers/tools/overview",
-            notes=["Hosted web search and X search are separate tools.",
-                   "Reasoning and JSON Schema support depend on the model."]),
-    _preset("custom", "Custom OpenAI-compatible endpoint", ["openai_chat", "openai_responses"], None,
-            "https://ai.pydantic.dev/models/openai/", billing="unknown",
-            notes=["Enter an endpoint you trust that implements the OpenAI API.",
-                   "Compatibility does not prove model capabilities. Add a model manually when discovery is unsupported."]),
-    _preset("codex", "ChatGPT subscription (Codex)", ["codex"], None,
-            "https://developers.openai.com/codex/sdk/", kind="runtime", auth=["client_login"], billing="subscription",
-            fields=["runtime_timeout_seconds", "max_turns"],
-            notes=["Uses your ChatGPT plan through the official Codex client. For API-key billing, use an OpenAI API connection.",
-                   "Install and sign in only through an explicit connection action."]),
-    _preset("grok_build", "Grok subscription", ["grok_build"], None,
-            "https://docs.x.ai/build/overview", kind="runtime", auth=["client_login"], billing="subscription",
-            fields=["runtime_timeout_seconds", "max_turns", "allow_provider_managed_extras"],
-            notes=["Uses your eligible Grok subscription through the official Grok Build software.",
-                   "Subscription allowance only is the default. Extra credits and top-ups require an explicit account preference and Tender approval.",
-                   "This connection supports Quantix document tools. Native Grok web and X search are not connected yet."]),
+    _preset(
+        "openai",
+        "OpenAI",
+        ["openai_responses", "openai_chat"],
+        "https://api.openai.com/v1",
+        "https://developers.openai.com/api/docs",
+        notes=[
+            "API usage has separate billing from a ChatGPT subscription.",
+            "Model names from the provider do not establish tool or image support.",
+        ],
+    ),
+    _preset(
+        "anthropic",
+        "Anthropic Claude",
+        ["anthropic"],
+        "https://api.anthropic.com",
+        "https://platform.claude.com/docs/en/api/overview",
+        notes=[
+            "Document citations and strict JSON output cannot be combined in one request.",
+            "Native search availability depends on the model.",
+        ],
+    ),
+    _preset(
+        "google",
+        "Google Gemini API",
+        ["google"],
+        None,
+        "https://ai.google.dev/gemini-api/docs/api-key",
+        notes=[
+            "Use the current API key instructions in Google AI Studio.",
+            "Unpaid and billing-enabled projects have different data terms.",
+            "Google Search has separate billing and retention rules.",
+        ],
+    ),
+    _preset(
+        "xai",
+        "xAI Grok",
+        ["openai_responses", "openai_chat"],
+        "https://api.x.ai/v1",
+        "https://docs.x.ai/developers/tools/overview",
+        notes=[
+            "Hosted web search and X search are separate tools.",
+            "Reasoning and JSON Schema support depend on the model.",
+        ],
+    ),
+    _preset(
+        "custom",
+        "Custom OpenAI-compatible endpoint",
+        ["openai_chat", "openai_responses"],
+        None,
+        "https://ai.pydantic.dev/models/openai/",
+        billing="unknown",
+        notes=[
+            "Enter an endpoint you trust that implements the OpenAI API.",
+            "Compatibility does not prove model capabilities. Add a model manually when discovery is unsupported.",
+        ],
+    ),
+    _preset(
+        "codex",
+        "ChatGPT subscription (Codex)",
+        ["codex"],
+        None,
+        "https://developers.openai.com/codex/sdk/",
+        kind="runtime",
+        auth=["client_login"],
+        billing="subscription",
+        fields=["runtime_timeout_seconds", "max_turns"],
+        notes=[
+            "Uses your ChatGPT plan through the official Codex client. For API-key billing, use an OpenAI API connection.",
+            "Install and sign in only through an explicit connection action.",
+        ],
+    ),
+    _preset(
+        "grok_build",
+        "Grok subscription",
+        ["grok_build"],
+        None,
+        "https://docs.x.ai/build/overview",
+        kind="runtime",
+        auth=["client_login"],
+        billing="subscription",
+        fields=["runtime_timeout_seconds", "max_turns", "allow_provider_managed_extras"],
+        notes=[
+            "Uses your eligible Grok subscription through the official Grok Build software.",
+            "Subscription allowance only is the default. Extra credits and top-ups require an explicit account preference and Tender approval.",
+            "This connection supports Quantix document tools. Native Grok web and X search are not connected yet.",
+        ],
+    ),
 ]
 
 
@@ -102,10 +176,14 @@ def catalog_price(provider_id: str, model_id: str) -> dict | None:
     from .ai_models import PriceCard
 
     if provider_id == "openai" and model_id == "gpt-6-astra":
-        return PriceCard(input_per_million=25, output_per_million=75,
-                         cached_input_per_million=2, web_search_per_call=0.01,
-                         source="https://developers.openai.com/api/docs/models/gpt-6-astra; conservative Standard ceiling including long-context cache writes; not an invoice rate",
-                         as_of="2026-09-07").model_dump(mode="json")
+        return PriceCard(
+            input_per_million=25,
+            output_per_million=75,
+            cached_input_per_million=2,
+            web_search_per_call=0.01,
+            source="https://developers.openai.com/api/docs/models/gpt-6-astra; conservative Standard ceiling including long-context cache writes; not an invoice rate",
+            as_of="2026-09-07",
+        ).model_dump(mode="json")
     if provider_id == "google" and model_id == "gemini-3.8-flash":
         return PriceCard(
             input_per_million=1.5,
@@ -115,7 +193,15 @@ def catalog_price(provider_id: str, model_id: str) -> dict | None:
             as_of="2026-09-11",
         ).model_dump(mode="json")
     mapped = {"xai": "x-ai"}.get(provider_id, provider_id)
-    if mapped in {"azure", "google_vertex", "bedrock", "custom", "ollama", "lmstudio", "openrouter"}:
+    if mapped in {
+        "azure",
+        "google_vertex",
+        "bedrock",
+        "custom",
+        "ollama",
+        "lmstudio",
+        "openrouter",
+    }:
         return None
     provider = next((item for item in providers if item.id == mapped), None)
     if provider is None:
@@ -128,7 +214,11 @@ def catalog_price(provider_id: str, model_id: str) -> dict | None:
         return None
     if model is None:
         return None
-    prices = [model.prices] if isinstance(model.prices, ModelPrice) else [item.prices for item in model.prices]
+    prices = (
+        [model.prices]
+        if isinstance(model.prices, ModelPrice)
+        else [item.prices for item in model.prices]
+    )
 
     def highest(names):
         values = []
@@ -141,17 +231,24 @@ def catalog_price(provider_id: str, model_id: str) -> dict | None:
                     values.append(value)
         return float(max(values)) if values else None
 
-    input_price = highest(["input_mtok", "cache_write_mtok", "cache_write_1h_mtok", "cache_write_5m_mtok"])
+    input_price = highest(
+        ["input_mtok", "cache_write_mtok", "cache_write_1h_mtok", "cache_write_5m_mtok"]
+    )
     output_price = highest(["output_mtok", "output_reasoning_mtok"])
     if input_price is None or output_price is None:
         return None
     search = highest(["web_searches_kcount"])
     return PriceCard(
-        input_per_million=input_price, output_per_million=output_price,
+        input_per_million=input_price,
+        output_per_million=output_price,
         cached_input_per_million=highest(["cache_read_mtok"]),
         web_search_per_call=search / 1000 if search is not None else None,
         source=f"Bundled genai-prices {__version__}; conservative maximum tier/time rates. "
-               + (provider.pricing_urls[0] if provider.pricing_urls else "https://github.com/pydantic/genai-prices"),
+        + (
+            provider.pricing_urls[0]
+            if provider.pricing_urls
+            else "https://github.com/pydantic/genai-prices"
+        ),
         as_of=f"bundled genai-prices {__version__}",
     ).model_dump(mode="json")
 
@@ -162,11 +259,22 @@ def documented_capabilities(provider_id: str, protocol: str, model_id: str) -> d
         # This adapter's scoped tool surface does not wire Grok-native search.
         return {"web_search": False}
     if provider_id == "openai" and model_id == "gpt-6-astra":
-        return {"tools": True, "structured_output": True, "images": True,
-                "web_search": protocol == "openai_responses", "reasoning": ["low", "medium", "high", "xhigh", "max"],
-                "context_window": 1050000, "max_output_tokens": 128000}
+        return {
+            "tools": True,
+            "structured_output": True,
+            "images": True,
+            "web_search": protocol == "openai_responses",
+            "reasoning": ["low", "medium", "high", "xhigh", "max"],
+            "context_window": 1050000,
+            "max_output_tokens": 128000,
+        }
     if provider_id == "google" and model_id == "gemini-3.8-flash":
         # https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash, checked 2026-09-11.
-        return {"tools": True, "structured_output": True, "images": True,
-                "context_window": 1048576, "max_output_tokens": 65536}
+        return {
+            "tools": True,
+            "structured_output": True,
+            "images": True,
+            "context_window": 1048576,
+            "max_output_tokens": 65536,
+        }
     return {}

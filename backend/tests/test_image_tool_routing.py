@@ -9,8 +9,12 @@ def test_image_tools_are_offered_only_with_image_support():
     names = {definition.name for definition in source_tools()}
     assert "view_document_page" in names
 
-    without = {definition.name for definition in usable_definitions(source_tools(), image_support=False)}
-    with_images = {definition.name for definition in usable_definitions(source_tools(), image_support=True)}
+    without = {
+        definition.name for definition in usable_definitions(source_tools(), image_support=False)
+    }
+    with_images = {
+        definition.name for definition in usable_definitions(source_tools(), image_support=True)
+    }
 
     assert without == names - {"view_document_page"}
     assert with_images == names

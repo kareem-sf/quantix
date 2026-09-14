@@ -19,7 +19,9 @@ class OfficeExecutionIdentity:
     trusted_invocation_id: str | None
 
 
-def identity_from_office_context(context, *, invocation_id: str | None = None) -> OfficeExecutionIdentity:
+def identity_from_office_context(
+    context, *, invocation_id: str | None = None
+) -> OfficeExecutionIdentity:
     """Build identity from the live controller context. Payload fields cannot supply it."""
 
     is_staff = bool(getattr(context, "is_staff", False))

@@ -23,7 +23,12 @@ def test_bounds_move_into_descriptions():
     schema = {
         "type": "object",
         "properties": {
-            "title": {"type": "string", "minLength": 1, "maxLength": 200, "description": "Short title"},
+            "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "description": "Short title",
+            },
             "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
             "count": {"type": "integer", "minimum": 0, "maximum": 9},
         },
@@ -33,7 +38,10 @@ def test_bounds_move_into_descriptions():
     result = GeminiSchemaTransformer(schema).walk()
 
     assert not BOUNDS & set(_keys(result))
-    assert result["properties"]["title"]["description"] == "Short title (at least 1 characters; at most 200 characters)"
+    assert (
+        result["properties"]["title"]["description"]
+        == "Short title (at least 1 characters; at most 200 characters)"
+    )
     assert result["properties"]["tags"]["description"] == "At most 5 items"
     assert result["properties"]["count"]["description"] == "Minimum 0; maximum 9"
     assert result["required"] == ["title"]
@@ -49,7 +57,9 @@ def test_manager_output_schema_is_gemini_compatible():
 
 
 def test_google_routes_use_the_gemini_transformer():
-    profile = _model_profile("google", "google", {"model_id": "gemini-3.8-flash"}, "gemini-3.8-flash")
+    profile = _model_profile(
+        "google", "google", {"model_id": "gemini-3.8-flash"}, "gemini-3.8-flash"
+    )
 
     assert profile["json_schema_transformer"] is GeminiSchemaTransformer
     # Google's own capability flags are kept.

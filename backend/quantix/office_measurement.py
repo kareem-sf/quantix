@@ -51,10 +51,16 @@ def validate_agent_measurement(context, values):
             continue
         viewed_regions.append(region)
     if not viewed_regions:
-        raise ValueError("Inspect the measured drawing page with view_document_page before measuring it.")
+        raise ValueError(
+            "Inspect the measured drawing page with view_document_page before measuring it."
+        )
     for px, py in [*proposal.points, *(proposal.calibration_points or [])]:
-        if not any(x <= px <= x + width and y <= py <= y + height for x, y, width, height in viewed_regions):
-            raise ValueError("Inspect every measured and calibration point in the drawing before measuring it.")
+        if not any(
+            x <= px <= x + width and y <= py <= y + height for x, y, width, height in viewed_regions
+        ):
+            raise ValueError(
+                "Inspect every measured and calibration point in the drawing before measuring it."
+            )
     return proposal
 
 
@@ -66,10 +72,16 @@ async def calculate_agent_measurement(context, values):
         context.tender_id,
         proposal.model_dump(include=set(MeasurementInput.model_fields)),
     )
-    context.emit_event("drawing_measurement_calculated", "A drawing quantity was calculated.", {
-        "artifact_id": proposal.artifact_id, "page": proposal.page,
-        "source_ids": proposal.source_ids, "mode": proposal.mode,
-    })
+    context.emit_event(
+        "drawing_measurement_calculated",
+        "A drawing quantity was calculated.",
+        {
+            "artifact_id": proposal.artifact_id,
+            "page": proposal.page,
+            "source_ids": proposal.source_ids,
+            "mode": proposal.mode,
+        },
+    )
     return {
         **calculation,
         "scope_label": proposal.scope_label,
@@ -92,11 +104,19 @@ def measurement_tools():
         source_ids: list[str],
     ) -> str:
         """Scale a length, area or count from a drawing when no dimension is printed. View the regions first with view_document_page; points are top-left page fractions and calibration is a printed dimension or scale bar. Count requires null calibration. Nothing is saved."""
-        result = await calculate_agent_measurement(ctx.context, {
-            "artifact_id": artifact_id, "page": page, "mode": mode, "points": points,
-            "calibration_points": calibration_points, "calibration_metres": calibration_metres,
-            "scope_label": scope_label, "source_ids": source_ids,
-        })
+        result = await calculate_agent_measurement(
+            ctx.context,
+            {
+                "artifact_id": artifact_id,
+                "page": page,
+                "mode": mode,
+                "points": points,
+                "calibration_points": calibration_points,
+                "calibration_metres": calibration_metres,
+                "scope_label": scope_label,
+                "source_ids": source_ids,
+            },
+        )
         return json.dumps(_clean(result), ensure_ascii=False)
 
     return [calculate_drawing_measurement]

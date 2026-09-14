@@ -50,7 +50,9 @@ async def test_tool_argument_complaints_go_back_to_the_model(monkeypatch):
 async def test_refused_authority_reports_its_reason_not_a_provider_failure(monkeypatch):
     invoke = _invoke_with(
         monkeypatch,
-        _fence("The tool 'read_document' is not granted for this staff assignment.", recoverable=False),
+        _fence(
+            "The tool 'read_document' is not granted for this staff assignment.", recoverable=False
+        ),
     )
 
     with pytest.raises(DirectAPIError, match="not granted"):

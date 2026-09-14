@@ -244,9 +244,14 @@ class DirectAPIService:
         bounded["_execution_limits"] = {
             "max_requests": 2,
             "max_output_tokens": 1024,
-            "context_window": (connection.get("_model") or {}).get("capabilities", {}).get("context_window"),
+            "context_window": (connection.get("_model") or {})
+            .get("capabilities", {})
+            .get("context_window"),
         }
-        bounded["_model"] = connection.get("_model") or {"model_id": selected.get("model_id"), "capabilities": {}}
+        bounded["_model"] = connection.get("_model") or {
+            "model_id": selected.get("model_id"),
+            "capabilities": {},
+        }
         selected["reasoning"] = _check_reasoning(selected, bounded)
         check_tool = _ConnectionCheckTool()
         instruction = (
@@ -289,17 +294,33 @@ class DirectAPIService:
 
         return await self._run(operation)
 
-    async def execute(self, route, connection, credentials, context, instruction, output_type,
-                      *, consult=None, before_request=None, on_response=None,
-                      definitions=None, operation_name="execute", validate_output=None):
+    async def execute(
+        self,
+        route,
+        connection,
+        credentials,
+        context,
+        instruction,
+        output_type,
+        *,
+        consult=None,
+        before_request=None,
+        on_response=None,
+        definitions=None,
+        operation_name="execute",
+        validate_output=None,
+    ):
         _ensure_connection(connection)
         if not isinstance(instruction, str) or not instruction.strip():
             raise DirectAPIError("The direct API instruction is empty.")
         bounded = dict(connection)
-        bounded.setdefault("_execution_limits", {
-            "max_requests": int(route.get("max_requests", 12)),
-            "max_output_tokens": int(route.get("max_output_tokens", 8192)),
-        })
+        bounded.setdefault(
+            "_execution_limits",
+            {
+                "max_requests": int(route.get("max_requests", 12)),
+                "max_output_tokens": int(route.get("max_output_tokens", 8192)),
+            },
+        )
         bounded.setdefault("_model", {"model_id": route.get("model_id"), "capabilities": {}})
 
         async def operation():

@@ -36,14 +36,18 @@ async def run_turn(
     policy = policies.get(tender_id)
     with connections.lease(route["connection_id"]) as connection:
         if not is_supported_profile(connection):
-            raise ValueError("This saved AI account is retired. Choose a supported AI account for this tender.")
+            raise ValueError(
+                "This saved AI account is retired. Choose a supported AI account for this tender."
+            )
         meter = BudgetMeter(policies, tender_id, run_id, route, metadata=metadata)
         checked_component = require_ready(repo, connection, route["model_id"])
         with repo.db.connect() as conn:
             _, _, used_requests = policies._totals(conn, tender_id, run_id)
         remaining = policy["max_requests"] - used_requests
         if remaining < 1:
-            raise ValueError("The tender's AI request allowance for this work is used up. Review the saved progress before continuing.")
+            raise ValueError(
+                "The tender's AI request allowance for this work is used up. Review the saved progress before continuing."
+            )
         leased = connection | {
             "_model": meter.model,
             "_checked_component_version": checked_component,
@@ -53,17 +57,32 @@ async def run_turn(
                 "context_window": meter.model["capabilities"].get("context_window"),
             },
         }
-        repo.event(run_id, "ai_route_selected", "Using an approved AI connection.", {
-            "connection_id": connection["id"], "provider": connection["provider_id"],
-            "model": route["model_id"], "billing": connection["billing"], "role": role,
-            **(metadata or {}),
-        })
+        repo.event(
+            run_id,
+            "ai_route_selected",
+            "Using an approved AI connection.",
+            {
+                "connection_id": connection["id"],
+                "provider": connection["provider_id"],
+                "model": route["model_id"],
+                "billing": connection["billing"],
+                "role": role,
+                **(metadata or {}),
+            },
+        )
         credentials = connections.credentials(connection["id"])
         try:
             response = await execute_api(
-                route, leased, credentials, context, prompt, output_type,
-                system_instructions=system_instructions, definitions=definitions,
-                before_request=meter.before_request, on_response=meter.on_response,
+                route,
+                leased,
+                credentials,
+                context,
+                prompt,
+                output_type,
+                system_instructions=system_instructions,
+                definitions=definitions,
+                before_request=meter.before_request,
+                on_response=meter.on_response,
                 validate_output=validate_output,
             )
         except Exception as error:

@@ -7,7 +7,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .estimate_models import DecimalText
 
 TakeoffMethod = Literal["dimensions", "schedule", "scaled", "counted"]
-Comparison = Literal["matches", "differs", "unit_differs", "no_boq_quantity", "not_in_boq", "not_on_drawings"]
+Comparison = Literal[
+    "matches", "differs", "unit_differs", "no_boq_quantity", "not_in_boq", "not_on_drawings"
+]
 TakeoffStatus = Literal["proposed", "accepted", "rejected"]
 
 
@@ -26,9 +28,13 @@ class TakeoffLineProposal(BaseModel):
     @model_validator(mode="after")
     def complete(self):
         if self.quantity is None and self.boq_item_id is None:
-            raise ValueError("Give the quantity, or the BOQ item that cannot be found on the drawings.")
+            raise ValueError(
+                "Give the quantity, or the BOQ item that cannot be found on the drawings."
+            )
         if self.quantity is not None and self.method is None:
-            raise ValueError("State how the quantity was taken: dimensions, schedule, scaled or counted.")
+            raise ValueError(
+                "State how the quantity was taken: dimensions, schedule, scaled or counted."
+            )
         if len(set(self.source_ids)) != len(self.source_ids):
             raise ValueError("Cite each drawing source once.")
         return self

@@ -46,16 +46,36 @@ STAGES = {
 }
 
 DocumentType = Literal[
-    "invitation_to_tender", "instructions_to_tenderers", "conditions_of_contract", "particular_conditions",
-    "specification", "bill_of_quantities", "drawing", "schedule", "addendum_or_clarification", "tender_form",
-    "programme", "correspondence", "report", "other",
+    "invitation_to_tender",
+    "instructions_to_tenderers",
+    "conditions_of_contract",
+    "particular_conditions",
+    "specification",
+    "bill_of_quantities",
+    "drawing",
+    "schedule",
+    "addendum_or_clarification",
+    "tender_form",
+    "programme",
+    "correspondence",
+    "report",
+    "other",
 ]
 DOCUMENT_TYPE_LABELS = {
-    "invitation_to_tender": "invitation to tender", "instructions_to_tenderers": "instructions to tenderers",
-    "conditions_of_contract": "conditions of contract", "particular_conditions": "particular conditions",
-    "specification": "specification", "bill_of_quantities": "bill of quantities", "drawing": "drawing",
-    "schedule": "schedule", "addendum_or_clarification": "addendum or clarification", "tender_form": "tender form",
-    "programme": "programme", "correspondence": "correspondence", "report": "report", "other": "other document",
+    "invitation_to_tender": "invitation to tender",
+    "instructions_to_tenderers": "instructions to tenderers",
+    "conditions_of_contract": "conditions of contract",
+    "particular_conditions": "particular conditions",
+    "specification": "specification",
+    "bill_of_quantities": "bill of quantities",
+    "drawing": "drawing",
+    "schedule": "schedule",
+    "addendum_or_clarification": "addendum or clarification",
+    "tender_form": "tender form",
+    "programme": "programme",
+    "correspondence": "correspondence",
+    "report": "report",
+    "other": "other document",
 }
 
 
@@ -68,7 +88,9 @@ class DocumentBrief(BaseModel):
     discipline: OptionalText(80, description="For example civil, structural, MEP.")
     brief: Text(600, description="Two or three sentences: what this document is and covers.")
     key_topics: TextList(80, 8)
-    key_locations: TextList(120, 6, description="Where key content is, for example 'page 3: form of tender'.")
+    key_locations: TextList(
+        120, 6, description="Where key content is, for example 'page 3: form of tender'."
+    )
     # Entries that are not listed document ids are dropped when the brief is saved.
     related_document_ids: TextList(64, 8)
 
@@ -84,7 +106,11 @@ class PackageOverview(BaseModel):
 
     identity: ProjectIdentity
     overview: Text(1500, description="What this tender package is for and what it contains.")
-    gaps: TextList(300, 10, description="Important documents or facts a tender package normally has but this one lacks.")
+    gaps: TextList(
+        300,
+        10,
+        description="Important documents or facts a tender package normally has but this one lacks.",
+    )
 
 
 @dataclass
@@ -119,7 +145,9 @@ def source_fingerprint(artifacts: list[dict]) -> str:
 def package_map(repo: "Repository", tender_id: str) -> dict | None:
     ensure_schema(repo)
     with repo.db.connect() as conn:
-        row = conn.execute("SELECT data_json, source_fingerprint FROM package_maps WHERE tender_id=?", (tender_id,)).fetchone()
+        row = conn.execute(
+            "SELECT data_json, source_fingerprint FROM package_maps WHERE tender_id=?", (tender_id,)
+        ).fetchone()
     if row is None:
         return None
     data = json.loads(row[0])
@@ -129,8 +157,12 @@ def package_map(repo: "Repository", tender_id: str) -> dict | None:
 
 def _stage(repo, run_id, key, state, detail="", **data):
     label = STAGES[key]
-    repo.event(run_id, "analysis_stage", f"{label}: {detail}" if detail else label,
-               {"stage": key, "label": label, "state": state, "detail": detail, **data})
+    repo.event(
+        run_id,
+        "analysis_stage",
+        f"{label}: {detail}" if detail else label,
+        {"stage": key, "label": label, "state": state, "detail": detail, **data},
+    )
     if state == "running":
         repo.update_run(run_id, detail=f"{label}…")
 
@@ -138,7 +170,8 @@ def _stage(repo, run_id, key, state, detail="", **data):
 def _opening_text(repo: "Repository", artifact: dict) -> str:
     with repo.db.connect() as conn:
         rows = conn.execute(
-            "SELECT text FROM evidence WHERE artifact_id=? ORDER BY COALESCE(page,0), rowid LIMIT 16", (artifact["id"],)
+            "SELECT text FROM evidence WHERE artifact_id=? ORDER BY COALESCE(page,0), rowid LIMIT 16",
+            (artifact["id"],),
         ).fetchall()
     return safe_text(" ".join(" ".join((row[0] or "").split()) for row in rows), OPENING_CHARS)
 
@@ -153,12 +186,21 @@ def recognition_summary(artifacts: list[dict]) -> dict:
         for warning in warnings:
             if warning.get("code") == "ocr_low_confidence":
                 uncertain += 1
-                attention.append(f"{artifact['relative_path']} {warning.get('locator', '')}".strip())
+                attention.append(
+                    f"{artifact['relative_path']} {warning.get('locator', '')}".strip()
+                )
             elif warning.get("code") == "pdf_no_text":
                 unreadable += 1
-                attention.append(f"{artifact['relative_path']} {warning.get('locator', '')}".strip())
-    return {"pages": pages, "recognised_pages": recognised, "uncertain_pages": uncertain,
-            "unreadable_pages": unreadable, "attention": attention[:40]}
+                attention.append(
+                    f"{artifact['relative_path']} {warning.get('locator', '')}".strip()
+                )
+    return {
+        "pages": pages,
+        "recognised_pages": recognised,
+        "uncertain_pages": uncertain,
+        "unreadable_pages": unreadable,
+        "attention": attention[:40],
+    }
 
 
 def _brief_prompt(documents: list[dict]) -> str:
@@ -173,12 +215,18 @@ def _brief_prompt(documents: list[dict]) -> str:
     )
 
 
-def _package_prompt(repo: "Repository", tender_id: str, briefs: dict[str, dict], recognition: dict) -> str:
+def _package_prompt(
+    repo: "Repository", tender_id: str, briefs: dict[str, dict], recognition: dict
+) -> str:
     from .project_identity import package_digest
 
     documents = [
-        {"path": brief["relative_path"], "type": brief["document_type"], "title": brief.get("title"),
-         "brief": brief["brief"]}
+        {
+            "path": brief["relative_path"],
+            "type": brief["document_type"],
+            "title": brief.get("title"),
+            "brief": brief["brief"],
+        }
         for brief in briefs.values()
     ]
     return (
@@ -189,12 +237,22 @@ def _package_prompt(repo: "Repository", tender_id: str, briefs: dict[str, dict],
         "file name unless no document names the project. List important gaps a tender package normally "
         "covers but this one does not appear to, such as a missing bill of quantities or submission "
         "instructions.\n\n"
-        + redact_text(json.dumps({"documents": documents, "readability": recognition,
-                                  "opening_text": package_digest(repo, tender_id)["excerpts"]}, ensure_ascii=False))
+        + redact_text(
+            json.dumps(
+                {
+                    "documents": documents,
+                    "readability": recognition,
+                    "opening_text": package_digest(repo, tender_id)["excerpts"],
+                },
+                ensure_ascii=False,
+            )
+        )
     )
 
 
-async def run_analysis(repo: "Repository", tender_id: str, run_id: str, cancelled, *, ai_ready) -> PreparedAnalysisResult:
+async def run_analysis(
+    repo: "Repository", tender_id: str, run_id: str, cancelled, *, ai_ready
+) -> PreparedAnalysisResult:
     """Run the local stages, then the AI package map when the Tender's AI is usable."""
 
     import asyncio
@@ -212,14 +270,19 @@ async def run_analysis(repo: "Repository", tender_id: str, run_id: str, cancelle
         result.stages[key] = {"state": state, "detail": detail, **data}
         _stage(repo, run_id, key, state, detail, **data)
 
-    finish("register", "completed", f"{len(artifacts)} documents registered", documents=len(artifacts))
+    finish(
+        "register", "completed", f"{len(artifacts)} documents registered", documents=len(artifacts)
+    )
 
     _stage(repo, run_id, "recognise", "running")
     recognition = recognition_summary(artifacts)
-    finish("recognise", "completed",
-           f"{recognition['recognised_pages']} scanned pages recognised; "
-           f"{recognition['uncertain_pages'] + recognition['unreadable_pages']} pages need a second reading",
-           **recognition)
+    finish(
+        "recognise",
+        "completed",
+        f"{recognition['recognised_pages']} scanned pages recognised; "
+        f"{recognition['uncertain_pages'] + recognition['unreadable_pages']} pages need a second reading",
+        **recognition,
+    )
 
     _stage(repo, run_id, "index", "running")
     repo.update_run(run_id, progress=10)
@@ -241,7 +304,12 @@ async def run_analysis(repo: "Repository", tender_id: str, run_id: str, cancelle
     repo.update_run(run_id, progress=62)
     try:
         estimate = await asyncio.to_thread(EstimateService(repo).refresh, tender_id)
-        finish("structure", "completed", f"{len(estimate['items'])} BOQ items extracted", boq_items=len(estimate["items"]))
+        finish(
+            "structure",
+            "completed",
+            f"{len(estimate['items'])} BOQ items extracted",
+            boq_items=len(estimate["items"]),
+        )
     except Exception as error:  # noqa: BLE001
         finish("structure", "failed", f"BOQ extraction needs attention: {safe_text(error, 300)}")
 
@@ -251,26 +319,42 @@ async def run_analysis(repo: "Repository", tender_id: str, run_id: str, cancelle
     repo.update_run(run_id, progress=70)
     readiness = ai_ready()
     if readiness is not True:
-        finish("map", "waiting", "Choose the AI for this Tender to map the package and identify the project",
-               reason=safe_text(readiness, 300))
+        finish(
+            "map",
+            "waiting",
+            "Choose the AI for this Tender to map the package and identify the project",
+            reason=safe_text(readiness, 300),
+        )
         return result
 
     inputs = {
-        artifact["id"]: {"id": artifact["id"], "path": safe_text(artifact["relative_path"], 300), "format": artifact["kind"],
-                         "pages": (artifact.get("metadata") or {}).get("page_count"),
-                         "sheets": ((artifact.get("metadata") or {}).get("sheets") or [])[:12],
-                         "opening_text": _opening_text(repo, artifact)}
+        artifact["id"]: {
+            "id": artifact["id"],
+            "path": safe_text(artifact["relative_path"], 300),
+            "format": artifact["kind"],
+            "pages": (artifact.get("metadata") or {}).get("page_count"),
+            "sheets": ((artifact.get("metadata") or {}).get("sheets") or [])[:12],
+            "opening_text": _opening_text(repo, artifact),
+        }
         for artifact in artifacts
     }
-    basis = hashlib.sha256(dump({"tender_id": tender_id, "sources": source_fingerprint(artifacts),
-                               "documents": inputs}).encode()).hexdigest()
-    keys = {identifier: hashlib.sha256(f"{basis}:{identifier}".encode()).hexdigest() for identifier in inputs}
+    basis = hashlib.sha256(
+        dump(
+            {"tender_id": tender_id, "sources": source_fingerprint(artifacts), "documents": inputs}
+        ).encode()
+    ).hexdigest()
+    keys = {
+        identifier: hashlib.sha256(f"{basis}:{identifier}".encode()).hexdigest()
+        for identifier in inputs
+    }
     with repo.db.connect() as conn:
         cached = {
             row[0]: json.loads(row[1])
             for row in conn.execute(
                 f"SELECT content_hash, data_json FROM document_briefs WHERE brief_version=? AND content_hash IN "
-                f"({','.join('?' * len(keys))})", (BRIEF_VERSION, *keys.values()))
+                f"({','.join('?' * len(keys))})",
+                (BRIEF_VERSION, *keys.values()),
+            )
         }
     pending = [artifact for artifact in artifacts if keys[artifact["id"]] not in cached]
     batches, batch, size = [], [], 0
@@ -288,10 +372,19 @@ async def run_analysis(repo: "Repository", tender_id: str, run_id: str, cancelle
         for number, documents in enumerate(batches, start=1):
             if cancelled.is_set():
                 raise InterruptedError("Analysis stopped at your request.")
-            repo.update_run(run_id, progress=70 + int(20 * number / max(1, len(batches))),
-                            detail=f"{STAGES['map']}… documents {number} of {len(batches)} batches")
-            output, usage = await ask_structured(repo, tender_id, run_id, _brief_prompt(documents), BriefBatch,
-                                                 operation="package_briefs")
+            repo.update_run(
+                run_id,
+                progress=70 + int(20 * number / max(1, len(batches))),
+                detail=f"{STAGES['map']}… documents {number} of {len(batches)} batches",
+            )
+            output, usage = await ask_structured(
+                repo,
+                tender_id,
+                run_id,
+                _brief_prompt(documents),
+                BriefBatch,
+                operation="package_briefs",
+            )
             result.usage = add_usage(result.usage, usage)
             valid = {document["id"] for document in documents}
             with repo.db.connect(write=True) as conn:
@@ -300,28 +393,48 @@ async def run_analysis(repo: "Repository", tender_id: str, run_id: str, cancelle
                         continue
                     artifact = next(a for a in artifacts if a["id"] == brief.document_id)
                     data = brief.model_dump(mode="json")
-                    data["related_document_ids"] = [identifier for identifier in data["related_document_ids"]
-                                                    if identifier in valid and identifier != brief.document_id]
+                    data["related_document_ids"] = [
+                        identifier
+                        for identifier in data["related_document_ids"]
+                        if identifier in valid and identifier != brief.document_id
+                    ]
                     cached[keys[artifact["id"]]] = data
                     # Briefs are cached as soon as they are paid for, so a retry never repeats them.
-                    conn.execute("INSERT OR REPLACE INTO document_briefs VALUES(?,?,?,?,?)",
-                                 (keys[artifact["id"]], BRIEF_VERSION, dump(data),
-                                  str((usage.get("request_details") or [{}])[0].get("model") or ""), now()))
+                    conn.execute(
+                        "INSERT OR REPLACE INTO document_briefs VALUES(?,?,?,?,?)",
+                        (
+                            keys[artifact["id"]],
+                            BRIEF_VERSION,
+                            dump(data),
+                            str((usage.get("request_details") or [{}])[0].get("model") or ""),
+                            now(),
+                        ),
+                    )
         for artifact in artifacts:
             if keys[artifact["id"]] in cached:
                 brief = dict(cached[keys[artifact["id"]]])
                 brief.update(document_id=artifact["id"], relative_path=artifact["relative_path"])
                 result.briefs[artifact["id"]] = brief
         repo.update_run(run_id, progress=92, detail=f"{STAGES['map']}… identifying the project")
-        overview, usage = await ask_structured(repo, tender_id, run_id,
-                                               _package_prompt(repo, tender_id, result.briefs, recognition),
-                                               PackageOverview, operation="package_map")
+        overview, usage = await ask_structured(
+            repo,
+            tender_id,
+            run_id,
+            _package_prompt(repo, tender_id, result.briefs, recognition),
+            PackageOverview,
+            operation="package_map",
+        )
         result.usage = add_usage(result.usage, usage)
         if not overview.identity.name.strip():
             raise ValueError("The package map returned no project name.")
         result.overview = overview
-        finish("map", "completed", f"{len(result.briefs)} documents mapped; project identified",
-               mapped=len(result.briefs), from_cache=len(artifacts) - len(pending))
+        finish(
+            "map",
+            "completed",
+            f"{len(result.briefs)} documents mapped; project identified",
+            mapped=len(result.briefs),
+            from_cache=len(artifacts) - len(pending),
+        )
     except InterruptedError:
         raise
     except Exception as error:  # noqa: BLE001
@@ -341,24 +454,47 @@ def apply_analysis(repo: "Repository", prepared: PreparedAnalysisResult) -> dict
     identity_result = None
     if prepared.overview is not None:
         identity_result = apply_identity(
-            repo, PreparedIdentityResult(tender_id, prepared.run_id, prepared.overview.identity, prepared.usage),
-            announce=False)
+            repo,
+            PreparedIdentityResult(
+                tender_id, prepared.run_id, prepared.overview.identity, prepared.usage
+            ),
+            announce=False,
+        )
     data = {
         "stages": prepared.stages,
         "documents": list(prepared.briefs.values()),
         "overview": prepared.overview.overview if prepared.overview else None,
         "gaps": prepared.overview.gaps if prepared.overview else [],
-        "identity": prepared.overview.identity.model_dump(mode="json") if prepared.overview else None,
-        "readability": {key: recognition.get(key) for key in
-                        ("pages", "recognised_pages", "uncertain_pages", "unreadable_pages", "attention")},
+        "identity": prepared.overview.identity.model_dump(mode="json")
+        if prepared.overview
+        else None,
+        "readability": {
+            key: recognition.get(key)
+            for key in (
+                "pages",
+                "recognised_pages",
+                "uncertain_pages",
+                "unreadable_pages",
+                "attention",
+            )
+        },
     }
     if prepared.briefs or prepared.overview:
         with repo.db.connect(write=True) as conn:
-            conn.execute("INSERT OR REPLACE INTO package_maps VALUES(?,?,?,?)",
-                         (tender_id, dump(data), source_fingerprint(artifacts), now()))
-    repo.add_message(tender_id, "manager", summary_message(prepared, artifacts), run_id=prepared.run_id)
-    return {"kind": "analysis", "stages": prepared.stages, "mapped_documents": len(prepared.briefs),
-            "identity": identity_result, "usage": prepared.usage}
+            conn.execute(
+                "INSERT OR REPLACE INTO package_maps VALUES(?,?,?,?)",
+                (tender_id, dump(data), source_fingerprint(artifacts), now()),
+            )
+    repo.add_message(
+        tender_id, "manager", summary_message(prepared, artifacts), run_id=prepared.run_id
+    )
+    return {
+        "kind": "analysis",
+        "stages": prepared.stages,
+        "mapped_documents": len(prepared.briefs),
+        "identity": identity_result,
+        "usage": prepared.usage,
+    }
 
 
 def summary_message(prepared: PreparedAnalysisResult, artifacts: list[dict]) -> str:
@@ -367,27 +503,46 @@ def summary_message(prepared: PreparedAnalysisResult, artifacts: list[dict]) -> 
     if prepared.overview is not None:
         identity = prepared.overview.identity
         lines.append(f"I analysed the tender package for **{identity.name.strip()}**.")
-        lines.append("These proposed project facts need source review before use in the Tender profile.")
+        lines.append(
+            "These proposed project facts need source review before use in the Tender profile."
+        )
         if prepared.overview.overview.strip():
             lines.append(prepared.overview.overview.strip())
-        facts = [("Client", identity.client), ("Location", ", ".join(filter(None, [identity.location, identity.country]))),
-                 ("Reference", identity.reference), ("Contract", identity.contract_type),
-                 ("Currency", ", ".join(identity.currencies)), ("Submission deadline", identity.submission_deadline),
-                 ("Measurement", identity.measurement_method)]
+        facts = [
+            ("Client", identity.client),
+            ("Location", ", ".join(filter(None, [identity.location, identity.country]))),
+            ("Reference", identity.reference),
+            ("Contract", identity.contract_type),
+            ("Currency", ", ".join(identity.currencies)),
+            ("Submission deadline", identity.submission_deadline),
+            ("Measurement", identity.measurement_method),
+        ]
         lines += [f"- {label}: {value}" for label, value in facts if value]
     else:
         lines.append(f"I registered and indexed the tender package ({len(artifacts)} documents).")
     if prepared.briefs:
-        counts = Counter(DOCUMENT_TYPE_LABELS.get(brief["document_type"], "other document")
-                         for brief in prepared.briefs.values())
-        lines.append("**Documents:** " + ", ".join(f"{count} {label}{'s' if count > 1 and not label.endswith('s') else ''}"
-                                                   for label, count in counts.most_common()))
+        counts = Counter(
+            DOCUMENT_TYPE_LABELS.get(brief["document_type"], "other document")
+            for brief in prepared.briefs.values()
+        )
+        lines.append(
+            "**Documents:** "
+            + ", ".join(
+                f"{count} {label}{'s' if count > 1 and not label.endswith('s') else ''}"
+                for label, count in counts.most_common()
+            )
+        )
     recognition = stages.get("recognise", {})
     second = (recognition.get("uncertain_pages") or 0) + (recognition.get("unreadable_pages") or 0)
     if second:
-        examples = "; ".join(PurePosixPath(item).name if "/" in item else item for item in recognition.get("attention", [])[:4])
-        lines.append(f"**Needs a second reading:** {second} pages could not be read reliably ({examples}). "
-                     "I will not rely on them without checking.")
+        examples = "; ".join(
+            PurePosixPath(item).name if "/" in item else item
+            for item in recognition.get("attention", [])[:4]
+        )
+        lines.append(
+            f"**Needs a second reading:** {second} pages could not be read reliably ({examples}). "
+            "I will not rely on them without checking."
+        )
     if prepared.overview is not None and prepared.overview.gaps:
         lines.append("**Gaps to check:** " + "; ".join(prepared.overview.gaps[:5]))
     for key in ("index", "structure", "map"):

@@ -16,7 +16,10 @@ def _key(value: str) -> str:
 
 
 def _canonical_hash(value: dict) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
 
 _STEERING_SCHEMA = (
     """

@@ -8,7 +8,10 @@ from .db import now
 
 
 def allows_extras(connection):
-    return connection.get("protocol") == "grok_build" and connection.get("settings", {}).get("allow_provider_managed_extras") is True
+    return (
+        connection.get("protocol") == "grok_build"
+        and connection.get("settings", {}).get("allow_provider_managed_extras") is True
+    )
 
 
 def _stamp(value):
@@ -25,19 +28,30 @@ def included_only_current(snapshot, *, max_age_seconds=300):
     try:
         current = datetime.now(UTC)
         age = (current - _stamp(snapshot["fetched_at"])).total_seconds()
-        if not 0 <= age <= max_age_seconds or not _stamp(snapshot["period_start"]) <= current < _stamp(snapshot["period_end"]):
+        if not 0 <= age <= max_age_seconds or not _stamp(
+            snapshot["period_start"]
+        ) <= current < _stamp(snapshot["period_end"]):
             return False
         percent = snapshot["used_percent"]
         if type(percent) not in {int, float} or not 0 <= percent < 100:
             return False
-        credits = [Decimal(snapshot[field]) for field in ("prepaid_balance_usd", "on_demand_cap_usd")]
-        return all(value.is_finite() and value == 0 for value in credits) and snapshot["auto_topup_enabled"] is False
+        credits = [
+            Decimal(snapshot[field]) for field in ("prepaid_balance_usd", "on_demand_cap_usd")
+        ]
+        return (
+            all(value.is_finite() and value == 0 for value in credits)
+            and snapshot["auto_topup_enabled"] is False
+        )
     except (KeyError, TypeError, ValueError, InvalidOperation, AttributeError):
         return False
 
 
-def unknown_subscription(detail="Grok could not confirm its current allowance or extra-spending settings. Open Grok usage settings, then refresh this account."):
-    return SubscriptionUsage(fetched_at=now(), included_only_allowed=False, detail=detail).model_dump(mode="json")
+def unknown_subscription(
+    detail="Grok could not confirm its current allowance or extra-spending settings. Open Grok usage settings, then refresh this account.",
+):
+    return SubscriptionUsage(
+        fetched_at=now(), included_only_allowed=False, detail=detail
+    ).model_dump(mode="json")
 
 
 def subscription_snapshot(value):
@@ -60,9 +74,14 @@ def require_subscription_access(connection, snapshot, *, checking=False):
     if included_only_current(snapshot):
         return
     if checking:
-        raise ValueError("Grok may use paid extras for this check, and Quantix cannot establish its maximum charge. No request was sent. Open Grok usage settings and refresh when subscription-only access can be confirmed.")
+        raise ValueError(
+            "Grok may use paid extras for this check, and Quantix cannot establish its maximum charge. No request was sent. Open Grok usage settings and refresh when subscription-only access can be confirmed."
+        )
     if not allows_extras(connection):
-        raise ValueError((snapshot or {}).get("detail") or "Grok's subscription allowance could not be confirmed. Refresh this account before starting work.")
+        raise ValueError(
+            (snapshot or {}).get("detail")
+            or "Grok's subscription allowance could not be confirmed. Refresh this account before starting work."
+        )
 
 
 def reported_usage_fields(usage):

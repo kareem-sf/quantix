@@ -249,7 +249,9 @@ async def test_staff_cannot_use_the_manager_brief_tool(manager_run):
     repo, tender, _, new_run = manager_run
     run = new_run("Synthetic")
     tools = {item.name: item for item in work_brief_tools(repo, tender["id"], run["id"], "manager")}
-    staff_like = OfficeContext(repo, tender["id"], run["id"], actor_id="staff-1", assignment_id="assignment-1")
+    staff_like = OfficeContext(
+        repo, tender["id"], run["id"], actor_id="staff-1", assignment_id="assignment-1"
+    )
     with pytest.raises(ValueError, match="Only the Tender Manager"):
         await tools["save_work_brief"].invoke(
             staff_like,

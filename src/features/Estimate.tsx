@@ -101,9 +101,7 @@ export function Estimate({
         <>
           <header className="flex flex-wrap items-start justify-between gap-3">
             <div className="flex max-w-2xl flex-col gap-1">
-              <h2 className="text-lg font-semibold tracking-tight">
-                Estimate
-              </h2>
+              <h2 className="text-lg font-semibold tracking-tight">Estimate</h2>
               <p className="text-sm text-muted-foreground">
                 Supplied quantities, checked rates and recorded assumptions.
               </p>

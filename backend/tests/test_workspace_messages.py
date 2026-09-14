@@ -104,9 +104,7 @@ def test_http_busy_message_is_one_editable_pending_instruction(tmp_path):
         assert first.status_code == 200
         assert first.json()["outcome"] == "pending"
         assert first.json()["pending"]["wait_for_run_ids"] == [run["id"]]
-        conflict = client.post(
-            endpoint, json={"content": "another", "idempotency_key": "req-2"}
-        )
+        conflict = client.post(endpoint, json={"content": "another", "idempotency_key": "req-2"})
         assert conflict.status_code == 409
         edited = client.patch(
             f"/api/tenders/{tender['id']}/pending-message",
@@ -121,7 +119,10 @@ def test_http_busy_message_is_one_editable_pending_instruction(tmp_path):
         assert client.request(
             "DELETE",
             f"/api/tenders/{tender['id']}/pending-message",
-            json={"pending_id": edited.json()["id"], "expected_revision": edited.json()["revision"]},
+            json={
+                "pending_id": edited.json()["id"],
+                "expected_revision": edited.json()["revision"],
+            },
         ).json() == {"ok": True}
         assert client.get(f"/api/tenders/{tender['id']}/pending-message").json() is None
 
@@ -148,7 +149,9 @@ async def test_a_message_runs_the_manager_directly_and_publishes_its_answer(tmp_
     await asyncio.gather(*list(jobs.tasks.values()))
     saved = repo.get_run(run["id"])
     assert saved["status"] == "completed", (saved["error"], repo.run_events(run["id"]))
-    assert [item["content"] for item in repo.messages(tender["id"])] == ["Hello. Add the tender documents to start."]
+    assert [item["content"] for item in repo.messages(tender["id"])] == [
+        "Hello. Add the tender documents to start."
+    ]
     assert repo.list_findings(tender["id"]) == [] and repo.list_plans(tender["id"]) == []
     await jobs.close()
 
@@ -280,15 +283,9 @@ def test_old_pending_idempotency_receipt_cannot_return_newer_pending_draft(tmp_p
     tender = repo.create_tender("Receipt")
     jobs = JobManager(repo, object())
     repo.create_run(tender["id"], "import")
-    first = jobs.submit_message(
-        tender["id"], "first", idempotency_key="request-old"
-    )["pending"]
-    jobs.cancel_pending(
-        tender["id"], pending_id=first["id"], expected_revision=first["revision"]
-    )
-    second = jobs.submit_message(
-        tender["id"], "second", idempotency_key="request-new"
-    )["pending"]
+    first = jobs.submit_message(tender["id"], "first", idempotency_key="request-old")["pending"]
+    jobs.cancel_pending(tender["id"], pending_id=first["id"], expected_revision=first["revision"])
+    second = jobs.submit_message(tender["id"], "second", idempotency_key="request-new")["pending"]
     assert second["id"] != first["id"]
     with pytest.raises(ValueError, match="cancelled or replaced"):
         jobs.submit_message(tender["id"], "first", idempotency_key="request-old")

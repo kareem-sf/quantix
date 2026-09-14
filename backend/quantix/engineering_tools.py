@@ -22,7 +22,9 @@ from .work_products import WorkProductService
 def _sources(office, references):
     for reference in references:
         if reference.startswith(("http://", "https://")):
-            raise ValueError("Cite Tender evidence IDs here. Web sources belong in proposed web findings.")
+            raise ValueError(
+                "Cite Tender evidence IDs here. Web sources belong in proposed web findings."
+            )
         office.ensure_evidence_allowed(reference, tool_id=None)
         if reference not in office.seen_sources:
             raise ValueError("Read each source before using it in a work product or calculation.")

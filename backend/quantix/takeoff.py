@@ -95,14 +95,26 @@ class TakeoffService:
                     **compare(proposal, item),
                     "assignment_id": context.assignment_id,
                     "author": author,
-                    "item_fingerprint": estimates.quantity_item_fingerprint(context.tender_id, item["id"]) if item else None,
+                    "item_fingerprint": estimates.quantity_item_fingerprint(
+                        context.tender_id, item["id"]
+                    )
+                    if item
+                    else None,
                     "review_note": "",
                     "reviewed_at": None,
                 }
                 identifier = new_id()
                 conn.execute(
                     "INSERT INTO takeoff_lines VALUES(?,?,?,?,?,?,?)",
-                    (identifier, context.tender_id, context.run_id, "proposed", dump(data), stamp, stamp),
+                    (
+                        identifier,
+                        context.tender_id,
+                        context.run_id,
+                        "proposed",
+                        dump(data),
+                        stamp,
+                        stamp,
+                    ),
                 )
                 saved.append({"id": identifier, "comparison": data["comparison"]})
         return saved
@@ -112,8 +124,13 @@ class TakeoffService:
 
         self.repo.get_tender(tender_id)
         with self.repo.db.connect() as conn:
-            rows = [record(row) for row in conn.execute(
-                "SELECT * FROM takeoff_lines WHERE tender_id=? ORDER BY created_at DESC, rowid DESC", (tender_id,))]
+            rows = [
+                record(row)
+                for row in conn.execute(
+                    "SELECT * FROM takeoff_lines WHERE tender_id=? ORDER BY created_at DESC, rowid DESC",
+                    (tender_id,),
+                )
+            ]
         estimates = EstimateService(self.repo)
         fingerprints: dict[str, str | None] = {}
         artifacts: dict[str, bool] = {}
@@ -125,7 +142,9 @@ class TakeoffService:
                 try:
                     artifact_id = self.repo.get_evidence(tender_id, source_id)["artifact_id"]
                     if artifact_id not in artifacts:
-                        artifacts[artifact_id] = self.repo.get_artifact(tender_id, artifact_id)["is_current"]
+                        artifacts[artifact_id] = self.repo.get_artifact(tender_id, artifact_id)[
+                            "is_current"
+                        ]
                     current = current and artifacts[artifact_id]
                 except KeyError:
                     current = False
@@ -133,28 +152,52 @@ class TakeoffService:
             if item_id:
                 if item_id not in fingerprints:
                     try:
-                        fingerprints[item_id] = estimates.quantity_item_fingerprint(tender_id, item_id)
+                        fingerprints[item_id] = estimates.quantity_item_fingerprint(
+                            tender_id, item_id
+                        )
                     except KeyError:
                         fingerprints[item_id] = None
                 current = current and fingerprints[item_id] == data.get("item_fingerprint")
-            lines.append(TakeoffLine.model_validate({
-                **{key: value for key, value in data.items() if key != "item_fingerprint"},
-                "id": row["id"], "tender_id": tender_id, "run_id": row["run_id"], "status": row["status"],
-                "is_current": current, "created_at": row["created_at"], "updated_at": row["updated_at"],
-            }))
+            lines.append(
+                TakeoffLine.model_validate(
+                    {
+                        **{key: value for key, value in data.items() if key != "item_fingerprint"},
+                        "id": row["id"],
+                        "tender_id": tender_id,
+                        "run_id": row["run_id"],
+                        "status": row["status"],
+                        "is_current": current,
+                        "created_at": row["created_at"],
+                        "updated_at": row["updated_at"],
+                    }
+                )
+            )
         return lines
 
     def review(self, tender_id: str, line_id: str, request: TakeoffReview) -> TakeoffLine:
         with self.repo.atomic() as conn:
-            row = conn.execute("SELECT * FROM takeoff_lines WHERE id=? AND tender_id=?", (line_id, tender_id)).fetchone()
+            row = conn.execute(
+                "SELECT * FROM takeoff_lines WHERE id=? AND tender_id=?", (line_id, tender_id)
+            ).fetchone()
             if row is None:
                 raise KeyError("This takeoff line is not in the tender.")
             saved = record(row)
             stamp = now()
             data = saved["data"] | {"review_note": request.note, "reviewed_at": stamp}
-            conn.execute("UPDATE takeoff_lines SET status=?,data_json=?,updated_at=? WHERE id=?",
-                         (request.decision, dump(data), stamp, line_id))
-            conn.execute("INSERT INTO decisions VALUES(?,?,?,?,?,?,?)",
-                         (new_id(), tender_id, "takeoff_line", line_id, request.decision,
-                          request.note or f"Takeoff line {request.decision} by the engineer.", stamp))
+            conn.execute(
+                "UPDATE takeoff_lines SET status=?,data_json=?,updated_at=? WHERE id=?",
+                (request.decision, dump(data), stamp, line_id),
+            )
+            conn.execute(
+                "INSERT INTO decisions VALUES(?,?,?,?,?,?,?)",
+                (
+                    new_id(),
+                    tender_id,
+                    "takeoff_line",
+                    line_id,
+                    request.decision,
+                    request.note or f"Takeoff line {request.decision} by the engineer.",
+                    stamp,
+                ),
+            )
         return next(line for line in self.list(tender_id) if line.id == line_id)

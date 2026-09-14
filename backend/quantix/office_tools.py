@@ -248,7 +248,9 @@ class OfficeContext:
             return False
         return True
 
-    def ensure_evidence_allowed(self, evidence_id: str, *, tool_id: str | None = "read_source") -> dict:
+    def ensure_evidence_allowed(
+        self, evidence_id: str, *, tool_id: str | None = "read_source"
+    ) -> dict:
         return self.repo.get_evidence(self.tender_id, evidence_id)
 
     def source(
@@ -458,8 +460,11 @@ def resolve_document_id(context: "OfficeContext", value: str) -> str:
     if any(artifact["id"] == value for artifact in artifacts):
         return value
     wanted = value.strip().replace("\\", "/").casefold()
-    matches = [a for a in artifacts
-               if a["relative_path"].casefold() == wanted or a["name"].casefold() == wanted]
+    matches = [
+        a
+        for a in artifacts
+        if a["relative_path"].casefold() == wanted or a["name"].casefold() == wanted
+    ]
     if len(matches) == 1:
         return matches[0]["id"]
     if _is_passage(context, value):
@@ -489,7 +494,9 @@ def _require_passage_id(context: "OfficeContext", source_id: str) -> None:
         return
     except KeyError:
         pass
-    if any(artifact["id"] == source_id for artifact in context.repo.list_artifacts(context.tender_id)):
+    if any(
+        artifact["id"] == source_id for artifact in context.repo.list_artifacts(context.tender_id)
+    ):
         raise ToolArgumentError(
             "This is a document ID, not a passage ID. Read the document with "
             f'read_whole_document(artifact_id="{source_id}"), or use search_sources to find the '
@@ -609,10 +616,15 @@ def source_tools(context: OfficeContext | None = None) -> list:
             # repeated re-sends only repeat text the model still has.
             rereads = ctx.context.__dict__.setdefault("_rereads", set())
             if source_id in rereads:
-                return json.dumps({
-                    "id": source_id, "text_offset": offset, "already_returned": True,
-                    "note": "This passage was already sent again in this run. Use the text above; do not request it again.",
-                }, ensure_ascii=False)
+                return json.dumps(
+                    {
+                        "id": source_id,
+                        "text_offset": offset,
+                        "already_returned": True,
+                        "note": "This passage was already sent again in this run. Use the text above; do not request it again.",
+                    },
+                    ensure_ascii=False,
+                )
             rereads.add(source_id)
             ctx.context.returned_reads.discard((source_id, offset, limit))
         source = _passage(ctx.context, source_id, offset, limit, "read_source")

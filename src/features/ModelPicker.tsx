@@ -89,7 +89,12 @@ function ProviderBadge({
     );
   return (
     <Squircle
-      className={cn("font-semibold text-white", scale.tile, scale.text, className)}
+      className={cn(
+        "font-semibold text-white",
+        scale.tile,
+        scale.text,
+        className,
+      )}
       surfaceClassName={providerTones[providerId] ?? "bg-primary"}
     >
       {initial(account)}
@@ -162,8 +167,7 @@ export function ModelPicker({
   const refresh = useRefresh();
   const accounts = useQuery({
     queryKey: ["/ai/setup/accounts"],
-    queryFn: ({ signal }) =>
-      api.get<Account[]>("/ai/setup/accounts", signal),
+    queryFn: ({ signal }) => api.get<Account[]>("/ai/setup/accounts", signal),
     staleTime: 15_000,
     retry: false,
   });
@@ -316,8 +320,8 @@ export function ModelPicker({
           {busy ? (
             <p className="flex items-start gap-2 border-b bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
               <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
-              Finish or stop the current work to switch AI. The next
-              instruction will use your choice.
+              Finish or stop the current work to switch AI. The next instruction
+              will use your choice.
             </p>
           ) : null}
           <div
@@ -325,7 +329,9 @@ export function ModelPicker({
             aria-label="Connected AI accounts"
             className="scroll-fade-y flex max-h-72 flex-col gap-0.5 overflow-y-auto p-1"
           >
-            {accounts.isPending ? <Loading>Loading AI accounts…</Loading> : null}
+            {accounts.isPending ? (
+              <Loading>Loading AI accounts…</Loading>
+            ) : null}
             {options.map((option) => {
               const selected = option === current;
               const { account, model } = option;

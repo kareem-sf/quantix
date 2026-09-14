@@ -16,7 +16,9 @@ def create_router(repo):
     @router.get("/tenders/{tender_id}/team", response_model=TeamView)
     def view(tender_id: str):
         repo.get_tender(tender_id)
-        return TeamView(staff=team.list_staff(tender_id), assignments=team.list(tender_id, limit=200))
+        return TeamView(
+            staff=team.list_staff(tender_id), assignments=team.list(tender_id, limit=200)
+        )
 
     @router.get("/tenders/{tender_id}/team/assignments/{assignment_id}", response_model=Assignment)
     def assignment(tender_id: str, assignment_id: str):
@@ -29,6 +31,8 @@ def create_router(repo):
     @router.post("/tenders/{tender_id}/runs/{run_id}/steering", response_model=InstructionAdmission)
     def steer(tender_id: str, run_id: str, request: InstructionRevisionRequest):
         """Give the running Manager an instruction it applies at its next turn."""
-        return OfficeInstructionService(repo).admit(engineer_identity(tender_id, root_run_id=run_id), request)
+        return OfficeInstructionService(repo).admit(
+            engineer_identity(tender_id, root_run_id=run_id), request
+        )
 
     return router

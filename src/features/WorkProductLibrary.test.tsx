@@ -126,10 +126,7 @@ it("retries a failed list read without claiming the Tender has no drafts", async
     .mockResolvedValue({ items: [summary], total: 1, next_offset: null });
   render(
     <ApiContext.Provider value={{ get } as unknown as Api}>
-      <WorkProductLibrary
-        tenderId="tender-a"
-        onSource={vi.fn()}
-      />
+      <WorkProductLibrary tenderId="tender-a" onSource={vi.fn()} />
     </ApiContext.Provider>,
   );
   expect(
@@ -174,10 +171,7 @@ it("does not turn a failed row read into an empty table", async () => {
       }
     >
       <ApiContext.Provider value={api}>
-        <WorkProductLibrary
-          tenderId="tender-a"
-          onSource={vi.fn()}
-        />
+        <WorkProductLibrary tenderId="tender-a" onSource={vi.fn()} />
       </ApiContext.Provider>
     </QueryClientProvider>,
   );
@@ -279,10 +273,7 @@ it("opens immutable history, renders a bounded safe chart, and routes exact sour
       }
     >
       <ApiContext.Provider value={api}>
-        <WorkProductLibrary
-          tenderId="tender-a"
-          onSource={onSource}
-        />
+        <WorkProductLibrary tenderId="tender-a" onSource={onSource} />
       </ApiContext.Provider>
     </QueryClientProvider>,
   );
@@ -403,10 +394,7 @@ it("loads the fifty-first product and version without replacing the current page
       }
     >
       <ApiContext.Provider value={api}>
-        <WorkProductLibrary
-          tenderId="tender-a"
-          onSource={vi.fn()}
-        />
+        <WorkProductLibrary tenderId="tender-a" onSource={vi.fn()} />
       </ApiContext.Provider>
     </QueryClientProvider>,
   );

@@ -277,15 +277,27 @@ async def test_manager_prepares_source_bound_proposals_without_publishing(monkey
 
     async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
         await call_api_tool(kwargs, "search_sources", context, {"query": "concrete", "limit": 5})
-        await call_api_tool(kwargs, "propose", context, {"kind": "plan", "items": [{
-            "title": "Concrete package review",
-            "tasks": [{
-                "title": "Check concrete scope",
-                "description": "Review concrete clauses and BOQ.",
-                "role": "Concrete specification reviewer",
-                "source_ids": ["source-1"],
-            }],
-        }]})
+        await call_api_tool(
+            kwargs,
+            "propose",
+            context,
+            {
+                "kind": "plan",
+                "items": [
+                    {
+                        "title": "Concrete package review",
+                        "tasks": [
+                            {
+                                "title": "Check concrete scope",
+                                "description": "Review concrete clauses and BOQ.",
+                                "role": "Concrete specification reviewer",
+                                "source_ids": ["source-1"],
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
         return api_result_for(
             {
                 "summary": "The concrete specification requires review.",
@@ -412,11 +424,28 @@ async def test_research_retains_provider_citations_and_unapproved_price_basis(mo
     url = "https://supplier.example/products/rebar"
 
     async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
-        await call_api_tool(kwargs, "propose", context, {"kind": "web_findings", "items": [
-            {"title": "Rebar market reference", "detail": "Published supplier listing.", "urls": [url]}]})
-        await call_api_tool(kwargs, "propose", context, {"kind": "price_proposals", "items": [price_proposal()]})
+        await call_api_tool(
+            kwargs,
+            "propose",
+            context,
+            {
+                "kind": "web_findings",
+                "items": [
+                    {
+                        "title": "Rebar market reference",
+                        "detail": "Published supplier listing.",
+                        "urls": [url],
+                    }
+                ],
+            },
+        )
+        await call_api_tool(
+            kwargs, "propose", context, {"kind": "price_proposals", "items": [price_proposal()]}
+        )
         return api_result_for(
-            {"summary": "A published rebar price is available; commercial terms need confirmation."},
+            {
+                "summary": "A published rebar price is available; commercial terms need confirmation."
+            },
             [web_source()],
         )
 
@@ -436,8 +465,15 @@ async def test_fabricated_web_price_source_rejects_output_before_writes(monkeypa
     repo = MemoryRepository()
 
     async def provider(route, connection, credentials, context, prompt, output_type, **kwargs):
-        await call_api_tool(kwargs, "propose", context, {
-            "kind": "price_proposals", "items": [price_proposal("https://invented.example/price")]})
+        await call_api_tool(
+            kwargs,
+            "propose",
+            context,
+            {
+                "kind": "price_proposals",
+                "items": [price_proposal("https://invented.example/price")],
+            },
+        )
         return api_result_for({"summary": "A price was found."}, [web_source()])
 
     monkeypatch.setattr("quantix.ai_execution.execute_api", provider)

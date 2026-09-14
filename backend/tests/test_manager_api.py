@@ -60,9 +60,7 @@ def _app(home):
 
     @app.middleware("http")
     async def authenticate(request: Request, call_next):
-        if not hmac.compare_digest(
-            request.headers.get("authorization", ""), f"Bearer {TOKEN}"
-        ):
+        if not hmac.compare_digest(request.headers.get("authorization", ""), f"Bearer {TOKEN}"):
             return JSONResponse({"detail": "Not authorised."}, status_code=401)
         return await call_next(request)
 
@@ -74,9 +72,7 @@ def test_manager_profile_routes_require_outer_session_auth(tmp_path):
     app, _repo = _app(tmp_path / "home")
     with TestClient(app) as client:
         assert client.get("/api/manager-profile").status_code == 401
-        response = client.get(
-            "/api/manager-profile", headers={"Authorization": f"Bearer {TOKEN}"}
-        )
+        response = client.get("/api/manager-profile", headers={"Authorization": f"Bearer {TOKEN}"})
     assert response.status_code == 200
     assert response.json()["display_name"] == "Tender Manager"
 
@@ -105,9 +101,9 @@ def test_manager_profile_patch_maps_optimistic_conflict_to_fixed_409(tmp_path):
     app, _repo = _app(tmp_path / "home")
     headers = {"Authorization": f"Bearer {TOKEN}"}
     with TestClient(app) as client:
-        assert client.patch(
-            "/api/manager-profile", headers=headers, json=_edit(1)
-        ).status_code == 200
+        assert (
+            client.patch("/api/manager-profile", headers=headers, json=_edit(1)).status_code == 200
+        )
         response = client.patch(
             "/api/manager-profile",
             headers=headers,

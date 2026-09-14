@@ -26,8 +26,13 @@ def fit_image(png: bytes) -> tuple[bytes, str]:
     with Image.open(io.BytesIO(png)) as image:
         picture = image.convert("RGB")
     for quality, scale in ((85, 1.0), (75, 1.0), (70, 0.8), (65, 0.65), (60, 0.5)):
-        frame = picture if scale == 1.0 else picture.resize(
-            (max(1, int(picture.width * scale)), max(1, int(picture.height * scale))))
+        frame = (
+            picture
+            if scale == 1.0
+            else picture.resize(
+                (max(1, int(picture.width * scale)), max(1, int(picture.height * scale)))
+            )
+        )
         output = io.BytesIO()
         frame.save(output, format="JPEG", quality=quality, optimize=True)
         if output.tell() <= MAX_IMAGE_BYTES:

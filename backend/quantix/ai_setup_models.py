@@ -94,7 +94,19 @@ class SetupAccount(AIModel):
     connection: ConnectionRecord
     supported: bool = True
     access_kind: Literal["api_key", "subscription"] = "api_key"
-    stage: Literal["needs_preparation", "preparing", "needs_credentials", "needs_sign_in", "discovering", "choose_model", "ready_to_check", "checking", "ready", "attention", "cancelled"]
+    stage: Literal[
+        "needs_preparation",
+        "preparing",
+        "needs_credentials",
+        "needs_sign_in",
+        "discovering",
+        "choose_model",
+        "ready_to_check",
+        "checking",
+        "ready",
+        "attention",
+        "cancelled",
+    ]
     detail: str
     active: bool = False
     progress: int | None = None
@@ -122,7 +134,20 @@ class SetupConfigure(AIModel):
 
 
 class SetupAction(AIModel):
-    action: Literal["prepare", "repair", "cancel", "sign_in", "sign_out", "refresh", "refresh_usage", "set_subscription_extras", "check", "select_model", "rename", "remove_software"]
+    action: Literal[
+        "prepare",
+        "repair",
+        "cancel",
+        "sign_in",
+        "sign_out",
+        "refresh",
+        "refresh_usage",
+        "set_subscription_extras",
+        "check",
+        "select_model",
+        "rename",
+        "remove_software",
+    ]
     model_id: str | None = Field(default=None, max_length=300)
     name: str | None = Field(default=None, min_length=1, max_length=150)
     check_fingerprint: str | None = None

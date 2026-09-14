@@ -43,9 +43,7 @@ class ManagerRunProfiles:
 
     @staticmethod
     def _run(conn, tender_id: str, run_id: str):
-        row = conn.execute(
-            "SELECT id,tender_id,status FROM runs WHERE id=?", (run_id,)
-        ).fetchone()
+        row = conn.execute("SELECT id,tender_id,status FROM runs WHERE id=?", (run_id,)).fetchone()
         if row is None or row["tender_id"] != tender_id:
             raise KeyError("This work run does not belong to the selected Tender.")
         return row
@@ -81,7 +79,9 @@ class ManagerRunProfiles:
                     existing["manager_id"], int(existing["manager_version"])
                 )
             if run["status"] not in {"queued", "running"}:
-                raise ValueError("A Manager profile can only be captured for queued or running work.")
+                raise ValueError(
+                    "A Manager profile can only be captured for queued or running work."
+                )
 
             current = self.profile_service.get()
             conn.execute(

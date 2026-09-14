@@ -82,9 +82,11 @@ def _convert_legacy_word(path: Path, cancelled: Callable[[], bool] | None) -> by
         shutil.copyfile(path, source)
         command = [
             sys.executable,
-            *(["word-convert", "--home", str(current_home())]
-              if getattr(sys, "frozen", False)
-              else ["-m", "quantix.document_word"]),
+            *(
+                ["word-convert", "--home", str(current_home())]
+                if getattr(sys, "frozen", False)
+                else ["-m", "quantix.document_word"]
+            ),
             str(source),
             str(target),
             str(state),

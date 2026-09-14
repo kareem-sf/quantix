@@ -15,8 +15,15 @@ def _workspace(tmp_path):
     tender = repo.create_tender("Synthetic stall Tender")
     text = "Concrete grade C30/37 for the ground slab."
     repo.register_artifact(
-        tender["id"], "Specs/Concrete.pdf", hashlib.sha256(text.encode()).hexdigest(), len(text),
-        {"kind": "pdf", "status": "extracted", "segments": [{"locator": "page:1", "page": 1, "text": text}]},
+        tender["id"],
+        "Specs/Concrete.pdf",
+        hashlib.sha256(text.encode()).hexdigest(),
+        len(text),
+        {
+            "kind": "pdf",
+            "status": "extracted",
+            "segments": [{"locator": "page:1", "page": 1, "text": text}],
+        },
     )
     run = repo.create_run(tender["id"], "manager", "Synthetic")
     return repo, OfficeContext(repo, tender["id"], run["id"])
@@ -36,11 +43,18 @@ async def test_identical_reads_are_refused_until_something_is_saved(tmp_path):
         await dispatch("direct", listing, context, {})
     assert refused.value.recoverable is True
     # A different request is still answered.
-    await dispatch("direct", _tool("inspect_extraction_coverage"), context, {"exceptions_only": False})
+    await dispatch(
+        "direct", _tool("inspect_extraction_coverage"), context, {"exceptions_only": False}
+    )
 
     # A saved change can make the same read return something new.
-    await dispatch("direct", _tool("save_work_product"), context,
-                   {"kind": "note", "title": "Slab note", "content": "Checked."}, invocation_id="save-note")
+    await dispatch(
+        "direct",
+        _tool("save_work_product"),
+        context,
+        {"kind": "note", "title": "Slab note", "content": "Checked."},
+        invocation_id="save-note",
+    )
     assert json.loads(await dispatch("direct", listing, context, {}))["total"] == 1
 
 

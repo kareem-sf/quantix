@@ -56,7 +56,10 @@ REJECTION_DETAILS = tuple(sorted({_status_detail(status) for status in REJECTED_
 def rejected_before_processing(error: BaseException | None) -> bool:
     """Whether a translated provider failure proves the request was not processed."""
 
-    return isinstance(error, DirectProviderError) and getattr(error, "rejected_before_processing", False) is True
+    return (
+        isinstance(error, DirectProviderError)
+        and getattr(error, "rejected_before_processing", False) is True
+    )
 
 
 def provider_failure(error: BaseException) -> DirectProviderError:

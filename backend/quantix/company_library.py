@@ -14,6 +14,7 @@ _SCHEMA = (
         created_at TEXT NOT NULL)""",
 )
 
+
 class CompanyLibraryService:
     def __init__(self, repo):
         self.repo = repo
@@ -30,9 +31,19 @@ class CompanyLibraryService:
                 """INSERT INTO company_assets(id,kind,title,valid_from,valid_until,verified,revoked,
                     sensitive,permitted_reuse,payload_json,fingerprint,created_at)
                     VALUES(?,?,?,?,?,?,0,?,?,?,?,?)""",
-                (identifier, draft.kind, draft.title, draft.valid_from, draft.valid_until,
-                 1 if draft.verified else 0, 1 if draft.sensitive else 0, draft.permitted_reuse,
-                 dump(draft.payload), fingerprint, stamp),
+                (
+                    identifier,
+                    draft.kind,
+                    draft.title,
+                    draft.valid_from,
+                    draft.valid_until,
+                    1 if draft.verified else 0,
+                    1 if draft.sensitive else 0,
+                    draft.permitted_reuse,
+                    dump(draft.payload),
+                    fingerprint,
+                    stamp,
+                ),
             )
         return self.get(identifier)
 
@@ -42,9 +53,15 @@ class CompanyLibraryService:
         if row is None:
             raise KeyError("This company asset could not be found.")
         return CompanyAsset(
-            id=row["id"], kind=row["kind"], title=row["title"], valid_from=row["valid_from"],
-            valid_until=row["valid_until"], verified=bool(row["verified"]), revoked=bool(row["revoked"]),
-            sensitive=bool(row["sensitive"]), permitted_reuse=row["permitted_reuse"],
+            id=row["id"],
+            kind=row["kind"],
+            title=row["title"],
+            valid_from=row["valid_from"],
+            valid_until=row["valid_until"],
+            verified=bool(row["verified"]),
+            revoked=bool(row["revoked"]),
+            sensitive=bool(row["sensitive"]),
+            permitted_reuse=row["permitted_reuse"],
             fingerprint=row["fingerprint"],
         )
 

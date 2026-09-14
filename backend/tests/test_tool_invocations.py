@@ -143,9 +143,9 @@ async def test_local_bridge_rejects_missing_or_malformed_sdk_identity_without_si
 
     for index, ctx in enumerate(
         (
-        SimpleNamespace(tool_call_id=None),
-        SimpleNamespace(tool_call_id=""),
-        SimpleNamespace(tool_call_id=42),
+            SimpleNamespace(tool_call_id=None),
+            SimpleNamespace(tool_call_id=""),
+            SimpleNamespace(tool_call_id=42),
         )
     ):
         if index < 2:
@@ -185,6 +185,7 @@ async def test_local_mutation_activity_is_recorded_and_missing_identity_writes_n
     side_effects: list[dict] = []
     definition = _mutation_tool(calls, side_effects)
     from quantix.repository import Repository
+
     repo = Repository(tmp_path)
     tender = repo.create_tender("Synthetic tool activity")
     run = repo.create_run(tender["id"], "manager")
@@ -281,6 +282,7 @@ async def test_mcp_mutation_activity_is_recorded_and_missing_identity_writes_no_
     side_effects: list[dict] = []
     definition = _mutation_tool(calls, side_effects)
     from quantix.repository import Repository
+
     repo = Repository(tmp_path)
     tender = repo.create_tender("Synthetic MCP activity")
     run = repo.create_run(tender["id"], "manager")

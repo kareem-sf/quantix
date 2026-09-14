@@ -26,9 +26,25 @@ _MAX_DOCUMENTS = 6
 _EXCERPT_CHARS = 2000
 # Words that mark the documents that usually state the project's identity.
 _TELLING_WORDS = (
-    "invitation", "itt", "rfp", "rfq", "tender", "bid", "instruction", "cover",
-    "letter", "form of", "conditions", "particular", "contract", "scope",
-    "specification", "bill of quantities", "boq", "project", "summary",
+    "invitation",
+    "itt",
+    "rfp",
+    "rfq",
+    "tender",
+    "bid",
+    "instruction",
+    "cover",
+    "letter",
+    "form of",
+    "conditions",
+    "particular",
+    "contract",
+    "scope",
+    "specification",
+    "bill of quantities",
+    "boq",
+    "project",
+    "summary",
 )
 _READABLE = {".pdf": 3, ".docx": 3, ".doc": 2, ".txt": 2, ".xlsx": 1, ".xlsm": 1, ".xls": 1}
 
@@ -96,8 +112,12 @@ def package_digest(repo: "Repository", tender_id: str) -> dict:
             ).fetchall()
             text = " ".join(" ".join(row[0].split()) for row in rows if row[0])
             if text.strip():
-                excerpts.append({"document": safe_text(artifact["relative_path"], 300),
-                                 "opening_text": safe_text(text, _EXCERPT_CHARS)})
+                excerpts.append(
+                    {
+                        "document": safe_text(artifact["relative_path"], 300),
+                        "opening_text": safe_text(text, _EXCERPT_CHARS),
+                    }
+                )
     return {"file_count": len(artifacts), "files": paths, "excerpts": excerpts}
 
 
@@ -113,23 +133,32 @@ def _prompt(repo: "Repository", tender_id: str) -> str:
         "documents'. When no document names the project, write a short descriptive name from "
         "the package folder name. List in sources only documents whose text states a returned "
         "fact.\n\n"
-        + redact_text(json.dumps({"package_folder_name": tender["name"], "package": digest}, ensure_ascii=False))
+        + redact_text(
+            json.dumps(
+                {"package_folder_name": tender["name"], "package": digest}, ensure_ascii=False
+            )
+        )
     )
 
 
-async def run_identification(repo: "Repository", tender_id: str, run_id: str) -> PreparedIdentityResult:
+async def run_identification(
+    repo: "Repository", tender_id: str, run_id: str
+) -> PreparedIdentityResult:
     """One bounded model pass on the Tender's approved Manager route, with no tools."""
 
     from .structured_ai import ask_structured
 
-    output, usage = await ask_structured(repo, tender_id, run_id, _prompt(repo, tender_id), ProjectIdentity,
-                                         operation="identify")
+    output, usage = await ask_structured(
+        repo, tender_id, run_id, _prompt(repo, tender_id), ProjectIdentity, operation="identify"
+    )
     if not output.name.strip():
         raise ValueError("The identification pass returned no project name.")
     return PreparedIdentityResult(tender_id=tender_id, run_id=run_id, output=output, usage=usage)
 
 
-def apply_identity(repo: "Repository", prepared: PreparedIdentityResult, *, announce: bool = True) -> dict:
+def apply_identity(
+    repo: "Repository", prepared: PreparedIdentityResult, *, announce: bool = True
+) -> dict:
     """Name the Tender provisionally and retain proposed facts for source review."""
 
     identity, tender_id = prepared.output, prepared.tender_id
@@ -138,13 +167,18 @@ def apply_identity(repo: "Repository", prepared: PreparedIdentityResult, *, anno
     if renamed:
         repo.rename_tender(tender_id, identity.name.strip(), source="ai")
     facts = [
-        ("Client", identity.client), ("Location", ", ".join(filter(None, [identity.location, identity.country]))),
-        ("Reference", identity.reference), ("Contract", identity.contract_type),
-        ("Currency", ", ".join(identity.currencies)), ("Submission deadline", identity.submission_deadline),
+        ("Client", identity.client),
+        ("Location", ", ".join(filter(None, [identity.location, identity.country]))),
+        ("Reference", identity.reference),
+        ("Contract", identity.contract_type),
+        ("Currency", ", ".join(identity.currencies)),
+        ("Submission deadline", identity.submission_deadline),
         ("Measurement", identity.measurement_method),
     ]
-    lines = [f"I identified this project as **{identity.name.strip()}**.",
-             "These proposed project facts need source review before use in the Tender profile."]
+    lines = [
+        f"I identified this project as **{identity.name.strip()}**.",
+        "These proposed project facts need source review before use in the Tender profile.",
+    ]
     if identity.summary.strip():
         lines.append(identity.summary.strip())
     lines += [f"- {label}: {value}" for label, value in facts if value]

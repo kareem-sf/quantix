@@ -68,7 +68,9 @@ class ConnectionInput(AIModel):
     auth_type: Authentication = "api_key"
     billing: Billing = "metered"
     enabled: bool = True
-    environment_key: str | None = Field(default=None, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$", max_length=150)
+    environment_key: str | None = Field(
+        default=None, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$", max_length=150
+    )
     settings: dict[str, Any] = Field(default_factory=dict)
     credentials: dict[str, SecretStr] | None = None
     session_only: bool = False
@@ -89,7 +91,9 @@ class ConnectionRecord(AIModel):
     revision: int
     created_at: str
     updated_at: str
-    credential_state: Literal["stored", "session", "environment", "runtime", "missing", "not_required"]
+    credential_state: Literal[
+        "stored", "session", "environment", "runtime", "missing", "not_required"
+    ]
     status: Literal["configured", "models_discovered", "used", "needs_attention"]
     last_error: str | None = None
     allow_insecure_http: bool = False
@@ -128,9 +132,18 @@ class AIRoute(GenerationSettings):
         for key, default in (("temperature", None), ("top_p", None), ("output_mode", "auto")):
             if data.get(key) == default:
                 data.pop(key, None)
-        legacy_order = ("connection_id", "model_id", "reasoning", "max_output_tokens", "web_search", "max_search_calls")
-        return {**{key: data[key] for key in legacy_order if key in data},
-                **{key: value for key, value in data.items() if key not in legacy_order}}
+        legacy_order = (
+            "connection_id",
+            "model_id",
+            "reasoning",
+            "max_output_tokens",
+            "web_search",
+            "max_search_calls",
+        )
+        return {
+            **{key: data[key] for key in legacy_order if key in data},
+            **{key: value for key, value in data.items() if key not in legacy_order},
+        }
 
 
 class TenderAIInput(AIModel):
@@ -150,7 +163,9 @@ class TenderAIInput(AIModel):
     @model_validator(mode="after")
     def approved_connections(self):
         routes = [self.manager, self.specialist, *self.role_routes.values(), *self.fallback_routes]
-        if any(route and route.connection_id not in self.allowed_connection_ids for route in routes):
+        if any(
+            route and route.connection_id not in self.allowed_connection_ids for route in routes
+        ):
             raise ValueError("Every model route must use a connection approved for this tender.")
         return self
 
@@ -206,6 +221,7 @@ class AIUsageRecord(AIModel):
 
 class SubscriptionUsage(AIModel):
     """Dated account-wide metadata, never a Tender invoice or spending authority."""
+
     fetched_at: str
     subscription_tier: str | None = Field(default=None, max_length=150)
     used_percent: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)

@@ -7,9 +7,24 @@ from .map_models import NodeDecision, NodeInput, ReviewInput
 
 
 def evidence_hash(evidence):
-    return hashlib.sha256(dump({key: evidence.get(key) for key in (
-        "id", "artifact_id", "locator", "text", "page", "sheet", "cell_range", "kind", "metadata",
-    )}).encode()).hexdigest()
+    return hashlib.sha256(
+        dump(
+            {
+                key: evidence.get(key)
+                for key in (
+                    "id",
+                    "artifact_id",
+                    "locator",
+                    "text",
+                    "page",
+                    "sheet",
+                    "cell_range",
+                    "kind",
+                    "metadata",
+                )
+            }
+        ).encode()
+    ).hexdigest()
 
 
 class ProjectMapService:
@@ -26,7 +41,9 @@ class ProjectMapService:
                 conn.execute(sql)
             for table in ("project_nodes", "project_node_decisions", "project_reviews"):
                 for action in ("UPDATE", "DELETE"):
-                    conn.execute(f"CREATE TRIGGER IF NOT EXISTS {table}_no_{action.lower()} BEFORE {action} ON {table} BEGIN SELECT RAISE(ABORT,'Project structure and review history are immutable'); END")
+                    conn.execute(
+                        f"CREATE TRIGGER IF NOT EXISTS {table}_no_{action.lower()} BEFORE {action} ON {table} BEGIN SELECT RAISE(ABORT,'Project structure and review history are immutable'); END"
+                    )
 
     def _original_current(self, tender_id, artifact, cache):
         key = artifact["content_hash"]
@@ -45,9 +62,12 @@ class ProjectMapService:
         if not artifact["is_current"] or not self._original_current(tender_id, artifact, cache):
             raise ValueError("Use an available current source for the project map.")
         return {
-            "source_id": source_id, "artifact_id": artifact["id"],
-            "relative_path": artifact["relative_path"], "locator": source["locator"],
-            "version": artifact["version"], "content_hash": artifact["content_hash"],
+            "source_id": source_id,
+            "artifact_id": artifact["id"],
+            "relative_path": artifact["relative_path"],
+            "locator": source["locator"],
+            "version": artifact["version"],
+            "content_hash": artifact["content_hash"],
             "evidence_hash": evidence_hash(source),
         }
 
@@ -77,33 +97,79 @@ class ProjectMapService:
             identifier, stamp, cache = new_id(), now(), {}
             source_ids = list(dict.fromkeys(request.source_ids))
             payload = request.model_dump() | {
-                "source_ids": source_ids, "origin": origin, "run_id": run_id,
+                "source_ids": source_ids,
+                "origin": origin,
+                "run_id": run_id,
                 "source_manifest": [self._capture(tender_id, sid, cache) for sid in source_ids],
             }
-            conn.execute("INSERT INTO project_nodes VALUES(?,?,?,?)", (identifier, tender_id, dump(payload), stamp))
+            conn.execute(
+                "INSERT INTO project_nodes VALUES(?,?,?,?)",
+                (identifier, tender_id, dump(payload), stamp),
+            )
             return self.get(tender_id, identifier)
 
     def _records(self, tender_id):
         self.repo.get_tender(tender_id)
         with self.repo.db.connect() as conn:
-            nodes = [record(row) for row in conn.execute("SELECT * FROM project_nodes WHERE tender_id=? ORDER BY created_at,id", (tender_id,))]
-            decisions = [dict(row) for row in conn.execute("SELECT d.* FROM project_node_decisions d JOIN project_nodes n ON n.id=d.node_id WHERE n.tender_id=? ORDER BY d.rowid", (tender_id,))]
+            nodes = [
+                record(row)
+                for row in conn.execute(
+                    "SELECT * FROM project_nodes WHERE tender_id=? ORDER BY created_at,id",
+                    (tender_id,),
+                )
+            ]
+            decisions = [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT d.* FROM project_node_decisions d JOIN project_nodes n ON n.id=d.node_id WHERE n.tender_id=? ORDER BY d.rowid",
+                    (tender_id,),
+                )
+            ]
         by_id, cache = {}, {}
         findings = self.repo.list_findings(tender_id)
         with self.repo.db.connect() as conn:
-            has_boq = conn.execute("SELECT 1 FROM sqlite_master WHERE name='boq_items' AND type='table'").fetchone()
-            boq = list(conn.execute("SELECT id,source_id FROM boq_items WHERE tender_id=? AND active=1", (tender_id,))) if has_boq else []
+            has_boq = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='boq_items' AND type='table'"
+            ).fetchone()
+            boq = (
+                list(
+                    conn.execute(
+                        "SELECT id,source_id FROM boq_items WHERE tender_id=? AND active=1",
+                        (tender_id,),
+                    )
+                )
+                if has_boq
+                else []
+            )
         for saved in nodes:
             data = saved["payload"]
-            audit = [{k: d[k] for k in ("id", "decision", "rationale", "created_at")} for d in decisions if d["node_id"] == saved["id"]]
-            state = {"approve": "approved", "withdraw": "withdrawn"}.get(audit[-1]["decision"], "proposed") if audit else "proposed"
+            audit = [
+                {k: d[k] for k in ("id", "decision", "rationale", "created_at")}
+                for d in decisions
+                if d["node_id"] == saved["id"]
+            ]
+            state = (
+                {"approve": "approved", "withdraw": "withdrawn"}.get(
+                    audit[-1]["decision"], "proposed"
+                )
+                if audit
+                else "proposed"
+            )
             source_ids = set(data["source_ids"])
             reasons = self._source_reasons(tender_id, data["source_manifest"], cache)
             by_id[saved["id"]] = data | {
-                "id": saved["id"], "tender_id": tender_id, "created_at": saved["created_at"],
-                "state": state, "decisions": audit, "stale_reasons": reasons,
-                "related_artifact_ids": list(dict.fromkeys(s["artifact_id"] for s in data["source_manifest"])),
-                "related_finding_ids": [f["id"] for f in findings if source_ids.intersection(f["source_ids"])],
+                "id": saved["id"],
+                "tender_id": tender_id,
+                "created_at": saved["created_at"],
+                "state": state,
+                "decisions": audit,
+                "stale_reasons": reasons,
+                "related_artifact_ids": list(
+                    dict.fromkeys(s["artifact_id"] for s in data["source_manifest"])
+                ),
+                "related_finding_ids": [
+                    f["id"] for f in findings if source_ids.intersection(f["source_ids"])
+                ],
                 "related_boq_item_ids": [b["id"] for b in boq if b["source_id"] in source_ids],
             }
         for node in by_id.values():
@@ -132,13 +198,31 @@ class ProjectMapService:
         request = NodeDecision.model_validate(values)
         with self.repo.atomic() as conn:
             node = self.get(tender_id, node_id)
-            if request.decision == "approve" and (not node["is_current"] or node["state"] != "proposed"):
-                raise ValueError("Only a current proposed map item can be approved. Create a new source-backed proposal for revised content.")
+            if request.decision == "approve" and (
+                not node["is_current"] or node["state"] != "proposed"
+            ):
+                raise ValueError(
+                    "Only a current proposed map item can be approved. Create a new source-backed proposal for revised content."
+                )
             if request.decision == "withdraw" and node["state"] == "withdrawn":
                 raise ValueError("This map item is already withdrawn.")
             identifier, stamp = new_id(), now()
-            conn.execute("INSERT INTO project_node_decisions VALUES(?,?,?,?,?)", (identifier, node_id, request.decision, request.rationale, stamp))
-            conn.execute("INSERT INTO decisions VALUES(?,?,?,?,?,?,?)", (new_id(), tender_id, "project_node", node_id, request.decision, request.rationale, stamp))
+            conn.execute(
+                "INSERT INTO project_node_decisions VALUES(?,?,?,?,?)",
+                (identifier, node_id, request.decision, request.rationale, stamp),
+            )
+            conn.execute(
+                "INSERT INTO decisions VALUES(?,?,?,?,?,?,?)",
+                (
+                    new_id(),
+                    tender_id,
+                    "project_node",
+                    node_id,
+                    request.decision,
+                    request.rationale,
+                    stamp,
+                ),
+            )
             return self.get(tender_id, node_id)
 
     def review(self, tender_id, values):
@@ -150,22 +234,58 @@ class ProjectMapService:
             source_ids, fingerprint = [], None
             if request.scope_type == "page":
                 from .measurements import MeasurementService
+
                 MeasurementService(self.repo).page(tender_id, artifact["id"], request.page)
-                source_ids = [row[0] for row in conn.execute("SELECT id FROM evidence WHERE artifact_id=? AND page=?", (artifact["id"], request.page))]
+                source_ids = [
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT id FROM evidence WHERE artifact_id=? AND page=?",
+                        (artifact["id"], request.page),
+                    )
+                ]
             elif request.scope_type == "locator":
-                sources = [record(row) for row in conn.execute("SELECT * FROM evidence WHERE artifact_id=? AND locator=?", (artifact["id"], request.locator))]
+                sources = [
+                    record(row)
+                    for row in conn.execute(
+                        "SELECT * FROM evidence WHERE artifact_id=? AND locator=?",
+                        (artifact["id"], request.locator),
+                    )
+                ]
                 if len(sources) != 1:
                     raise ValueError("Choose one exact source passage from this document.")
                 source_ids = [sources[0]["id"]]
                 fingerprint = evidence_hash(self.repo.get_evidence(tender_id, source_ids[0]))
             identifier, stamp = new_id(), now()
             data = request.model_dump() | {
-                "relative_path": artifact["relative_path"], "version": artifact["version"],
-                "content_hash": artifact["content_hash"], "evidence_hash": fingerprint, "source_ids": source_ids,
+                "relative_path": artifact["relative_path"],
+                "version": artifact["version"],
+                "content_hash": artifact["content_hash"],
+                "evidence_hash": fingerprint,
+                "source_ids": source_ids,
             }
-            conn.execute("INSERT INTO project_reviews VALUES(?,?,?,?)", (identifier, tender_id, dump(data), stamp))
-            conn.execute("INSERT INTO decisions VALUES(?,?,?,?,?,?,?)", (new_id(), tender_id, "source_review", identifier, "review", request.rationale, stamp))
-            return data | {"id": identifier, "tender_id": tender_id, "created_at": stamp, "is_current": True, "stale_reasons": []}
+            conn.execute(
+                "INSERT INTO project_reviews VALUES(?,?,?,?)",
+                (identifier, tender_id, dump(data), stamp),
+            )
+            conn.execute(
+                "INSERT INTO decisions VALUES(?,?,?,?,?,?,?)",
+                (
+                    new_id(),
+                    tender_id,
+                    "source_review",
+                    identifier,
+                    "review",
+                    request.rationale,
+                    stamp,
+                ),
+            )
+            return data | {
+                "id": identifier,
+                "tender_id": tender_id,
+                "created_at": stamp,
+                "is_current": True,
+                "stale_reasons": [],
+            }
 
     def view(self, tender_id):
         nodes = self._records(tender_id)
@@ -173,22 +293,47 @@ class ProjectMapService:
         by_id = {a["id"]: a for a in artifacts}
         reviews, cache = [], {}
         with self.repo.db.connect() as conn:
-            saved_reviews = [record(row) for row in conn.execute("SELECT * FROM project_reviews WHERE tender_id=? ORDER BY created_at DESC,id", (tender_id,))]
-            extracted = conn.execute("SELECT COUNT(*) FROM evidence e JOIN artifacts a ON a.id=e.artifact_id WHERE a.tender_id=? AND a.is_current=1 AND COALESCE(e.is_current,1)=1 AND e.kind!='measurement' AND length(e.text)>0", (tender_id,)).fetchone()[0]
+            saved_reviews = [
+                record(row)
+                for row in conn.execute(
+                    "SELECT * FROM project_reviews WHERE tender_id=? ORDER BY created_at DESC,id",
+                    (tender_id,),
+                )
+            ]
+            extracted = conn.execute(
+                "SELECT COUNT(*) FROM evidence e JOIN artifacts a ON a.id=e.artifact_id WHERE a.tender_id=? AND a.is_current=1 AND COALESCE(e.is_current,1)=1 AND e.kind!='measurement' AND length(e.text)>0",
+                (tender_id,),
+            ).fetchone()[0]
         for row in saved_reviews:
             data, reasons = row["payload"], []
             artifact = by_id.get(data["artifact_id"])
-            if artifact is None or artifact["version"] != data["version"] or artifact["content_hash"] != data["content_hash"]:
+            if (
+                artifact is None
+                or artifact["version"] != data["version"]
+                or artifact["content_hash"] != data["content_hash"]
+            ):
                 reasons.append("The reviewed document has a newer revision.")
             elif not self._original_current(tender_id, artifact, cache):
                 reasons.append("The reviewed original is unavailable or changed.")
             if data["evidence_hash"]:
                 try:
-                    if evidence_hash(self.repo.get_evidence(tender_id, data["source_ids"][0])) != data["evidence_hash"]:
+                    if (
+                        evidence_hash(self.repo.get_evidence(tender_id, data["source_ids"][0]))
+                        != data["evidence_hash"]
+                    ):
                         reasons.append("The reviewed passage changed.")
                 except KeyError:
                     reasons.append("The reviewed passage is unavailable.")
-            reviews.append(data | {"id": row["id"], "tender_id": tender_id, "created_at": row["created_at"], "is_current": not reasons, "stale_reasons": reasons})
+            reviews.append(
+                data
+                | {
+                    "id": row["id"],
+                    "tender_id": tender_id,
+                    "created_at": row["created_at"],
+                    "is_current": not reasons,
+                    "stale_reasons": reasons,
+                }
+            )
         cited = set()
         for finding in self.repo.list_findings(tender_id):
             for sid in finding["source_ids"]:
@@ -198,13 +343,22 @@ class ProjectMapService:
                 except KeyError:
                     pass
         return {
-            "nodes": nodes, "review_scopes": reviews,
+            "nodes": nodes,
+            "review_scopes": reviews,
             "directory_areas": sorted(set(a["area"] for a in artifacts if a["area"])),
             "coverage": {
-                "registered_files": len(artifacts), "extracted_files": sum(a["status"] == "extracted" for a in artifacts),
-                "extracted_evidence": extracted, "evidence_cited_in_findings": len(cited),
+                "registered_files": len(artifacts),
+                "extracted_files": sum(a["status"] == "extracted" for a in artifacts),
+                "extracted_evidence": extracted,
+                "evidence_cited_in_findings": len(cited),
                 "current_review_scopes": sum(r["is_current"] for r in reviews),
-                "reviewed_artifacts_in_full": len({r["artifact_id"] for r in reviews if r["is_current"] and r["scope_type"] == "artifact"}),
+                "reviewed_artifacts_in_full": len(
+                    {
+                        r["artifact_id"]
+                        for r in reviews
+                        if r["is_current"] and r["scope_type"] == "artifact"
+                    }
+                ),
                 "note": "Cited passages indicate recorded analysis, not complete analysis. Review coverage records only the exact scopes explicitly checked by the engineer.",
             },
         }

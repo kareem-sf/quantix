@@ -288,11 +288,27 @@ def test_stop_and_recovery_revoke_authority_even_if_activity_capture_fails(tmp_p
     repo, tender, *_, route = configured_office(tmp_path, monkeypatch)
     run = repo.create_run(tender["id"], "manager", "Capture stop")
     team = TeamService(repo)
-    member = team.hire(tender["id"], run["id"], StaffDraft(
-        name="Samir Haddad", role="Quantity Surveyor", specialisms=["BOQ"],
-        background="Pricing.", working_style="Careful."))
-    assignment = team.assign(tender["id"], run["id"], member.id, title="Check", brief="Check.",
-                             expected_result="Result", source_ids=[], route=route)
+    member = team.hire(
+        tender["id"],
+        run["id"],
+        StaffDraft(
+            name="Samir Haddad",
+            role="Quantity Surveyor",
+            specialisms=["BOQ"],
+            background="Pricing.",
+            working_style="Careful.",
+        ),
+    )
+    assignment = team.assign(
+        tender["id"],
+        run["id"],
+        member.id,
+        title="Check",
+        brief="Check.",
+        expected_result="Result",
+        source_ids=[],
+        route=route,
+    )
     jobs = JobManager(repo, SettingsService(repo))
 
     def fail(*args, **kwargs):

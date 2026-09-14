@@ -33,9 +33,14 @@ class GrokSignInRequired(RuntimeUnavailable):
 
 
 _AUTO_TOPUP_RESPONSE_FIELDS = frozenset({"rule"})
-_AUTO_TOPUP_RULE_FIELDS = frozenset({
-    "enabled", "minBeforeHittingSl", "topupAmount", "maxAmountPerMonth",
-})
+_AUTO_TOPUP_RULE_FIELDS = frozenset(
+    {
+        "enabled",
+        "minBeforeHittingSl",
+        "topupAmount",
+        "maxAmountPerMonth",
+    }
+)
 
 
 def _failure(error):
@@ -43,19 +48,31 @@ def _failure(error):
     # provider text, URLs, identifiers or token fragments.
     code = error.get("code") if isinstance(error, dict) else None
     if code == -32601:
-        return RuntimeUnavailable("Grok did not recognize an account operation (protocol -32601). Prepare its Quantix component and retry.")
+        return RuntimeUnavailable(
+            "Grok did not recognize an account operation (protocol -32601). Prepare its Quantix component and retry."
+        )
     if code == -32602:
-        return RuntimeUnavailable("Grok rejected an account operation's parameters (protocol -32602). Prepare its Quantix component and retry.")
+        return RuntimeUnavailable(
+            "Grok rejected an account operation's parameters (protocol -32602). Prepare its Quantix component and retry."
+        )
     text = json.dumps(error, ensure_ascii=True)[:16000].lower()
     if re.search(r"\b403\b|permission_denied|entitlement|subscription.*required", text):
-        return RuntimeUnavailable("Grok could not grant this account access. Its subscription or selected model may not be eligible; signing in again does not change its entitlement.")
-    if re.search(r"\b401\b|auth_required|authentication required|no cached auth|session expired", text):
+        return RuntimeUnavailable(
+            "Grok could not grant this account access. Its subscription or selected model may not be eligible; signing in again does not change its entitlement."
+        )
+    if re.search(
+        r"\b401\b|auth_required|authentication required|no cached auth|session expired", text
+    ):
         return GrokSignInRequired("Grok requires this connection to sign in again.")
     if re.search(r"\b429\b|quota|credit.*exhaust|usage.*limit|rate.limit", text):
-        return RuntimeUnavailable("Grok has reached an account usage limit. Review its subscription allowance before retrying.")
+        return RuntimeUnavailable(
+            "Grok has reached an account usage limit. Review its subscription allowance before retrying."
+        )
     if re.search(r"\b(?:408|500|502|503|504)\b|timed out|timeout", text):
         return RuntimeConnectionFailure("The Grok account service is temporarily unavailable.")
-    return RuntimeUnavailable("Grok could not complete this account operation. Review the connection and its model access.")
+    return RuntimeUnavailable(
+        "Grok could not complete this account operation. Review the connection and its model access."
+    )
 
 
 class ACP:
@@ -74,7 +91,9 @@ class ACP:
             await self.process.stdin.drain()
 
     async def _read(self):
-        failure = RuntimeConnectionFailure("The original Grok account connection closed before completion.")
+        failure = RuntimeConnectionFailure(
+            "The original Grok account connection closed before completion."
+        )
         total = 0
         try:
             while line := await self.process.stdout.readline():
@@ -86,8 +105,16 @@ class ACP:
                     raise RuntimeUnavailable("Grok returned an invalid account protocol response.")
                 if "method" in value:
                     if "id" in value:
-                        await self._send({"jsonrpc": "2.0", "id": value["id"], "error": {
-                            "code": -32601, "message": "Only account and model metadata operations are available."}})
+                        await self._send(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": value["id"],
+                                "error": {
+                                    "code": -32601,
+                                    "message": "Only account and model metadata operations are available.",
+                                },
+                            }
+                        )
                     continue
                 future = self.pending.get(value.get("id"))
                 if future is None or future.done():
@@ -103,7 +130,11 @@ class ACP:
         except (ValueError, UnicodeDecodeError):
             failure = RuntimeUnavailable("Grok returned an unsupported account metadata stream.")
         except Exception as error:
-            failure = error if isinstance(error, RuntimeUnavailable) else RuntimeConnectionFailure("The Grok account connection was interrupted.")
+            failure = (
+                error
+                if isinstance(error, RuntimeUnavailable)
+                else RuntimeConnectionFailure("The Grok account connection was interrupted.")
+            )
         finally:
             for future in self.pending.values():
                 if not future.done():
@@ -121,7 +152,9 @@ class ACP:
             # prefixes '_' on the wire and the receiver removes that prefix
             # before dispatching the logical x.ai/... extension name.
             wire_method = "_" + method if method.startswith("x.ai/") else method
-            await self._send({"jsonrpc": "2.0", "id": identifier, "method": wire_method, "params": params or {}})
+            await self._send(
+                {"jsonrpc": "2.0", "id": identifier, "method": wire_method, "params": params or {}}
+            )
             async with asyncio.timeout(timeout):
                 return await future
         finally:
@@ -143,24 +176,43 @@ async def acp_session(home, connection, *, allow_browser=False):
     diagnostics = None
     client = None
     try:
-        process = await spawn([*grok_command(connection), "agent", "--no-leader", "stdio"],
-                              work, environment(home, allow_browser=allow_browser))
+        process = await spawn(
+            [*grok_command(connection), "agent", "--no-leader", "stdio"],
+            work,
+            environment(home, allow_browser=allow_browser),
+        )
         diagnostics = asyncio.create_task(discard(process.stderr))
         client = ACP(process)
-        initialized = await client.request("initialize", {
-            "protocolVersion": 1,
-            "clientInfo": {"name": "quantix", "title": "Quantix Tender Office", "version": "1.0.0"},
-            "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False},
-            "_meta": {"clientIdentifier": "quantix"},
-        })
+        initialized = await client.request(
+            "initialize",
+            {
+                "protocolVersion": 1,
+                "clientInfo": {
+                    "name": "quantix",
+                    "title": "Quantix Tender Office",
+                    "version": "1.0.0",
+                },
+                "clientCapabilities": {
+                    "fs": {"readTextFile": False, "writeTextFile": False},
+                    "terminal": False,
+                },
+                "_meta": {"clientIdentifier": "quantix"},
+            },
+        )
         meta = initialized.get("_meta") if isinstance(initialized, dict) else None
         meta = meta if isinstance(meta, dict) else {}
         info = initialized.get("agentInfo") if isinstance(initialized, dict) else None
         info = info if isinstance(info, dict) else {}
         version = meta.get("agentVersion") or info.get("version")
-        if (not isinstance(initialized, dict) or initialized.get("protocolVersion") != 1
-                or version != GROK_VERSION or meta.get("grokShell") is not True):
-            raise RuntimeUnavailable("The installed Grok Build does not expose the supported account interface.")
+        if (
+            not isinstance(initialized, dict)
+            or initialized.get("protocolVersion") != 1
+            or version != GROK_VERSION
+            or meta.get("grokShell") is not True
+        ):
+            raise RuntimeUnavailable(
+                "The installed Grok Build does not expose the supported account interface."
+            )
         yield client, initialized
     finally:
         try:
@@ -185,7 +237,9 @@ async def acp_session(home, connection, *, allow_browser=False):
 def _require_session(initialized):
     meta = initialized.get("_meta") or {}
     if meta.get("defaultAuthMethodId") != "cached_token":
-        raise GrokSignInRequired("Sign in through this Quantix Grok connection before checking its account or model access.")
+        raise GrokSignInRequired(
+            "Sign in through this Quantix Grok connection before checking its account or model access."
+        )
 
 
 async def _check_access(client, initialized):
@@ -195,7 +249,9 @@ async def _check_access(client, initialized):
         raise GrokSignInRequired("Grok did not confirm this connection's saved sign-in.")
     meta = checked.get("meta")
     if not isinstance(meta, dict) or meta.get("gate"):
-        raise RuntimeUnavailable("Grok has restricted this account's Build access. Review the subscription entitlement in the original account.")
+        raise RuntimeUnavailable(
+            "Grok has restricted this account's Build access. Review the subscription entitlement in the original account."
+        )
 
 
 def _date(value):
@@ -245,10 +301,19 @@ def normalize_billing(billing, topup):
     start = _date(period.get("start") if has_current_period else config.get("billingPeriodStart"))
     end = _date(period.get("end") if has_current_period else config.get("billingPeriodEnd"))
     used = config.get("creditUsagePercent")
-    used = float(used) if type(used) in {int, float} and math.isfinite(used) and 0 <= used <= 100 else None
+    used = (
+        float(used)
+        if type(used) in {int, float} and math.isfinite(used) and 0 <= used <= 100
+        else None
+    )
     if used is None and not has_current_period and config.get("creditUsagePercent") is None:
         limit, spent = _money(config.get("monthlyLimit")), _money(config.get("used"))
-        if limit is not None and spent is not None and Decimal(limit) > 0 and Decimal(spent) <= Decimal(limit):
+        if (
+            limit is not None
+            and spent is not None
+            and Decimal(limit) > 0
+            and Decimal(spent) <= Decimal(limit)
+        ):
             used = float(Decimal(spent) * 100 / Decimal(limit))
     # The official GetAutoTopupRuleResponse is a typed wrapper with an
     # optional `rule`.  xAI's proto JSON omits false scalar fields and can
@@ -257,17 +322,38 @@ def normalize_billing(billing, topup):
     # explicit disabled/no-rule observation, while a non-object `rule` is a
     # malformed response and must remain unknown.
     auto = _auto_topup_enabled(topup)
-    prepaid, cap, on_demand_used = (_money(config.get(name)) for name in ("prepaidBalance", "onDemandCap", "onDemandUsed"))
+    prepaid, cap, on_demand_used = (
+        _money(config.get(name)) for name in ("prepaidBalance", "onDemandCap", "onDemandUsed")
+    )
     current = start is not None and end is not None and start <= now < end
-    allowed = (current and used is not None and used < 100 and prepaid == "0.00" and cap == "0.00" and auto is False)
-    detail = ("The current included allowance is available; no prepaid balance, on-demand allowance or enabled automatic top-up was reported. Account-wide usage may change elsewhere."
-              if allowed else "Included-only work is paused because the allowance is exhausted or current billing, prepaid, on-demand or automatic top-up information does not establish included-only access.")
+    allowed = (
+        current
+        and used is not None
+        and used < 100
+        and prepaid == "0.00"
+        and cap == "0.00"
+        and auto is False
+    )
+    detail = (
+        "The current included allowance is available; no prepaid balance, on-demand allowance or enabled automatic top-up was reported. Account-wide usage may change elsewhere."
+        if allowed
+        else "Included-only work is paused because the allowance is exhausted or current billing, prepaid, on-demand or automatic top-up information does not establish included-only access."
+    )
     tier = billing.get("subscription_tier") if isinstance(billing, dict) else None
-    return {"fetched_at": now.isoformat(), "subscription_tier": tier[:120] if isinstance(tier, str) else None,
-            "used_percent": used, "period_type": period["type"][:100] if isinstance(period.get("type"), str) else None,
-            "period_start": start.isoformat() if start else None, "period_end": end.isoformat() if end else None,
-            "prepaid_balance_usd": prepaid, "on_demand_cap_usd": cap, "on_demand_used_usd": on_demand_used,
-            "auto_topup_enabled": auto, "included_only_allowed": bool(allowed), "detail": detail}
+    return {
+        "fetched_at": now.isoformat(),
+        "subscription_tier": tier[:120] if isinstance(tier, str) else None,
+        "used_percent": used,
+        "period_type": period["type"][:100] if isinstance(period.get("type"), str) else None,
+        "period_start": start.isoformat() if start else None,
+        "period_end": end.isoformat() if end else None,
+        "prepaid_balance_usd": prepaid,
+        "on_demand_cap_usd": cap,
+        "on_demand_used_usd": on_demand_used,
+        "auto_topup_enabled": auto,
+        "included_only_allowed": bool(allowed),
+        "detail": detail,
+    }
 
 
 async def billing_in_session(client, initialized):
@@ -275,7 +361,9 @@ async def billing_in_session(client, initialized):
     billing = await client.request("x.ai/billing")
     topup = await client.request("x.ai/auto-topup-rule")
     if not isinstance(billing, dict) or not isinstance(topup, dict):
-        raise RuntimeUnavailable("Grok returned incomplete subscription metadata. No request was started.")
+        raise RuntimeUnavailable(
+            "Grok returned incomplete subscription metadata. No request was started."
+        )
     return normalize_billing(billing, topup)
 
 
@@ -310,7 +398,11 @@ async def cached_account_status(home, connection):
 
 async def models_in_session(client):
     reply = await client.request("x.ai/models/list")
-    if not isinstance(reply, dict) or reply.get("error") or not isinstance(reply.get("result"), dict):
+    if (
+        not isinstance(reply, dict)
+        or reply.get("error")
+        or not isinstance(reply.get("result"), dict)
+    ):
         raise RuntimeUnavailable("Grok returned an invalid model catalog.")
     entries = reply["result"].get("availableModels")
     if not isinstance(entries, list) or len(entries) > 2000:
@@ -318,7 +410,11 @@ async def models_in_session(client):
     result = {}
     for entry in entries:
         identifier = entry.get("modelId") if isinstance(entry, dict) else None
-        if not isinstance(identifier, str) or not re.fullmatch(MODEL_PATTERN, identifier) or identifier.lower() in {"auto", "default", "automatic"}:
+        if (
+            not isinstance(identifier, str)
+            or not re.fullmatch(MODEL_PATTERN, identifier)
+            or identifier.lower() in {"auto", "default", "automatic"}
+        ):
             continue
         meta = entry.get("_meta") or {}
         if not isinstance(meta, dict):
@@ -332,9 +428,15 @@ async def models_in_session(client):
                 if isinstance(value, str) and re.fullmatch(r"[a-z][a-z0-9_-]{0,39}", value):
                     levels.append(value)
         name = entry.get("name")
-        result[identifier] = {"model_id": identifier, "display_name": name[:300] if isinstance(name, str) and name.strip() else identifier,
-                              "capabilities": {"context_window": context if type(context) is int and context > 0 else None,
-                                               "reasoning": list(dict.fromkeys(levels)), "web_search": False}}
+        result[identifier] = {
+            "model_id": identifier,
+            "display_name": name[:300] if isinstance(name, str) and name.strip() else identifier,
+            "capabilities": {
+                "context_window": context if type(context) is int and context > 0 else None,
+                "reasoning": list(dict.fromkeys(levels)),
+                "web_search": False,
+            },
+        }
     if not result:
         raise RuntimeUnavailable("Grok did not return an exact available model for this account.")
     return list(result.values())
@@ -354,7 +456,9 @@ def check_billing_permission(snapshot, connection):
     if connection.get("_operation") == "check":
         # A private dollar value alone does not establish an enforceable charge
         # ceiling for this subscription. Root currently supplies no such proof.
-        raise RuntimeUnavailable("Grok cannot currently provide a bounded paid connection check. Use included-only account access before checking this model.")
+        raise RuntimeUnavailable(
+            "Grok cannot currently provide a bounded paid connection check. Use included-only account access before checking this model."
+        )
     if connection.get("settings", {}).get("allow_provider_managed_extras") is not True:
         raise RuntimeUnavailable(snapshot["detail"])
 
@@ -366,15 +470,37 @@ async def authenticate(account, ready):
         async with asyncio.timeout(900):
             async with account_lock(account.home, timeout=120):
                 configure(account.home)
-                async with acp_session(account.home, account.connection, allow_browser=True) as (client, initialized):
-                    if not any(isinstance(method, dict) and method.get("id") == "grok.com" for method in initialized.get("authMethods", [])):
-                        raise RuntimeUnavailable("Grok does not offer its supported browser sign-in on this connection.")
-                    pending = account.record("login_pending", "Grok is preparing its official account sign-in. Complete the browser step when it opens.")
+                async with acp_session(account.home, account.connection, allow_browser=True) as (
+                    client,
+                    initialized,
+                ):
+                    if not any(
+                        isinstance(method, dict) and method.get("id") == "grok.com"
+                        for method in initialized.get("authMethods", [])
+                    ):
+                        raise RuntimeUnavailable(
+                            "Grok does not offer its supported browser sign-in on this connection."
+                        )
+                    pending = account.record(
+                        "login_pending",
+                        "Grok is preparing its official account sign-in. Complete the browser step when it opens.",
+                    )
                     if not ready.done():
                         ready.set_result(pending)
-                    login_task = asyncio.create_task(client.request("authenticate", {
-                        "methodId": "grok.com", "_meta": {"headless": False, "force_interactive": True, "use_oauth": True},
-                    }, timeout=840))
+                    login_task = asyncio.create_task(
+                        client.request(
+                            "authenticate",
+                            {
+                                "methodId": "grok.com",
+                                "_meta": {
+                                    "headless": False,
+                                    "force_interactive": True,
+                                    "use_oauth": True,
+                                },
+                            },
+                            timeout=840,
+                        )
+                    )
                     # get_url may initially return null until authenticate enters
                     # the original client's interactive flow. It never exposes tokens.
                     for _ in range(40):
@@ -384,27 +510,52 @@ async def authenticate(account, ready):
                         url = link.get("auth_url") if isinstance(link, dict) else None
                         if isinstance(url, str):
                             parsed = urlsplit(url)
-                            if (parsed.scheme != "https" or parsed.hostname not in {"auth.x.ai", "accounts.x.ai"}
-                                    or parsed.port not in {None, 443} or parsed.username or parsed.password or len(url) > 5000
-                                    or any(ord(char) < 33 for char in url)):
-                                raise RuntimeUnavailable("Grok returned an unsupported sign-in address.")
-                            account.record("login_pending", "Continue the official Grok sign-in in your browser.", login_url=url)
+                            if (
+                                parsed.scheme != "https"
+                                or parsed.hostname not in {"auth.x.ai", "accounts.x.ai"}
+                                or parsed.port not in {None, 443}
+                                or parsed.username
+                                or parsed.password
+                                or len(url) > 5000
+                                or any(ord(char) < 33 for char in url)
+                            ):
+                                raise RuntimeUnavailable(
+                                    "Grok returned an unsupported sign-in address."
+                                )
+                            account.record(
+                                "login_pending",
+                                "Continue the official Grok sign-in in your browser.",
+                                login_url=url,
+                            )
                             break
                         await asyncio.sleep(0.1)
                     result = await login_task
                     if not isinstance(result, dict) or not isinstance(result.get("_meta"), dict):
                         raise RuntimeUnavailable("Grok did not confirm the completed sign-in.")
                     if result["_meta"].get("gate"):
-                        account.record("attention", "Grok confirmed sign-in but this account does not have Build access. Review its subscription entitlement.")
+                        account.record(
+                            "attention",
+                            "Grok confirmed sign-in but this account does not have Build access. Review its subscription entitlement.",
+                        )
                     else:
-                        account.record("signed_in", "Grok confirmed this connection's sign-in. Model access and included usage remain to be checked.")
+                        account.record(
+                            "signed_in",
+                            "Grok confirmed this connection's sign-in. Model access and included usage remain to be checked.",
+                        )
     except asyncio.CancelledError:
-        account.record("attention", "The pending Grok sign-in was cancelled. Existing saved sign-in has not been cleared.")
+        account.record(
+            "attention",
+            "The pending Grok sign-in was cancelled. Existing saved sign-in has not been cleared.",
+        )
         if not ready.done():
             ready.cancel()
         raise
     except Exception as error:
-        detail = str(error) if isinstance(error, RuntimeUnavailable) else "The original Grok sign-in did not finish. Existing sign-in has not been cleared; retry the account step."
+        detail = (
+            str(error)
+            if isinstance(error, RuntimeUnavailable)
+            else "The original Grok sign-in did not finish. Existing sign-in has not been cleared; retry the account step."
+        )
         value = account.record("attention", detail)
         if not ready.done():
             ready.set_result(value)
@@ -444,10 +595,16 @@ async def authenticate_device(account, ready):
                 configure(account.home)
                 work = account.home / "account" / uuid4().hex
                 work.mkdir(parents=True, exist_ok=True)
-                process = await spawn([*grok_command(account.connection), "login", "--device-auth"],
-                                      work, environment(account.home, allow_browser=True), limit=64 * 1024)
+                process = await spawn(
+                    [*grok_command(account.connection), "login", "--device-auth"],
+                    work,
+                    environment(account.home, allow_browser=True),
+                    limit=64 * 1024,
+                )
                 stdout = asyncio.create_task(discard(process.stdout))
-                value = account.record("login_pending", "Grok is preparing its official sign-in code.")
+                value = account.record(
+                    "login_pending", "Grok is preparing its official sign-in code."
+                )
                 if not ready.done():
                     ready.set_result(value)
                 total = 0
@@ -461,8 +618,12 @@ async def authenticate_device(account, ready):
                         break
                     total += len(line)
                     if total > 2 * 1024 * 1024:
-                        raise RuntimeUnavailable("The original Grok sign-in exceeded its bounded display stream.")
-                    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", line.decode("utf-8", errors="replace")).strip()
+                        raise RuntimeUnavailable(
+                            "The original Grok sign-in exceeded its bounded display stream."
+                        )
+                    text = re.sub(
+                        r"\x1b\[[0-?]*[ -/]*[@-~]", "", line.decode("utf-8", errors="replace")
+                    ).strip()
                     if text == "To sign in, open this URL in your browser:":
                         stage = "url"
                         continue
@@ -473,34 +634,58 @@ async def authenticate_device(account, ready):
                         continue
                     if stage == "url":
                         parsed = urlsplit(text)
-                        if (parsed.scheme != "https" or parsed.hostname not in {"auth.x.ai", "accounts.x.ai"}
-                                or parsed.port not in {None, 443} or parsed.username or parsed.password
-                                or len(text) > 5000 or any(ord(char) < 33 for char in text)):
-                            raise RuntimeUnavailable("Grok returned an unsupported device verification address.")
+                        if (
+                            parsed.scheme != "https"
+                            or parsed.hostname not in {"auth.x.ai", "accounts.x.ai"}
+                            or parsed.port not in {None, 443}
+                            or parsed.username
+                            or parsed.password
+                            or len(text) > 5000
+                            or any(ord(char) < 33 for char in text)
+                        ):
+                            raise RuntimeUnavailable(
+                                "Grok returned an unsupported device verification address."
+                            )
                         login_url = text
                         stage = None
                     elif stage == "code":
                         if not re.fullmatch(r"[A-Za-z0-9-]{1,128}", text):
-                            raise RuntimeUnavailable("Grok returned an unsupported user-code display.")
+                            raise RuntimeUnavailable(
+                                "Grok returned an unsupported user-code display."
+                            )
                         user_code = text
                         stage = None
                     if login_url and user_code:
-                        account.record("login_pending", "Open the official Grok address and confirm this one-time code.",
-                                       login_url=login_url, user_code=user_code)
+                        account.record(
+                            "login_pending",
+                            "Open the official Grok address and confirm this one-time code.",
+                            login_url=login_url,
+                            user_code=user_code,
+                        )
                 await process.wait()
                 if process.returncode != 0 or not login_url or not user_code:
                     raise RuntimeUnavailable("The original Grok device sign-in did not finish.")
                 configure(account.home)
                 async with acp_session(account.home, account.connection) as (client, initialized):
                     await _check_access(client, initialized)
-                account.record("signed_in", "Grok confirmed this connection's device sign-in. Model access and included usage remain to be checked.")
+                account.record(
+                    "signed_in",
+                    "Grok confirmed this connection's device sign-in. Model access and included usage remain to be checked.",
+                )
     except asyncio.CancelledError:
-        account.record("attention", "The pending Grok device sign-in was cancelled. Existing sign-in has not been cleared.")
+        account.record(
+            "attention",
+            "The pending Grok device sign-in was cancelled. Existing sign-in has not been cleared.",
+        )
         if not ready.done():
             ready.cancel()
         raise
     except Exception as error:
-        detail = str(error) if isinstance(error, RuntimeUnavailable) else "The original Grok device sign-in did not finish or account access could not be confirmed. Retry the sign-in step."
+        detail = (
+            str(error)
+            if isinstance(error, RuntimeUnavailable)
+            else "The original Grok device sign-in did not finish or account access could not be confirmed. Retry the sign-in step."
+        )
         value = account.record("attention", detail)
         if not ready.done():
             ready.set_result(value)

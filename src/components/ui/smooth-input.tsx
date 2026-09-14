@@ -72,7 +72,8 @@ export function SmoothInput({
       const paddingLeft = parseFloat(styles.paddingLeft) || 0;
       const paddingRight = parseFloat(styles.paddingRight) || 0;
       const width = index > 0 ? measure.offsetWidth + paddingLeft : paddingLeft;
-      const visibleRight = target.scrollLeft + target.clientWidth - paddingRight;
+      const visibleRight =
+        target.scrollLeft + target.clientWidth - paddingRight;
       if (width > visibleRight)
         target.scrollLeft = width - target.clientWidth + paddingRight;
       else if (width < target.scrollLeft + paddingLeft)
@@ -97,7 +98,9 @@ export function SmoothInput({
     const fonts = (document as Document & { fonts?: FontFaceSet }).fonts;
     fonts?.addEventListener?.("loadingdone", refresh);
     const observer =
-      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(refresh);
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(refresh);
     observer?.observe(container);
     return () => {
       document.removeEventListener("selectionchange", onSelection);

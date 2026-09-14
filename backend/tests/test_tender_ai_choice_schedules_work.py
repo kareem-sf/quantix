@@ -10,7 +10,11 @@ from quantix import ai_setup_routes
 
 def test_follow_up_work_runs_on_the_event_loop(monkeypatch):
     seen = {}
-    monkeypatch.setattr(ai_setup_routes, "select_tender_ai", lambda repo, setup, tender_id, request: {"ok": tender_id})
+    monkeypatch.setattr(
+        ai_setup_routes,
+        "select_tender_ai",
+        lambda repo, setup, tender_id, request: {"ok": tender_id},
+    )
 
     def schedule(tender_id):
         # asyncio.create_task needs a running loop; a worker thread has none.
@@ -24,7 +28,9 @@ def test_follow_up_work_runs_on_the_event_loop(monkeypatch):
             route.response_model = None
     app.include_router(router)
     with TestClient(app) as client:
-        response = client.post("/api/tenders/t1/ai-setup",
-                               json={"account_id": "a", "model_id": "m", "engineer_confirmed": True})
+        response = client.post(
+            "/api/tenders/t1/ai-setup",
+            json={"account_id": "a", "model_id": "m", "engineer_confirmed": True},
+        )
     assert response.status_code == 200, response.text
     assert seen == {"loop": True, "tender": "t1"}

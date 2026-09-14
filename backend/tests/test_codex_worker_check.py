@@ -19,7 +19,9 @@ from quantix.ai_worker_client import AIWorkerClient, connection_check_instructio
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("submission", ["correct", "wrong", "missing", "repeat"])
-async def test_codex_check_uses_original_client_and_real_local_mcp_roundtrip(tmp_path, monkeypatch, submission):
+async def test_codex_check_uses_original_client_and_real_local_mcp_roundtrip(
+    tmp_path, monkeypatch, submission
+):
     import openai_codex
     from openai_codex.types import TurnCompletedNotification
 
@@ -30,10 +32,19 @@ async def test_codex_check_uses_original_client_and_real_local_mcp_roundtrip(tmp
         id = "synthetic-thread"
 
         def __init__(self, config):
-            settings = {key: json.loads(value) for key, value in (option.split("=", 1) for option in config.config_overrides)}
-            assert set(settings["mcp_servers.quantix.enabled_tools"]) == {"quantix_connection_check", "quantix_submit_result"}
+            settings = {
+                key: json.loads(value)
+                for key, value in (option.split("=", 1) for option in config.config_overrides)
+            }
+            assert set(settings["mcp_servers.quantix.enabled_tools"]) == {
+                "quantix_connection_check",
+                "quantix_submit_result",
+            }
             assert settings["mcp_servers.quantix.default_tools_approval_mode"] == "auto"
-            self.endpoint = {"url": settings["mcp_servers.quantix.url"], "token": config.env["QUANTIX_MCP_TOKEN"]}
+            self.endpoint = {
+                "url": settings["mcp_servers.quantix.url"],
+                "token": config.env["QUANTIX_MCP_TOKEN"],
+            }
 
         async def __aenter__(self):
             return self
@@ -64,8 +75,13 @@ async def test_codex_check_uses_original_client_and_real_local_mcp_roundtrip(tmp
             async with AsyncExitStack() as stack:
                 source = await connect(stack, self.endpoint)
                 catalog = await source.list_tools()
-                assert {tool.name for tool in catalog.tools} == {"quantix_connection_check", "quantix_submit_result"}
-                submit = next(tool for tool in catalog.tools if tool.name == "quantix_submit_result")
+                assert {tool.name for tool in catalog.tools} == {
+                    "quantix_connection_check",
+                    "quantix_submit_result",
+                }
+                submit = next(
+                    tool for tool in catalog.tools if tool.name == "quantix_submit_result"
+                )
                 assert "after reading" not in submit.description
                 proof = await source.call_tool("quantix_connection_check", {})
                 assert proof.is_error is False
@@ -83,15 +99,33 @@ async def test_codex_check_uses_original_client_and_real_local_mcp_roundtrip(tmp
                     result = await source.call_tool("quantix_submit_result", {"value": submitted})
                     assert result.is_error is False
                     calls.append("submit")
-            yield SimpleNamespace(method="turn/completed", payload=TurnCompletedNotification.model_validate({
-                "threadId": self.id, "turn": {"id": "synthetic-turn", "status": "completed", "items": [], "error": None}}))
+            yield SimpleNamespace(
+                method="turn/completed",
+                payload=TurnCompletedNotification.model_validate(
+                    {
+                        "threadId": self.id,
+                        "turn": {
+                            "id": "synthetic-turn",
+                            "status": "completed",
+                            "items": [],
+                            "error": None,
+                        },
+                    }
+                ),
+            )
 
         async def interrupt(self):
             pass
 
     monkeypatch.setattr(openai_codex, "AsyncCodex", ScriptedCodex)
-    account = {"id": "synthetic-codex", "provider_id": "codex", "protocol": "codex",
-               "auth_type": "client_login", "billing": "subscription", "settings": {}}
+    account = {
+        "id": "synthetic-codex",
+        "provider_id": "codex",
+        "protocol": "codex",
+        "auth_type": "client_login",
+        "billing": "subscription",
+        "settings": {},
+    }
     host = AIWorkerClient(SimpleNamespace(home=tmp_path))
     worker = Worker.__new__(Worker)
     worker.connection = account
@@ -101,7 +135,9 @@ async def test_codex_check_uses_original_client_and_real_local_mcp_roundtrip(tmp
     class InProcessWorkerSession:
         async def call_tool(self, operation, arguments):
             result = await worker.operation(operation, arguments)
-            return types.CallToolResult(content=[], structuredContent={"ok": True, "result": result})
+            return types.CallToolResult(
+                content=[], structuredContent={"ok": True, "result": result}
+            )
 
     @asynccontextmanager
     async def session(_):
@@ -109,8 +145,13 @@ async def test_codex_check_uses_original_client_and_real_local_mcp_roundtrip(tmp
 
     monkeypatch.setattr(host, "_session", session)
     monkeypatch.setattr(host, "_execute", host._execute_in_slot)
-    route = {"connection_id": account["id"], "model_id": "gpt-5.3-codex-spark",
-             "max_output_tokens": 1024, "web_search": False, "reasoning": None}
+    route = {
+        "connection_id": account["id"],
+        "model_id": "gpt-5.3-codex-spark",
+        "max_output_tokens": 1024,
+        "web_search": False,
+        "reasoning": None,
+    }
     if submission == "missing":
         with pytest.raises(ExceptionGroup) as caught:
             await host.check(route, account, {})
@@ -122,8 +163,9 @@ async def test_codex_check_uses_original_client_and_real_local_mcp_roundtrip(tmp
         assert result["tools_supported"] is True
         assert result["checked_count"] == (2 if submission == "repeat" else 1)
         assert result["output_supported"] is (submission in {"correct", "repeat"})
-        assert calls == (["check", "check", "submit"] if submission == "repeat"
-                         else ["check", "submit"])
+        assert calls == (
+            ["check", "check", "submit"] if submission == "repeat" else ["check", "submit"]
+        )
     assert "quantix_submit_result" in connection_check_instruction("codex")
 
 

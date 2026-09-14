@@ -67,7 +67,14 @@ class QuoteService:
         with self.repo.db.connect(write=True) as conn:
             conn.execute(
                 "INSERT INTO quote_drafts(id,tender_id,message_id,status,data_json,created_at,updated_at) VALUES(?,?,?,'draft',?,?,?)",
-                (identifier, tender_id, make_msgid(domain="quantix.local"), dump(data), stamp, stamp),
+                (
+                    identifier,
+                    tender_id,
+                    make_msgid(domain="quantix.local"),
+                    dump(data),
+                    stamp,
+                    stamp,
+                ),
             )
         return self.get(tender_id, identifier)
 
@@ -170,7 +177,11 @@ class QuoteService:
             "kind": "other",
             "status": "extracted",
             "warnings": [],
-            "metadata": {"origin": "manual", "sender": data["sender"], "received_at": data["received_at"]},
+            "metadata": {
+                "origin": "manual",
+                "sender": data["sender"],
+                "received_at": data["received_at"],
+            },
             "segments": [
                 {
                     "locator": f"reply:{identifier}/characters:{offset + 1}-{min(offset + 6000, len(text))}",
@@ -199,7 +210,13 @@ class QuoteService:
                     "INSERT INTO quote_replies(id,tender_id,quote_id,data_json,raw_message,created_at) VALUES(?,?,?,?,?,?)",
                     (identifier, tender_id, quote_id, dump(data), raw, stamp),
                 )
-        return {"id": identifier, "tender_id": tender_id, "quote_id": quote_id, "created_at": stamp, **data}
+        return {
+            "id": identifier,
+            "tender_id": tender_id,
+            "quote_id": quote_id,
+            "created_at": stamp,
+            **data,
+        }
 
     def replies(self, tender_id, quote_id):
         self.get(tender_id, quote_id)

@@ -199,25 +199,51 @@ class RuntimeToolBridge:
                         raise InterruptedError("This Tender run is no longer active.")
                 if params.name == SUBMIT_TOOL:
                     activity = ActivityRecorder(self.context)
-                    proposal_operation = activity.start("tool", "Checking the submitted proposal.",
-                        {"arguments": params.arguments or {}}, tool=SUBMIT_TOOL,
-                        provider_call_id=str(getattr(_ctx, "request_id", "")) or None)
+                    proposal_operation = activity.start(
+                        "tool",
+                        "Checking the submitted proposal.",
+                        {"arguments": params.arguments or {}},
+                        tool=SUBMIT_TOOL,
+                        provider_call_id=str(getattr(_ctx, "request_id", "")) or None,
+                    )
                     if self.output is not None:
-                        activity.record(proposal_operation, "tool", "failed", "A proposal was already submitted.")
+                        activity.record(
+                            proposal_operation,
+                            "tool",
+                            "failed",
+                            "A proposal was already submitted.",
+                        )
                         raise ValueError("A result has already been submitted for this run.")
                     try:
                         candidate = self.output_type.model_validate(params.arguments or {})
                     except ValueError:
-                        activity.record(proposal_operation, "tool", "failed", "The submitted proposal did not match its required structure.")
+                        activity.record(
+                            proposal_operation,
+                            "tool",
+                            "failed",
+                            "The submitted proposal did not match its required structure.",
+                        )
                         raise
                     rejected = self._publication_problem(candidate)
                     if rejected is not None:
-                        activity.record(proposal_operation, "tool", "failed", "The proposal needs correction.",
-                            {"result": [part.model_dump(mode="json") for part in rejected.content]})
+                        activity.record(
+                            proposal_operation,
+                            "tool",
+                            "failed",
+                            "The proposal needs correction.",
+                            {"result": [part.model_dump(mode="json") for part in rejected.content]},
+                        )
                         return rejected
                     self.output = candidate
-                    activity.record(proposal_operation, "tool", "completed", "Proposal received for validation.",
-                        {"result": "Proposal received for validation. Finish the current response; no further tools are required."})
+                    activity.record(
+                        proposal_operation,
+                        "tool",
+                        "completed",
+                        "Proposal received for validation.",
+                        {
+                            "result": "Proposal received for validation. Finish the current response; no further tools are required."
+                        },
+                    )
                     return types.CallToolResult(
                         content=content_blocks(
                             "Proposal received for validation. Finish the current response; no further tools are required."
@@ -254,7 +280,11 @@ class RuntimeToolBridge:
                 try:
                     with activity_scope(getattr(self.context, "_activity_parent_operation", None)):
                         result = await dispatch(
-                            "mcp", tool, self.context, params.arguments or {}, invocation_id=invocation_id,
+                            "mcp",
+                            tool,
+                            self.context,
+                            params.arguments or {},
+                            invocation_id=invocation_id,
                         )
                 except ToolFenceError as error:
                     raise ValueError(str(error)) from error
@@ -584,81 +614,207 @@ class WorkerControlBridge(RuntimeToolBridge):
                     if type(usage.get("usage_complete")) is not bool:
                         raise ValueError("The worker did not establish usage completeness.")
                     native_binding = self.connection.get("_native_session_binding")
-                    if native_binding and self.context is not None and usage.get("session_id") is not None:
+                    if (
+                        native_binding
+                        and self.context is not None
+                        and usage.get("session_id") is not None
+                    ):
                         from .native_execution import NativeExecutionService
-                        NativeExecutionService(self.context.repo).finish(self.context, native_binding["id"],
-                            provider_session_id=usage["session_id"], state="running")
+
+                        NativeExecutionService(self.context.repo).finish(
+                            self.context,
+                            native_binding["id"],
+                            provider_session_id=usage["session_id"],
+                            state="running",
+                        )
                     if self.on_response:
                         await self.on_response(usage, self.reservations[key])
                     self.reservations.pop(key)
                     value = {"recorded": True}
                 elif params.name == "event":
                     kind = arguments.get("kind")
-                    if kind not in {"model_response", "runtime_model_reported", "runtime_waiting", "runtime_session", "runtime_tool_activity", "assistant_text_delta", "assistant_reasoning_summary", "runtime_request_activity", "runtime_public_section"}:
+                    if kind not in {
+                        "model_response",
+                        "runtime_model_reported",
+                        "runtime_waiting",
+                        "runtime_session",
+                        "runtime_tool_activity",
+                        "assistant_text_delta",
+                        "assistant_reasoning_summary",
+                        "runtime_request_activity",
+                        "runtime_public_section",
+                    }:
                         raise ValueError("This worker event is unsupported.")
                     if kind == "runtime_request_activity":
                         data = arguments.get("data") or {}
                         request_id, phase = data.get("request_id"), data.get("phase")
-                        if not isinstance(request_id, str) or len(request_id) > 200 or phase not in {"prepared", "started", "completed", "failed", "cancelled", "observed"}:
-                            raise ValueError("The original client supplied an invalid request activity boundary.")
+                        if (
+                            not isinstance(request_id, str)
+                            or len(request_id) > 200
+                            or phase
+                            not in {
+                                "prepared",
+                                "started",
+                                "completed",
+                                "failed",
+                                "cancelled",
+                                "observed",
+                            }
+                        ):
+                            raise ValueError(
+                                "The original client supplied an invalid request activity boundary."
+                            )
                         recorder = ActivityRecorder(self.context)
                         operation = self.activity_requests.get(request_id)
                         if phase == "prepared":
                             if operation:
-                                raise ValueError("This original-client request was already prepared.")
+                                raise ValueError(
+                                    "This original-client request was already prepared."
+                                )
                             payload = dict(data.get("payload") or {})
                             catalogue = await self.source._list_tools(None, None)
-                            payload["quantix_tool_catalogue"] = [tool.model_dump(mode="json", by_alias=True) for tool in catalogue.tools]
+                            payload["quantix_tool_catalogue"] = [
+                                tool.model_dump(mode="json", by_alias=True)
+                                for tool in catalogue.tools
+                            ]
                             payload["quantix_tool_instructions"] = self.source.server.instructions
-                            operation = recorder.start("model_request", "Content supplied by Quantix", payload,
-                                phase="prepared", provider=self.connection.get("provider_id"), model=self.route.get("model_id"),
-                                capture_status="partial", unavailable_fields=["provider_internal_prompt", "provider_per_sampling_requests"])
+                            operation = recorder.start(
+                                "model_request",
+                                "Content supplied by Quantix",
+                                payload,
+                                phase="prepared",
+                                provider=self.connection.get("provider_id"),
+                                model=self.route.get("model_id"),
+                                capture_status="partial",
+                                unavailable_fields=[
+                                    "provider_internal_prompt",
+                                    "provider_per_sampling_requests",
+                                ],
+                            )
                             self.activity_requests[request_id] = operation
                             if self.context is not None:
                                 self.context._activity_parent_operation = operation
                             available = self.connection.get("protocol") == "codex"
-                            recorder.record(operation, "capability", "observed", "The original client can supply thinking summaries." if available else "This original client does not expose a documented thinking summary stream.",
-                                {"supported": available, "detail": "Public summaries are retained when supplied." if available else "The Grok client does not document a public reasoning summary stream."},
-                                capture_status="complete" if available else "unavailable", unavailable_fields=[] if available else ["reasoning_summary"])
+                            recorder.record(
+                                operation,
+                                "capability",
+                                "observed",
+                                "The original client can supply thinking summaries."
+                                if available
+                                else "This original client does not expose a documented thinking summary stream.",
+                                {
+                                    "supported": available,
+                                    "detail": "Public summaries are retained when supplied."
+                                    if available
+                                    else "The Grok client does not document a public reasoning summary stream.",
+                                },
+                                capture_status="complete" if available else "unavailable",
+                                unavailable_fields=[] if available else ["reasoning_summary"],
+                            )
                         else:
                             if operation is None:
-                                raise ValueError("The original-client request has not been prepared.")
+                                raise ValueError(
+                                    "The original-client request has not been prepared."
+                                )
                             payload = data.get("payload") or {}
-                            if phase == "observed" and isinstance(payload.get("provider_tool_error"), dict):
+                            if phase == "observed" and isinstance(
+                                payload.get("provider_tool_error"), dict
+                            ):
                                 failure = payload["provider_tool_error"]
-                                recorder.start("provider_tool", "The original client reported a tool error.", failure,
-                                    phase="failed", parent_operation_id=operation, tool=failure.get("tool"),
-                                    provider_call_id=failure.get("provider_call_id"), capture_status="partial")
+                                recorder.start(
+                                    "provider_tool",
+                                    "The original client reported a tool error.",
+                                    failure,
+                                    phase="failed",
+                                    parent_operation_id=operation,
+                                    tool=failure.get("tool"),
+                                    provider_call_id=failure.get("provider_call_id"),
+                                    capture_status="partial",
+                                )
                             else:
-                                recorder.record(operation, "model_request", phase, "Original-client request " + phase + ".", payload, capture_status="partial")
-                    elif kind in {"assistant_text_delta", "assistant_reasoning_summary", "runtime_public_section"}:
+                                recorder.record(
+                                    operation,
+                                    "model_request",
+                                    phase,
+                                    "Original-client request " + phase + ".",
+                                    payload,
+                                    capture_status="partial",
+                                )
+                    elif kind in {
+                        "assistant_text_delta",
+                        "assistant_reasoning_summary",
+                        "runtime_public_section",
+                    }:
                         from .native_execution import project_client_event
+
                         data = arguments.get("data") or {}
-                        if data.get("request_id") and data["request_id"] not in self.activity_requests:
-                            raise ValueError("The original-client public section has no prepared request.")
-                        project_client_event(self.context, kind, data, request_operation=self.activity_requests.get(data.get("request_id")))
+                        if (
+                            data.get("request_id")
+                            and data["request_id"] not in self.activity_requests
+                        ):
+                            raise ValueError(
+                                "The original-client public section has no prepared request."
+                            )
+                        project_client_event(
+                            self.context,
+                            kind,
+                            data,
+                            request_operation=self.activity_requests.get(data.get("request_id")),
+                        )
                     elif kind == "runtime_tool_activity":
                         data = arguments.get("data") or {}
                         tool = data.get("tool")
-                        allowed = {*self.source.names, *("quantix__" + name for name in self.source.names), "search_tool", "use_tool"}
+                        allowed = {
+                            *self.source.names,
+                            *("quantix__" + name for name in self.source.names),
+                            "search_tool",
+                            "use_tool",
+                        }
                         if tool not in allowed or data.get("phase") not in {"started", "completed"}:
-                            raise ValueError("The original client supplied an unsupported tool activity event.")
+                            raise ValueError(
+                                "The original client supplied an unsupported tool activity event."
+                            )
                         if self.context is not None:
-                            values = {"tool": tool, "phase": data["phase"], "origin": "client" if tool in {"search_tool", "use_tool"} else "quantix"}
-                            values.update({name: data[name] for name in ("provider_call_id", "request_id") if isinstance(data.get(name), str)})
+                            values = {
+                                "tool": tool,
+                                "phase": data["phase"],
+                                "origin": "client"
+                                if tool in {"search_tool", "use_tool"}
+                                else "quantix",
+                            }
+                            values.update(
+                                {
+                                    name: data[name]
+                                    for name in ("provider_call_id", "request_id")
+                                    if isinstance(data.get(name), str)
+                                }
+                            )
                             for name in ("actor_id", "assignment_id"):
                                 if getattr(self.context, name, None):
                                     values[name] = getattr(self.context, name)
                             if values["origin"] == "client":
-                                self.context.repo.event(self.context.run_id, kind, "Finding an approved tool.", values)
+                                self.context.repo.event(
+                                    self.context.run_id, kind, "Finding an approved tool.", values
+                                )
                     elif kind == "runtime_session":
                         from .native_execution import NativeExecutionService
+
                         expected = self.connection.get("_native_session_binding") or {}
                         data = arguments.get("data") or {}
-                        if self.context is None or not expected or data.get("binding_id") != expected.get("id"):
-                            raise ValueError("The native session event does not belong to this execution.")
-                        NativeExecutionService(self.context.repo).finish(self.context, expected["id"],
-                            provider_session_id=data.get("provider_session_id"), state="running")
+                        if (
+                            self.context is None
+                            or not expected
+                            or data.get("binding_id") != expected.get("id")
+                        ):
+                            raise ValueError(
+                                "The native session event does not belong to this execution."
+                            )
+                        NativeExecutionService(self.context.repo).finish(
+                            self.context,
+                            expected["id"],
+                            provider_session_id=data.get("provider_session_id"),
+                            state="running",
+                        )
                     elif self.context is not None:
                         message = {
                             "model_response": "Model response received.",
@@ -669,8 +825,18 @@ class WorkerControlBridge(RuntimeToolBridge):
                         self.context.repo.event(self.context.run_id, kind, message, data)
                         operation = self.activity_requests.get(data.get("request_id"))
                         if operation and kind == "model_response":
-                            ActivityRecorder(self.context).record(operation, "model_output", "observed", message,
-                                {name: data[name] for name in ("round", "usage", "provider_response_id") if name in data}, capture_status="partial")
+                            ActivityRecorder(self.context).record(
+                                operation,
+                                "model_output",
+                                "observed",
+                                message,
+                                {
+                                    name: data[name]
+                                    for name in ("round", "usage", "provider_response_id")
+                                    if name in data
+                                },
+                                capture_status="partial",
+                            )
                         project_run_activity(self.context.repo, self.context.run_id, kind, data)
                     value = {"recorded": True}
                 elif params.name == "result":
@@ -692,8 +858,12 @@ class WorkerControlBridge(RuntimeToolBridge):
                     isError=True, content=content_blocks(safe_text(exc, 1200))
                 )
             except Exception as exc:
-                record_exception("worker_control_failed", exc, phase=params.name,
-                                 run_id=getattr(self.context, "run_id", None))
+                record_exception(
+                    "worker_control_failed",
+                    exc,
+                    phase=params.name,
+                    run_id=getattr(self.context, "run_id", None),
+                )
                 return types.CallToolResult(
                     isError=True,
                     content=content_blocks("The local worker control operation could not finish."),

@@ -86,8 +86,15 @@ def desktop_browser_context() -> dict[str, str | None]:
         return dict(_desktop_profile_environment)
     return {
         key: os.environ.get(key)
-        for key in ("HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
-                    "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME")
+        for key in (
+            "HOME",
+            "USERPROFILE",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_CACHE_HOME",
+        )
     }
 
 
@@ -102,8 +109,15 @@ def prepare_process_environment(home: Path | str | None = None) -> Path:
     if _desktop_profile_environment is None:
         _desktop_profile_environment = {
             key: os.environ.get(key)
-            for key in ("HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
-                        "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME")
+            for key in (
+                "HOME",
+                "USERPROFILE",
+                "APPDATA",
+                "LOCALAPPDATA",
+                "XDG_CONFIG_HOME",
+                "XDG_DATA_HOME",
+                "XDG_CACHE_HOME",
+            )
         }
     root = ensure_runtime_dirs(home)
     _process_home = root

@@ -180,7 +180,7 @@ def test_manager_creation_context_is_frozen_server_only_dataclass():
 
 def test_profile_edit_leaves_existing_ai_policy_and_account_snapshot_unchanged(tmp_path):
     repo = Repository(tmp_path)
-    tender_id = repo.create_tender("Synthetic Manager boundary")['id']
+    tender_id = repo.create_tender("Synthetic Manager boundary")["id"]
     with repo.db.connect(write=True) as conn:
         conn.execute(
             "CREATE TABLE ai_connections (id TEXT PRIMARY KEY, data_json TEXT NOT NULL, credential_ref TEXT, credential_mode TEXT NOT NULL)"

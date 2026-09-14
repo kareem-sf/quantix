@@ -1,4 +1,5 @@
 """Public metadata for original-client sessions; no client credentials or history."""
+
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -19,4 +20,6 @@ class NativeSessionBinding(BaseModel):
     scope_fingerprint: str
     settings_fingerprint: str
     provider_session_id: str | None = None
-    state: Literal["prepared", "running", "completed", "interrupted", "failed", "incompatible"] = "prepared"
+    state: Literal["prepared", "running", "completed", "interrupted", "failed", "incompatible"] = (
+        "prepared"
+    )

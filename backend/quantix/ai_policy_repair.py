@@ -40,14 +40,18 @@ def prune_policy(policy: dict, missing: set[str]) -> dict | None:
         if _route_account(route) not in missing
     }
     fallbacks = [
-        route for route in policy.get("fallback_routes") or [] if _route_account(route) not in missing
+        route
+        for route in policy.get("fallback_routes") or []
+        if _route_account(route) not in missing
     ]
     extras = {
-        key: value for key, value in (policy.get("provider_managed_extras") or {}).items()
+        key: value
+        for key, value in (policy.get("provider_managed_extras") or {}).items()
         if key not in missing
     }
     versions = {
-        key: value for key, value in (policy.get("_connection_versions") or {}).items()
+        key: value
+        for key, value in (policy.get("_connection_versions") or {}).items()
         if key not in missing
     }
     pruned = dict(policy)
@@ -92,7 +96,15 @@ def prune_deleted_accounts(conn, missing: set[str]) -> int:
         )
         conn.execute(
             "INSERT INTO decisions VALUES(?,?,?,?,?,?,?)",
-            (new_id(), tender_id, "ai_policy", tender_id, "remove_deleted_account", REMOVED_DETAIL, stamp),
+            (
+                new_id(),
+                tender_id,
+                "ai_policy",
+                tender_id,
+                "remove_deleted_account",
+                REMOVED_DETAIL,
+                stamp,
+            ),
         )
         changed += 1
     return changed

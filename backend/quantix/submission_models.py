@@ -51,7 +51,9 @@ class SubmissionSelection(SubmissionModel):
     def unique_outputs(self):
         if len(set(self.output_ids)) != len(self.output_ids):
             raise ValueError("Select each output once.")
-        if self.requirement_ids is not None and len(set(self.requirement_ids)) != len(self.requirement_ids):
+        if self.requirement_ids is not None and len(set(self.requirement_ids)) != len(
+            self.requirement_ids
+        ):
             raise ValueError("Select each submission requirement once.")
         return self
 
@@ -80,7 +82,14 @@ class SubmissionRepairTarget(SubmissionModel):
 
 
 class SubmissionBlocker(SubmissionModel):
-    code: Literal["requirement_approval", "requirement_source", "requirement_review", "requirement_document", "missing_output", "output_changed"]
+    code: Literal[
+        "requirement_approval",
+        "requirement_source",
+        "requirement_review",
+        "requirement_document",
+        "missing_output",
+        "output_changed",
+    ]
     message: str
     target: SubmissionRepairTarget
 

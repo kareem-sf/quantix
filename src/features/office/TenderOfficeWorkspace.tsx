@@ -390,9 +390,7 @@ function SavedOutputResult({
 
 function isResultView(value: string | undefined) {
   return (
-    value === "work-product" ||
-    value === "calculation" ||
-    value === "output"
+    value === "work-product" || value === "calculation" || value === "output"
   );
 }
 

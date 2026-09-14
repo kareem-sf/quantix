@@ -11,7 +11,9 @@ from .estimates import EstimateService
 from .office_tools import OfficeContext, redact_text, safe_text, scoped_tool
 
 RecordType = Literal["findings", "decisions", "tasks", "runs", "messages", "takeoff"]
-RECORD_TABLES = {name: name for name in ("findings", "decisions", "tasks", "runs", "messages")} | {"takeoff": "takeoff_lines"}
+RECORD_TABLES = {name: name for name in ("findings", "decisions", "tasks", "runs", "messages")} | {
+    "takeoff": "takeoff_lines"
+}
 
 
 def recipient_addresses(text):
@@ -63,7 +65,9 @@ def validate_business(output, context, web_sources):
     ]
     recipients = set(context.trusted_recipients)
     for finding in output.web_findings:
-        if finding.urls and (web_sources is None or all(url in web_sources for url in finding.urls)):
+        if finding.urls and (
+            web_sources is None or all(url in web_sources for url in finding.urls)
+        ):
             recipients.update(recipient_addresses(finding.detail))
     for source in read:
         if context.repo.get_artifact(context.tender_id, source["artifact_id"])["is_current"]:
@@ -92,7 +96,9 @@ def validate_business(output, context, web_sources):
                 context.tender_id, proposal.item_id, payload, context.item_bases[proposal.item_id]
             )
             context.validate_sources([basis["source_id"], *proposal.provenance.source_ids])
-            if web_sources is not None and any(url not in web_sources for url in proposal.provenance.urls):
+            if web_sources is not None and any(
+                url not in web_sources for url in proposal.provenance.urls
+            ):
                 raise ValueError(
                     "A proposed rate cites a URL not returned by this run's web research."
                 )
@@ -139,12 +145,27 @@ def business_tools():
             from .takeoff import TakeoffService
 
             lines = TakeoffService(ctx.context.repo).list(ctx.context.tender_id)
-            fields = ("id", "description", "location", "unit", "quantity", "boq_item_id", "boq", "comparison",
-                      "difference", "difference_percent", "status", "is_current", "author")
+            fields = (
+                "id",
+                "description",
+                "location",
+                "unit",
+                "quantity",
+                "boq_item_id",
+                "boq",
+                "comparison",
+                "difference",
+                "difference_percent",
+                "status",
+                "is_current",
+                "author",
+            )
             payload = {
                 "record_type": record_type,
                 "total": len(lines),
-                "records": [line.model_dump(include=set(fields)) for line in lines[offset:offset + limit]],
+                "records": [
+                    line.model_dump(include=set(fields)) for line in lines[offset : offset + limit]
+                ],
                 "next_offset": offset + limit if offset + limit < len(lines) else None,
             }
             return json.dumps(_clean(payload), ensure_ascii=False)
@@ -157,8 +178,21 @@ def business_tools():
                 )
             ]
         fields = (
-            "id", "title", "kind", "state", "is_stale", "status", "role", "origin", "target_type",
-            "target_id", "decision", "plan_id", "source_ids", "created_at", "updated_at",
+            "id",
+            "title",
+            "kind",
+            "state",
+            "is_stale",
+            "status",
+            "role",
+            "origin",
+            "target_type",
+            "target_id",
+            "decision",
+            "plan_id",
+            "source_ids",
+            "created_at",
+            "updated_at",
         )
         selected = []
         for row in rows[:limit]:
@@ -261,7 +295,15 @@ def business_tools():
                 {
                     **{
                         key: row.get(key)
-                        for key in ("id", "to", "cc", "subject", "status", "message_id", "source_ids")
+                        for key in (
+                            "id",
+                            "to",
+                            "cc",
+                            "subject",
+                            "status",
+                            "message_id",
+                            "source_ids",
+                        )
                     },
                     "body": row["body"][:3000],
                     "body_is_partial": len(row["body"]) > 3000,

@@ -23,9 +23,15 @@ def test_cached_input_uses_the_cached_rate_only_when_it_is_priced():
     priced = {"pricing": _PRICES}
     unpriced = {"pricing": {**_PRICES, "cached_input_per_million": None}}
 
-    assert route_usage_cost(_CONNECTION, priced, _ROUTE, 100_000, 1_000, cached_input_tokens=60_000) == pytest.approx(0.0765)
-    assert route_usage_cost(_CONNECTION, unpriced, _ROUTE, 100_000, 1_000, cached_input_tokens=60_000) == pytest.approx(0.1575)
-    assert route_usage_cost(_CONNECTION, priced, _ROUTE, 100_000, 1_000, cached_input_tokens=200_000) == pytest.approx(0.1575)
+    assert route_usage_cost(
+        _CONNECTION, priced, _ROUTE, 100_000, 1_000, cached_input_tokens=60_000
+    ) == pytest.approx(0.0765)
+    assert route_usage_cost(
+        _CONNECTION, unpriced, _ROUTE, 100_000, 1_000, cached_input_tokens=60_000
+    ) == pytest.approx(0.1575)
+    assert route_usage_cost(
+        _CONNECTION, priced, _ROUTE, 100_000, 1_000, cached_input_tokens=200_000
+    ) == pytest.approx(0.1575)
     assert route_usage_cost(_CONNECTION, priced, _ROUTE, 100_000, 1_000) == pytest.approx(0.1575)
 
 

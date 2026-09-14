@@ -115,6 +115,8 @@ CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value_json TEXT NOT NU
 """
 
 CURRENT_SCHEMA_VERSION = 4
+
+
 # Forward migrations keyed by the user_version they produce. Version 1 is the
 # initial SCHEMA applied from an empty database. Callables receive an open
 # connection already inside an immediate transaction.
@@ -251,7 +253,9 @@ class Database:
                 version = conn.execute("PRAGMA user_version").fetchone()[0]
                 known = {0, 1, CURRENT_SCHEMA_VERSION, *FORWARD_MIGRATIONS}
                 if version not in known:
-                    raise ValueError("This workspace was created by an unsupported version of Quantix.")
+                    raise ValueError(
+                        "This workspace was created by an unsupported version of Quantix."
+                    )
                 conn.executescript(SCHEMA)
                 evidence_cols = {row[1] for row in conn.execute("PRAGMA table_info(evidence)")}
                 if "is_current" in evidence_cols:

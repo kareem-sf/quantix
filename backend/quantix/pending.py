@@ -22,8 +22,16 @@ if TYPE_CHECKING:
 _KEY_RE = re.compile(r"^[A-Za-z0-9._~-]{1,160}$")
 PendingStatus = Literal["pending", "held"]
 PendingHoldReason = Literal[
-    "failed", "cancelled", "interrupted", "stopped", "restored",
-    "permission", "model", "budget", "source", "work",
+    "failed",
+    "cancelled",
+    "interrupted",
+    "stopped",
+    "restored",
+    "permission",
+    "model",
+    "budget",
+    "source",
+    "work",
 ]
 
 
@@ -190,7 +198,9 @@ class PendingInstructionService:
                     (saved["pending_id"],),
                 ).fetchone()
             if current is not None and current["content_hash"] != saved["content_hash"]:
-                raise ValueError("This idempotency key no longer identifies the current pending message.")
+                raise ValueError(
+                    "This idempotency key no longer identifies the current pending message."
+                )
         return saved
 
     def remember_idempotency(
@@ -289,7 +299,17 @@ class PendingInstructionService:
                         """INSERT INTO pending_instructions
                         (id,tender_id,content,action,content_hash,idempotency_key,wait_for_run_ids_json,status,hold_reason,revision,created_at,updated_at)
                         VALUES(?,?,?,?,?,?,?, 'pending',NULL,1,?,?)""",
-                        (identifier, tender_id, content, action, digest, key, dump(waits), stamp, stamp),
+                        (
+                            identifier,
+                            tender_id,
+                            content,
+                            action,
+                            digest,
+                            key,
+                            dump(waits),
+                            stamp,
+                            stamp,
+                        ),
                     )
             else:
                 identifier = new_id()
@@ -297,7 +317,17 @@ class PendingInstructionService:
                     """INSERT INTO pending_instructions
                     (id,tender_id,content,action,content_hash,idempotency_key,wait_for_run_ids_json,status,hold_reason,revision,created_at,updated_at)
                     VALUES(?,?,?,?,?,?,?, 'pending',NULL,1,?,?)""",
-                    (identifier, tender_id, content, action, digest, key, dump(waits), stamp, stamp),
+                    (
+                        identifier,
+                        tender_id,
+                        content,
+                        action,
+                        digest,
+                        key,
+                        dump(waits),
+                        stamp,
+                        stamp,
+                    ),
                 )
             saved = record(
                 conn.execute(
@@ -305,8 +335,13 @@ class PendingInstructionService:
                 ).fetchone()
             )
             self.remember_idempotency(
-                tender_id, key, content, action=action,
-                outcome_kind="pending", pending_id=identifier, outcome={}
+                tender_id,
+                key,
+                content,
+                action=action,
+                outcome_kind="pending",
+                pending_id=identifier,
+                outcome={},
             )
         return saved
 
@@ -336,7 +371,15 @@ class PendingInstructionService:
             key = new_id()
             conn.execute(
                 "UPDATE pending_instructions SET content=?,action=?,content_hash=?,idempotency_key=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?",
-                (content, action, _content_hash(content, action), key, stamp, current["id"], expected_revision),
+                (
+                    content,
+                    action,
+                    _content_hash(content, action),
+                    key,
+                    stamp,
+                    current["id"],
+                    expected_revision,
+                ),
             )
             saved = record(
                 conn.execute(
@@ -344,8 +387,13 @@ class PendingInstructionService:
                 ).fetchone()
             )
             self.remember_idempotency(
-                tender_id, key, content, action=action,
-                outcome_kind="pending", pending_id=saved["id"], outcome={}
+                tender_id,
+                key,
+                content,
+                action=action,
+                outcome_kind="pending",
+                pending_id=saved["id"],
+                outcome={},
             )
         return saved
 
@@ -367,8 +415,16 @@ class PendingInstructionService:
 
     def hold_for_tender(self, tender_id: str, reason: str) -> bool:
         if reason not in {
-            "failed", "cancelled", "interrupted", "stopped", "restored",
-            "permission", "model", "budget", "source", "work",
+            "failed",
+            "cancelled",
+            "interrupted",
+            "stopped",
+            "restored",
+            "permission",
+            "model",
+            "budget",
+            "source",
+            "work",
         }:
             raise ValueError("Unknown pending instruction hold reason.")
         with self.repo.db.connect(write=True) as conn:
@@ -455,7 +511,9 @@ class PendingInstructionService:
                 failures = {"failed", "cancelled", "interrupted"}.intersection(terminal)
                 if failures:
                     reason = next(
-                        value for value in ("failed", "cancelled", "interrupted") if value in failures
+                        value
+                        for value in ("failed", "cancelled", "interrupted")
+                        if value in failures
                     )
                     conn.execute(
                         "UPDATE pending_instructions SET status='held',hold_reason=?,updated_at=? WHERE id=?",

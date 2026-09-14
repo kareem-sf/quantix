@@ -88,19 +88,13 @@ def create_router(repo) -> APIRouter:
         offset: int = Query(0, ge=0),
         limit: int = Query(50, ge=1, le=100),
     ):
-        return _call(
-            lambda: products.versions(
-                tender_id, product_id, offset=offset, limit=limit
-            )
-        )
+        return _call(lambda: products.versions(tender_id, product_id, offset=offset, limit=limit))
 
     @router.get(
         "/tenders/{tender_id}/work-products/{product_id}/versions/{version}",
         response_model=WorkProductVersion,
     )
-    def get_work_product(
-        tender_id: str, product_id: str, version: int, include_rows: bool = True
-    ):
+    def get_work_product(tender_id: str, product_id: str, version: int, include_rows: bool = True):
         def read():
             item = products.get(tender_id, product_id, version)
             return item if include_rows else item.model_copy(update={"rows": []})
@@ -119,9 +113,7 @@ def create_router(repo) -> APIRouter:
         limit: int = Query(50, ge=1, le=100),
     ):
         return _call(
-            lambda: products.page(
-                tender_id, product_id, version, offset=offset, limit=limit
-            )
+            lambda: products.page(tender_id, product_id, version, offset=offset, limit=limit)
         )
 
     @router.post("/tenders/{tender_id}/calculations", response_model=CalculationRecord)
@@ -142,10 +134,11 @@ def create_router(repo) -> APIRouter:
     @router.post("/tenders/{tender_id}/extractions/reprocess", response_model=ReprocessResult)
     def reprocess_extraction(tender_id: str, command: ReprocessRequest):
         if not re.fullmatch(r"[0-9a-f]{64}", command.original_hash):
-            raise HTTPException(status_code=409, detail="The original hash must be a SHA-256 hex identity.")
+            raise HTTPException(
+                status_code=409, detail="The original hash must be a SHA-256 hex identity."
+            )
         if command.page_limit is not None and (
-            type(command.page_limit) is not int
-            or not 1 <= command.page_limit <= MAX_PDF_PAGES
+            type(command.page_limit) is not int or not 1 <= command.page_limit <= MAX_PDF_PAGES
         ):
             raise HTTPException(
                 status_code=409,
@@ -155,7 +148,9 @@ def create_router(repo) -> APIRouter:
         try:
             artifacts = repo.list_artifacts(tender_id, current_only=False)
         except KeyError as error:
-            raise HTTPException(status_code=404, detail="This Tender could not be found.") from error
+            raise HTTPException(
+                status_code=404, detail="This Tender could not be found."
+            ) from error
         if not any(artifact["content_hash"] == command.original_hash for artifact in artifacts):
             raise HTTPException(
                 status_code=404,

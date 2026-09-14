@@ -42,5 +42,7 @@ class GeminiSchemaTransformer(GoogleJsonSchemaTransformer):
         if hints:
             note = "; ".join(hints)
             description = schema.get("description")
-            schema["description"] = f"{description} ({note})" if description else note[:1].upper() + note[1:]
+            schema["description"] = (
+                f"{description} ({note})" if description else note[:1].upper() + note[1:]
+            )
         return schema

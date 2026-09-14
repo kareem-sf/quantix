@@ -196,7 +196,6 @@
   flex-wrap: wrap;
 }
 @media (max-width: 760px) {
-  
   .correspondence .section-heading {
     align-items: flex-start;
     flex-wrap: wrap;

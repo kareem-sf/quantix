@@ -98,7 +98,10 @@ def test_report_states_when_no_attributable_analysis_exists(report_setup):
 
     assert "Historical Manager text with no run link." not in text
     assert "Historical text linked to a run with no recorded outcome." not in text
-    assert "No completed Tender Manager engineering analysis with recorded run provenance is available." in text
+    assert (
+        "No completed Tender Manager engineering analysis with recorded run provenance is available."
+        in text
+    )
     assert "Review limitation" in text
     assert any("recorded run provenance" in warning for warning in record["metadata"]["warnings"])
 
@@ -106,7 +109,9 @@ def test_report_states_when_no_attributable_analysis_exists(report_setup):
 def test_source_revision_still_blocks_a_report_with_attributable_analysis(report_setup):
     repo, tender_id, estimates, outputs = report_setup
     source_id = estimates.view(tender_id)["items"][0]["source_id"]
-    save_engineering_analysis(repo, tender_id, "Review based on the first source revision.", [source_id])
+    save_engineering_analysis(
+        repo, tender_id, "Review based on the first source revision.", [source_id]
+    )
     record = outputs.generate(tender_id, approval(kind="analysis_docx"))
 
     revised_bytes = b"Controlled synthetic BOQ source revision two"

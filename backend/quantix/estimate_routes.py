@@ -37,7 +37,9 @@ def create_router(repo):
     def propose_source_row(tender_id: str, request: SourceBoqProposal):
         return estimates.propose_source_row(tender_id, request.model_dump())
 
-    @router.post("/tenders/{tender_id}/estimate/source-rows/{item_id}/exclude", response_model=EstimateView)
+    @router.post(
+        "/tenders/{tender_id}/estimate/source-rows/{item_id}/exclude", response_model=EstimateView
+    )
     def exclude_source_row(tender_id: str, item_id: str, request: SourceRowExclusion):
         return estimates.exclude_source_row(tender_id, item_id, request.model_dump())
 

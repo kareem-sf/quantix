@@ -43,7 +43,9 @@ def load_journal(home: Path) -> dict | None:
             raise ValueError
         value = json.loads(path.read_text(encoding="utf-8"))
         if (
-            not isinstance(value, dict) or type(value.get("format")) is not int or value.get("format") != 1
+            not isinstance(value, dict)
+            or type(value.get("format")) is not int
+            or value.get("format") != 1
             or not re.fullmatch(r"[a-f0-9]{32}", str(value.get("reset_id", "")))
             or value.get("home") != str(root)
             or value.get("phase") not in PHASES
@@ -51,24 +53,37 @@ def load_journal(home: Path) -> dict | None:
             or not re.fullmatch(r"[a-f0-9]{64}", str(value.get("fingerprint", "")))
             or not isinstance(value.get("confirmed_at"), str)
             or not isinstance(value.get("detail"), str)
-            or (value["phase"] in {"ready", "deleting", "failed"} and not value["credentials_cleared"])
-            or (value["phase"] in {"cleaning_credentials", "credential_error"} and value["credentials_cleared"])
+            or (
+                value["phase"] in {"ready", "deleting", "failed"}
+                and not value["credentials_cleared"]
+            )
+            or (
+                value["phase"] in {"cleaning_credentials", "credential_error"}
+                and value["credentials_cleared"]
+            )
         ):
             raise ValueError
         targets = value.get("credential_targets")
         if targets is not None and (
-            not isinstance(targets, list) or any(
-                not isinstance(item, dict) or set(item) != {"type", "target"}
-                or type(item["type"]) is not int or item["type"] != 1
-                or not isinstance(item["target"], str) or not item["target"]
-                or len(item["target"]) > 32767 or "\0" in item["target"]
+            not isinstance(targets, list)
+            or any(
+                not isinstance(item, dict)
+                or set(item) != {"type", "target"}
+                or type(item["type"]) is not int
+                or item["type"] != 1
+                or not isinstance(item["target"], str)
+                or not item["target"]
+                or len(item["target"]) > 32767
+                or "\0" in item["target"]
                 for item in targets
             )
         ):
             raise ValueError
         return value
     except (OSError, ValueError, TypeError) as error:
-        raise ValueError("The pending reset record could not be verified. Keep Quantix closed and repair this reset record before continuing.") from error
+        raise ValueError(
+            "The pending reset record could not be verified. Keep Quantix closed and repair this reset record before continuing."
+        ) from error
 
 
 def write_journal(home: Path, journal: dict) -> None:
@@ -81,6 +96,7 @@ def write_journal(home: Path, journal: dict) -> None:
             os.fsync(stream.fileno())
         if os.name == "nt":
             from ctypes import wintypes
+
             kernel = ctypes.WinDLL("Kernel32.dll", use_last_error=True)
             kernel.MoveFileExW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD]
             kernel.MoveFileExW.restype = wintypes.BOOL
@@ -100,12 +116,13 @@ def write_journal(home: Path, journal: dict) -> None:
 
 
 class FactoryResetService:
-    def __init__(self, home: Path, *, repo=None, credentials=None,
-                 busy=None, close_clients=None):
+    def __init__(self, home: Path, *, repo=None, credentials=None, busy=None, close_clients=None):
         self.home = checked_owned_path(Path(home).absolute(), Path(home).absolute())
         self.repo = repo
         self.credentials = credentials or WindowsCredentialAdapter()
-        self.supported = bool(self.credentials.supported and (credentials is not None or self.home == normal_home()))
+        self.supported = bool(
+            self.credentials.supported and (credentials is not None or self.home == normal_home())
+        )
         self.busy = busy or (lambda: [])
         self.close_clients = close_clients
         self._lock = threading.RLock()
@@ -126,15 +143,22 @@ class FactoryResetService:
             # Native cleanup can advance the journal after the API receipt.
             self._journal = load_journal(self.home) or self._journal
             value = self._journal
-            return ResetStatus(reset_id=value["reset_id"], state=value["phase"],
-                detail=value["detail"], credentials_cleared=value["credentials_cleared"],
-                fingerprint=value["fingerprint"])
+            return ResetStatus(
+                reset_id=value["reset_id"],
+                state=value["phase"],
+                detail=value["detail"],
+                credentials_cleared=value["credentials_cleared"],
+                fingerprint=value["fingerprint"],
+            )
 
     def enter_request(self, method: str, path: str) -> tuple[str, str] | None:
         allowed = (method, path) in {
-            ("GET", "/api/health"), ("GET", "/healthz"),
-            ("GET", "/api/reset/preview"), ("GET", "/api/reset/status"),
-            ("POST", "/api/reset"), ("GET", "/api/diagnostics"),
+            ("GET", "/api/health"),
+            ("GET", "/healthz"),
+            ("GET", "/api/reset/preview"),
+            ("GET", "/api/reset/status"),
+            ("POST", "/api/reset"),
+            ("GET", "/api/diagnostics"),
             ("POST", "/api/shutdown"),
         }
         with self._lock:
@@ -166,15 +190,35 @@ class FactoryResetService:
         database = checked_owned_path(self.home, self.home / "quantix.sqlite")
         if database.exists():
             with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as conn:
-                tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-                for table, name in (("tenders", "tender_count"), ("artifacts", "artifact_count"), ("ai_connections", "account_count")):
+                tables = {
+                    row[0]
+                    for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                }
+                for table, name in (
+                    ("tenders", "tender_count"),
+                    ("artifacts", "artifact_count"),
+                    ("ai_connections", "account_count"),
+                ):
                     if table in tables:
                         counts[name] = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-                        identities.append((table, [row[0] for row in conn.execute(f"SELECT id FROM {table} ORDER BY id")]))
+                        identities.append(
+                            (
+                                table,
+                                [
+                                    row[0]
+                                    for row in conn.execute(f"SELECT id FROM {table} ORDER BY id")
+                                ],
+                            )
+                        )
                 if "ai_connections" in tables:
                     account_ids = [row[0] for row in conn.execute("SELECT id FROM ai_connections")]
                 if "runs" in tables:
-                    active = conn.execute("SELECT 1 FROM runs WHERE status IN ('queued','running') LIMIT 1").fetchone() is not None
+                    active = (
+                        conn.execute(
+                            "SELECT 1 FROM runs WHERE status IN ('queued','running') LIMIT 1"
+                        ).fetchone()
+                        is not None
+                    )
         backups = checked_owned_path(self.home, self.home / "backups")
         files = []
         if backups.is_dir():
@@ -193,14 +237,28 @@ class FactoryResetService:
         if active:
             blockers.append("Finish or stop the current Tender work before resetting Quantix.")
         if self._requests:
-            blockers.append("Another workspace request is still finishing. Wait for it and try again.")
+            blockers.append(
+                "Another workspace request is still finishing. Wait for it and try again."
+            )
         if not self.supported:
-            blockers.append("Reset is available in the Windows desktop app using the normal Quantix home.")
-        fingerprint = hashlib.sha256(json.dumps([str(self.home), counts, versions, self._nonce, self._mutation_revision], sort_keys=True).encode()).hexdigest()
+            blockers.append(
+                "Reset is available in the Windows desktop app using the normal Quantix home."
+            )
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                [str(self.home), counts, versions, self._nonce, self._mutation_revision],
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
         if self._journal:
             fingerprint = self._journal["fingerprint"]
-        return ResetPreview(supported=self.supported, home=str(self.home), **counts,
-                            blockers=list(dict.fromkeys(blockers)), fingerprint=fingerprint)
+        return ResetPreview(
+            supported=self.supported,
+            home=str(self.home),
+            **counts,
+            blockers=list(dict.fromkeys(blockers)),
+            fingerprint=fingerprint,
+        )
 
     def preview(self) -> ResetPreview:
         with self._lock:
@@ -211,10 +269,14 @@ class FactoryResetService:
         # handlers as well as concurrent confirmations on the API event loop.
         with self._lock:
             if not self.supported:
-                raise ValueError("Reset is unavailable here. Open the Windows desktop app using the normal Quantix home.")
+                raise ValueError(
+                    "Reset is unavailable here. Open the Windows desktop app using the normal Quantix home."
+                )
             if self._journal:
                 if command.fingerprint != self._journal["fingerprint"]:
-                    raise ValueError("Use the original reset preview to retry this confirmed reset.")
+                    raise ValueError(
+                        "Use the original reset preview to retry this confirmed reset."
+                    )
                 if self._journal["credentials_cleared"]:
                     return self._receipt()
             else:
@@ -222,11 +284,20 @@ class FactoryResetService:
                 if preview.blockers:
                     raise ValueError(" ".join(preview.blockers))
                 if command.fingerprint != preview.fingerprint:
-                    raise ValueError("The workspace changed after this preview. Review the reset details again.")
-                journal = {"format": 1, "reset_id": uuid4().hex, "home": str(self.home),
-                    "phase": "cleaning_credentials", "credentials_cleared": False,
-                    "fingerprint": command.fingerprint, "confirmed_at": datetime.now(UTC).isoformat(),
-                    "detail": CLEANING_DETAIL, "credential_targets": None}
+                    raise ValueError(
+                        "The workspace changed after this preview. Review the reset details again."
+                    )
+                journal = {
+                    "format": 1,
+                    "reset_id": uuid4().hex,
+                    "home": str(self.home),
+                    "phase": "cleaning_credentials",
+                    "credentials_cleared": False,
+                    "fingerprint": command.fingerprint,
+                    "confirmed_at": datetime.now(UTC).isoformat(),
+                    "detail": CLEANING_DETAIL,
+                    "credential_targets": None,
+                }
                 write_journal(self.home, journal)
                 self._journal = journal
         async with self._cleanup:
@@ -238,17 +309,27 @@ class FactoryResetService:
                     await self.close_clients()
                 _, account_ids, _, _ = self._metadata()
                 if self._journal.get("credential_targets") is None:
-                    targets = await asyncio.to_thread(self.credentials.inventory, self.home, account_ids)
+                    targets = await asyncio.to_thread(
+                        self.credentials.inventory, self.home, account_ids
+                    )
                     # This durable inventory must precede the FIRST deletion.
                     self._save(credential_targets=targets)
-                await asyncio.to_thread(self.credentials.validate_targets, self.home, account_ids,
-                                        self._journal["credential_targets"])
+                await asyncio.to_thread(
+                    self.credentials.validate_targets,
+                    self.home,
+                    account_ids,
+                    self._journal["credential_targets"],
+                )
                 for target in self._journal["credential_targets"]:
                     await asyncio.to_thread(self.credentials.delete, target)
                 self._clear_session_credentials()
                 self._save(phase="ready", credentials_cleared=True, detail=READY_DETAIL)
             except Exception:
-                self._save(phase="credential_error", credentials_cleared=False, detail=CREDENTIAL_ERROR_DETAIL)
+                self._save(
+                    phase="credential_error",
+                    credentials_cleared=False,
+                    detail=CREDENTIAL_ERROR_DETAIL,
+                )
             return self._receipt()
 
     def _save(self, **changes):
@@ -258,10 +339,15 @@ class FactoryResetService:
             self._journal = value
 
     def _receipt(self):
-        return ResetReceipt(reset_id=self._journal["reset_id"], state=self._journal["phase"], detail=self._journal["detail"])
+        return ResetReceipt(
+            reset_id=self._journal["reset_id"],
+            state=self._journal["phase"],
+            detail=self._journal["detail"],
+        )
 
     def _clear_session_credentials(self):
         from .ai_connections import AIConnectionService
+
         with AIConnectionService._states_lock:
             state = AIConnectionService._states.get(str(self.home))
             if state:

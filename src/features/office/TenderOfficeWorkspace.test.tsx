@@ -266,9 +266,7 @@ it("starts with the workspace launcher and opens the team without losing the Man
     screen.queryByRole("region", { name: "Tender team" }),
   ).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: /^Team/ }));
-  expect(
-    await screen.findByText(/No staff yet/),
-  ).toBeInTheDocument();
+  expect(await screen.findByText(/No staff yet/)).toBeInTheDocument();
   expect(
     screen.queryByRole("region", { name: "Current document" }),
   ).not.toBeInTheDocument();

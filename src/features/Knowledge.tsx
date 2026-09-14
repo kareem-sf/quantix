@@ -9,7 +9,13 @@ import {
   tenderPath,
   type Schema,
 } from "../api";
-import { Empty, ErrorNotice, Loading, Modal, Status } from "../components/common";
+import {
+  Empty,
+  ErrorNotice,
+  Loading,
+  Modal,
+  Status,
+} from "../components/common";
 import { EvidencePicker } from "./EvidencePicker";
 import { Citations, SourceDrawer, type SourceSelection } from "./Sources";
 

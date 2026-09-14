@@ -57,7 +57,9 @@ def _result(reply):
         raise ModelWorkerFailure("The AI component returned an invalid control response.")
     if not body["ok"]:
         error = body.get("error") or {}
-        message = str(error.get("message") or "The AI component could not complete the operation.")[:1200]
+        message = str(error.get("message") or "The AI component could not complete the operation.")[
+            :1200
+        ]
         kind = error.get("kind")
         if kind == "interrupted":
             raise InterruptedError(message)
@@ -117,28 +119,34 @@ def returned_check_value(reported, expected) -> bool:
 def connection_check_instruction(protocol):
     """Keep each provider's generic check contract explicit and bounded."""
     if protocol == "grok_build":
-        return ("Perform this connection check only. Discover both Quantix tools together, "
-                "then call quantix_connection_check exactly once. Submit its returned value "
-                "unchanged as the structured object with the single property value using "
-                "quantix_submit_result, then finish without further tools. "
-                "Do not use any other account capabilities or web access.")
+        return (
+            "Perform this connection check only. Discover both Quantix tools together, "
+            "then call quantix_connection_check exactly once. Submit its returned value "
+            "unchanged as the structured object with the single property value using "
+            "quantix_submit_result, then finish without further tools. "
+            "Do not use any other account capabilities or web access."
+        )
     if protocol == "codex":
         # "Its returned value unchanged" read as the whole returned object, and
         # a client passed {"value": "…"} through as the string, so a working
         # account failed its own check. Name the two shapes apart instead.
-        return ("Perform this connection check only. Call quantix_connection_check exactly once. "
-                "It answers with an object holding one property, value, whose content is a short "
-                "text token. Then call quantix_submit_result exactly once, passing that token "
-                "itself as its value property: the token string alone, not the object around it "
-                "and not a JSON rendering of it. Both tools are provided by the quantix MCP "
-                "server as callable functions, not MCP resources. If their schemas are deferred, "
-                "Codex's catalogue-only tool search by name is permitted to discover both tools first. "
-                "Only these two Quantix tools may be executed. Never call read_mcp_resource or invent "
-                "resource URIs for tools. Finish after submission; do not inspect Tender data, local "
-                "files or other account capabilities, and do not browse the web.")
-    return ("Perform this connection check only. Call quantix_connection_check exactly once, "
-            "then return its value unchanged in a structured object with the single property value. "
-            "Do not use any other account capabilities, tools or web access.")
+        return (
+            "Perform this connection check only. Call quantix_connection_check exactly once. "
+            "It answers with an object holding one property, value, whose content is a short "
+            "text token. Then call quantix_submit_result exactly once, passing that token "
+            "itself as its value property: the token string alone, not the object around it "
+            "and not a JSON rendering of it. Both tools are provided by the quantix MCP "
+            "server as callable functions, not MCP resources. If their schemas are deferred, "
+            "Codex's catalogue-only tool search by name is permitted to discover both tools first. "
+            "Only these two Quantix tools may be executed. Never call read_mcp_resource or invent "
+            "resource URIs for tools. Finish after submission; do not inspect Tender data, local "
+            "files or other account capabilities, and do not browse the web."
+        )
+    return (
+        "Perform this connection check only. Call quantix_connection_check exactly once, "
+        "then return its value unchanged in a structured object with the single property value. "
+        "Do not use any other account capabilities, tools or web access."
+    )
 
 
 class _AccountWorker:
@@ -182,11 +190,15 @@ class _AccountWorker:
             while not self.queue.empty():
                 _, future = self.queue.get_nowait()
                 if not future.done():
-                    future.set_exception(failure or ModelWorkerFailure("The account component is no longer running."))
+                    future.set_exception(
+                        failure or ModelWorkerFailure("The account component is no longer running.")
+                    )
 
     async def call(self, name):
         if self.task.done():
-            raise ModelWorkerFailure("The account component is no longer running. Prepare the connection and retry.")
+            raise ModelWorkerFailure(
+                "The account component is no longer running. Prepare the connection and retry."
+            )
         future = asyncio.get_running_loop().create_future()
         self.queue.put_nowait((name, future))
         try:
@@ -242,7 +254,15 @@ class AIWorkerClient:
         env["QUANTIX_DESKTOP_BROWSER_CONTEXT"] = json.dumps(browser_context)
         # Native account windows require the current desktop session. These are
         # OS display coordinates, never provider keys or model routing options.
-        for key in ("DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "XAUTHORITY", "USER", "LOGNAME"):
+        for key in (
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "XDG_RUNTIME_DIR",
+            "XAUTHORITY",
+            "USER",
+            "LOGNAME",
+        ):
             if os.environ.get(key):
                 env[key] = os.environ[key]
         # stdio_client supplies a constrained default environment and merges
@@ -262,41 +282,78 @@ class AIWorkerClient:
             raise RuntimeUnavailable("The AI worker service is closing.")
         task = asyncio.current_task()
         started = time.monotonic()
-        record("ai_worker_session", phase="worker_session", outcome="starting",
-               protocol=connection.get("protocol"), connection_id=connection.get("id"))
+        record(
+            "ai_worker_session",
+            phase="worker_session",
+            outcome="starting",
+            protocol=connection.get("protocol"),
+            connection_id=connection.get("id"),
+        )
         self.active.add(task)
         try:
             async with AIComponentService(self.repo).async_lease(connection) as command:
                 expected = connection.get("_checked_component_version")
                 if expected and Path(command[-1]).parent.parent.name != expected:
-                    raise RuntimeUnavailable("This AI component changed after the connection check. Check the connection again before starting Tender work.")
+                    raise RuntimeUnavailable(
+                        "This AI component changed after the connection check. Check the connection again before starting Tender work."
+                    )
                 home = runtime_home(self.repo, connection)
                 env = self._environment(connection, command)
-                params = StdioServerParameters(command=command[0], args=command[1:], env=env, cwd=home)
+                params = StdioServerParameters(
+                    command=command[0], args=command[1:], env=env, cwd=home
+                )
                 # No provider diagnostic streams reach the application log.
                 with open(os.devnull, "w", encoding="utf-8") as diagnostics:
                     async with AsyncExitStack() as stack:
                         async with asyncio.timeout(45):
-                            client = await stack.enter_async_context(Client(
-                                stdio_client(params, errlog=diagnostics), cache=None, read_timeout_seconds=1900,
-                            ))
-                            _result(await client.call_tool("initialize_connection", {
-                                "connection": {key: value for key, value in connection.items() if not key.startswith("_")},
-                                "account_home": str(home),
-                            }))
+                            client = await stack.enter_async_context(
+                                Client(
+                                    stdio_client(params, errlog=diagnostics),
+                                    cache=None,
+                                    read_timeout_seconds=1900,
+                                )
+                            )
+                            _result(
+                                await client.call_tool(
+                                    "initialize_connection",
+                                    {
+                                        "connection": {
+                                            key: value
+                                            for key, value in connection.items()
+                                            if not key.startswith("_")
+                                        },
+                                        "account_home": str(home),
+                                    },
+                                )
+                            )
                         yield client
         except ComponentUnavailable as error:
-            record_exception("ai_worker_session_failed", error, phase="worker_session",
-                             protocol=connection.get("protocol"), connection_id=connection.get("id"))
+            record_exception(
+                "ai_worker_session_failed",
+                error,
+                phase="worker_session",
+                protocol=connection.get("protocol"),
+                connection_id=connection.get("id"),
+            )
             raise RuntimeUnavailable(str(error)) from None
         except (RuntimeUnavailable, ModelWorkerFailure, InterruptedError) as error:
-            record_exception("ai_worker_session_failed", error, phase="worker_session",
-                             protocol=connection.get("protocol"), connection_id=connection.get("id"))
+            record_exception(
+                "ai_worker_session_failed",
+                error,
+                phase="worker_session",
+                protocol=connection.get("protocol"),
+                connection_id=connection.get("id"),
+            )
             raise
         except asyncio.CancelledError:
-            record("ai_worker_session", phase="worker_session", outcome="cancelled",
-                   protocol=connection.get("protocol"), connection_id=connection.get("id"),
-                   duration_ms=int((time.monotonic() - started) * 1000))
+            record(
+                "ai_worker_session",
+                phase="worker_session",
+                outcome="cancelled",
+                protocol=connection.get("protocol"),
+                connection_id=connection.get("id"),
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
             raise
         except Exception as error:
             # AnyIO may wrap a worker's structured failure in one or more
@@ -305,17 +362,34 @@ class AIWorkerClient:
             # into the unhelpful generic connection error.
             failure = _nested_known_failure(error)
             if failure is not None:
-                record_exception("ai_worker_session_failed", failure, phase="worker_session",
-                                 protocol=connection.get("protocol"), connection_id=connection.get("id"))
+                record_exception(
+                    "ai_worker_session_failed",
+                    failure,
+                    phase="worker_session",
+                    protocol=connection.get("protocol"),
+                    connection_id=connection.get("id"),
+                )
                 raise failure from None
-            record_exception("ai_worker_session_failed", error, phase="worker_session",
-                             protocol=connection.get("protocol"), connection_id=connection.get("id"))
-            raise ModelWorkerFailure("The managed AI component could not start or its connection closed unexpectedly.") from None
+            record_exception(
+                "ai_worker_session_failed",
+                error,
+                phase="worker_session",
+                protocol=connection.get("protocol"),
+                connection_id=connection.get("id"),
+            )
+            raise ModelWorkerFailure(
+                "The managed AI component could not start or its connection closed unexpectedly."
+            ) from None
         finally:
             self.active.discard(task)
-            record("ai_worker_session", phase="worker_session", outcome="closed",
-                   protocol=connection.get("protocol"), connection_id=connection.get("id"),
-                   duration_ms=int((time.monotonic() - started) * 1000))
+            record(
+                "ai_worker_session",
+                phase="worker_session",
+                outcome="closed",
+                protocol=connection.get("protocol"),
+                connection_id=connection.get("id"),
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
 
     async def catalog(self, connection, credentials):
         async with self._session(connection) as client:
@@ -327,7 +401,9 @@ class AIWorkerClient:
 
     async def _account(self, connection, operation):
         worker = self.accounts.get(connection["id"])
-        if worker and (worker.connection["revision"] != connection["revision"] or worker.task.done()):
+        if worker and (
+            worker.connection["revision"] != connection["revision"] or worker.task.done()
+        ):
             await worker.close()
             worker = None
         if worker is None:
@@ -350,6 +426,7 @@ class AIWorkerClient:
 
     async def subscription_usage(self, connection):
         from .ai_subscription import subscription_snapshot, unknown_subscription
+
         if connection["protocol"] != "grok_build":
             raise ValueError("This account does not provide Grok subscription usage.")
         try:
@@ -360,6 +437,7 @@ class AIWorkerClient:
             snapshot = unknown_subscription()
         from .ai_connections import AIConnectionService
         from .ai_setup_store import SetupStore
+
         connections = AIConnectionService(self.repo)
         with connections.authority_guard(), self.repo.atomic():
             # A stale account operation never replaces a newer revision's display.
@@ -376,112 +454,278 @@ class AIWorkerClient:
         lock = self.runtime_locks.get(connection_id)
         return bool(lock and lock.locked())
 
-    async def _execute(self, route, connection, credentials, context, instruction, output_type,
-                       *, consult=None, before_request=None, on_response=None, definitions=None, operation="execute",
-                       validate_output=None):
+    async def _execute(
+        self,
+        route,
+        connection,
+        credentials,
+        context,
+        instruction,
+        output_type,
+        *,
+        consult=None,
+        before_request=None,
+        on_response=None,
+        definitions=None,
+        operation="execute",
+        validate_output=None,
+    ):
         task = asyncio.current_task()
         started = time.monotonic()
-        record("ai_worker_operation", phase="queue", outcome="started", operation=operation,
-               protocol=connection.get("protocol"), model=route.get("model_id"),
-               run_id=context.run_id if context is not None else None)
+        record(
+            "ai_worker_operation",
+            phase="queue",
+            outcome="started",
+            operation=operation,
+            protocol=connection.get("protocol"),
+            model=route.get("model_id"),
+            run_id=context.run_id if context is not None else None,
+        )
         self.executions.add(task)
         try:
             if connection["protocol"] == "grok_build":
                 lock = self.runtime_locks.setdefault(connection["id"], asyncio.Lock())
                 if lock.locked() and context is not None:
-                    self.repo.event(context.run_id, "runtime_waiting", "Waiting for this Grok account's current work to finish.")
+                    self.repo.event(
+                        context.run_id,
+                        "runtime_waiting",
+                        "Waiting for this Grok account's current work to finish.",
+                    )
                     project_run_activity(self.repo, context.run_id, "runtime_waiting")
                 # Queue before billing metadata as well as inference. Otherwise
                 # a long preceding task could exhaust the short metadata timeout.
                 async with lock:
-                    result = await self._execute_in_slot(route, connection, credentials, context, instruction, output_type,
-                        consult=consult, before_request=before_request, on_response=on_response,
-                        definitions=definitions, operation=operation, validate_output=validate_output)
+                    result = await self._execute_in_slot(
+                        route,
+                        connection,
+                        credentials,
+                        context,
+                        instruction,
+                        output_type,
+                        consult=consult,
+                        before_request=before_request,
+                        on_response=on_response,
+                        definitions=definitions,
+                        operation=operation,
+                        validate_output=validate_output,
+                    )
             else:
-                result = await self._execute_in_slot(route, connection, credentials, context, instruction, output_type,
-                    consult=consult, before_request=before_request, on_response=on_response,
-                    definitions=definitions, operation=operation, validate_output=validate_output)
-            record("ai_worker_operation", phase="queue", outcome="completed", operation=operation,
-                   protocol=connection.get("protocol"), model=route.get("model_id"),
-                   run_id=context.run_id if context is not None else None,
-                   duration_ms=int((time.monotonic() - started) * 1000))
+                result = await self._execute_in_slot(
+                    route,
+                    connection,
+                    credentials,
+                    context,
+                    instruction,
+                    output_type,
+                    consult=consult,
+                    before_request=before_request,
+                    on_response=on_response,
+                    definitions=definitions,
+                    operation=operation,
+                    validate_output=validate_output,
+                )
+            record(
+                "ai_worker_operation",
+                phase="queue",
+                outcome="completed",
+                operation=operation,
+                protocol=connection.get("protocol"),
+                model=route.get("model_id"),
+                run_id=context.run_id if context is not None else None,
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
             return result
         except asyncio.CancelledError:
-            record("ai_worker_operation", phase="queue", outcome="cancelled", operation=operation,
-                   protocol=connection.get("protocol"), model=route.get("model_id"),
-                   run_id=context.run_id if context is not None else None,
-                   duration_ms=int((time.monotonic() - started) * 1000))
+            record(
+                "ai_worker_operation",
+                phase="queue",
+                outcome="cancelled",
+                operation=operation,
+                protocol=connection.get("protocol"),
+                model=route.get("model_id"),
+                run_id=context.run_id if context is not None else None,
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
             raise
         except Exception as error:
-            record_exception("ai_worker_operation_failed", error, phase="queue", operation=operation,
-                             protocol=connection.get("protocol"), model=route.get("model_id"),
-                             run_id=context.run_id if context is not None else None,
-                             duration_ms=int((time.monotonic() - started) * 1000))
+            record_exception(
+                "ai_worker_operation_failed",
+                error,
+                phase="queue",
+                operation=operation,
+                protocol=connection.get("protocol"),
+                model=route.get("model_id"),
+                run_id=context.run_id if context is not None else None,
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
             raise
         finally:
             self.executions.discard(task)
 
-    async def _execute_in_slot(self, route, connection, credentials, context, instruction, output_type,
-                               *, consult=None, before_request=None, on_response=None, definitions=None, operation="execute",
-                               validate_output=None):
+    async def _execute_in_slot(
+        self,
+        route,
+        connection,
+        credentials,
+        context,
+        instruction,
+        output_type,
+        *,
+        consult=None,
+        before_request=None,
+        on_response=None,
+        definitions=None,
+        operation="execute",
+        validate_output=None,
+    ):
         if connection["protocol"] == "grok_build":
             from .ai_subscription import require_subscription_access
+
             snapshot = await self.subscription_usage(connection)
             require_subscription_access(connection, snapshot, checking=operation == "check")
         requests = int(connection.get("_execution_limits", {}).get("max_requests", 12))
         operation_id = context.run_id if context is not None else uuid4().hex
-        source = RuntimeToolBridge(context, output_type, consult, max_calls=min(1000, requests * 10),
-                                   image_support=connection.get("_model", {}).get("capabilities", {}).get("images") is True,
-                                   definitions=definitions, operation=operation, validate_output=validate_output)
+        source = RuntimeToolBridge(
+            context,
+            output_type,
+            consult,
+            max_calls=min(1000, requests * 10),
+            image_support=connection.get("_model", {}).get("capabilities", {}).get("images")
+            is True,
+            definitions=definitions,
+            operation=operation,
+            validate_output=validate_output,
+        )
         native_session = None
         native_service = None
-        if context is not None and operation != "check" and connection["protocol"] in {"codex", "grok_build"}:
+        if (
+            context is not None
+            and operation != "check"
+            and connection["protocol"] in {"codex", "grok_build"}
+        ):
             from .native_execution import NativeExecutionService
+
             native_service = NativeExecutionService(self.repo)
-            tool_contracts = [{"name": tool.name, "parameters": tool.parameters, "read_only": tool.read_only, "idempotent": tool.idempotent}
-                              for tool in sorted(source.tools.values(), key=lambda tool: tool.name)]
-            tool_contracts.append({"name": "quantix_submit_result", "parameters": output_type.model_json_schema()})
-            native_session = native_service.prepare(context, connection, route, operation=operation, tools=tool_contracts,
-                resume_session_id=connection.get("_native_resume_session_id"))
+            tool_contracts = [
+                {
+                    "name": tool.name,
+                    "parameters": tool.parameters,
+                    "read_only": tool.read_only,
+                    "idempotent": tool.idempotent,
+                }
+                for tool in sorted(source.tools.values(), key=lambda tool: tool.name)
+            ]
+            tool_contracts.append(
+                {"name": "quantix_submit_result", "parameters": output_type.model_json_schema()}
+            )
+            native_session = native_service.prepare(
+                context,
+                connection,
+                route,
+                operation=operation,
+                tools=tool_contracts,
+                resume_session_id=connection.get("_native_resume_session_id"),
+            )
             connection = {**connection, "_native_session_binding": native_session.model_dump()}
-        control = WorkerControlBridge(source, connection, route, before_request=before_request, on_response=on_response)
+        control = WorkerControlBridge(
+            source, connection, route, before_request=before_request, on_response=on_response
+        )
         try:
             async with source.serve(), control.serve():
                 async with self._session(connection) as client:
-                    result = _result(await client.call_tool(operation, {
-                        "credentials": credentials,
-                        "execution": {
-                            "route": route, "limits": connection.get("_execution_limits", {"max_requests": requests}),
-                            "model": connection.get("_model", {}), "instruction": instruction,
-                            "operation_id": operation_id,
-                            "session_binding": native_session.model_dump() if native_session else None,
-                            "account_home": str(runtime_home(self.repo, connection)), "output_schema": output_type.model_json_schema(),
-                            "source": {"url": source.url, "token": source.token, "names": source.names},
-                            "control": {"url": control.url, "token": control.token},
-                        },
-                    }))
+                    result = _result(
+                        await client.call_tool(
+                            operation,
+                            {
+                                "credentials": credentials,
+                                "execution": {
+                                    "route": route,
+                                    "limits": connection.get(
+                                        "_execution_limits", {"max_requests": requests}
+                                    ),
+                                    "model": connection.get("_model", {}),
+                                    "instruction": instruction,
+                                    "operation_id": operation_id,
+                                    "session_binding": native_session.model_dump()
+                                    if native_session
+                                    else None,
+                                    "account_home": str(runtime_home(self.repo, connection)),
+                                    "output_schema": output_type.model_json_schema(),
+                                    "source": {
+                                        "url": source.url,
+                                        "token": source.token,
+                                        "names": source.names,
+                                    },
+                                    "control": {"url": control.url, "token": control.token},
+                                },
+                            },
+                        )
+                    )
                     if source.failure:
                         raise source.failure
-                    if not isinstance(result, dict) or not isinstance(result.get("usage"), dict) or not isinstance(result.get("web_sources"), list):
-                        raise RuntimeUnavailable("The AI component returned an invalid execution result.")
+                    if (
+                        not isinstance(result, dict)
+                        or not isinstance(result.get("usage"), dict)
+                        or not isinstance(result.get("web_sources"), list)
+                    ):
+                        raise RuntimeUnavailable(
+                            "The AI component returned an invalid execution result."
+                        )
                     try:
                         result["output"] = output_type.model_validate(result["output"])
                     except ValueError:
-                        raise RuntimeUnavailable("The AI response did not match the required structured proposal. Its result was not published.") from None
+                        raise RuntimeUnavailable(
+                            "The AI response did not match the required structured proposal. Its result was not published."
+                        ) from None
                     if native_session is not None:
-                        native_service.finish(context, native_session.id, provider_session_id=result["usage"].get("session_id"), state="completed")
+                        native_service.finish(
+                            context,
+                            native_session.id,
+                            provider_session_id=result["usage"].get("session_id"),
+                            state="completed",
+                        )
                     return result
         except BaseException as error:
             if native_session is not None:
-                native_service.finish(context, native_session.id, state="interrupted" if isinstance(error, (asyncio.CancelledError, InterruptedError)) else "failed")
+                native_service.finish(
+                    context,
+                    native_session.id,
+                    state="interrupted"
+                    if isinstance(error, (asyncio.CancelledError, InterruptedError))
+                    else "failed",
+                )
             raise
 
-    async def execute(self, route, connection, credentials, context, instruction, output_type,
-                      *, consult=None, before_request=None, on_response=None,
-                      definitions=None, operation="execute", validate_output=None):
-        return await self._execute(route, connection, credentials, context, instruction, output_type,
-                                   consult=consult, before_request=before_request, on_response=on_response,
-                                   definitions=definitions, operation=operation, validate_output=validate_output)
+    async def execute(
+        self,
+        route,
+        connection,
+        credentials,
+        context,
+        instruction,
+        output_type,
+        *,
+        consult=None,
+        before_request=None,
+        on_response=None,
+        definitions=None,
+        operation="execute",
+        validate_output=None,
+    ):
+        return await self._execute(
+            route,
+            connection,
+            credentials,
+            context,
+            instruction,
+            output_type,
+            consult=consult,
+            before_request=before_request,
+            on_response=on_response,
+            definitions=definitions,
+            operation=operation,
+            validate_output=validate_output,
+        )
 
     async def check(self, route, connection, credentials, *, before_request=None, on_response=None):
         check_tool = _ConnectionCheckTool()
@@ -497,13 +741,26 @@ class AIWorkerClient:
         bounded["_execution_limits"] = {"max_requests": requests, "max_output_tokens": 1024}
         if subscription_check:
             bounded["_execution_limits"]["subscription_check"] = True
-        chosen = {**route, "max_output_tokens": min(1024, int(route.get("max_output_tokens", 1024))),
-                  "web_search": False, "max_search_calls": 0}
+        chosen = {
+            **route,
+            "max_output_tokens": min(1024, int(route.get("max_output_tokens", 1024))),
+            "web_search": False,
+            "max_search_calls": 0,
+        }
         instruction = connection_check_instruction(connection["protocol"])
         async with asyncio.timeout(CHECK_DEADLINE_SECONDS):
-            result = await self._execute(chosen, bounded, credentials, None, instruction, _ConnectionCheckOutput,
-                                         definitions=[check_tool], before_request=before_request, on_response=on_response,
-                                         operation="check")
+            result = await self._execute(
+                chosen,
+                bounded,
+                credentials,
+                None,
+                instruction,
+                _ConnectionCheckOutput,
+                definitions=[check_tool],
+                before_request=before_request,
+                on_response=on_response,
+                operation="check",
+            )
         # One successful call is what proves tool support. A local client that
         # has to discover its tools first may well call the check twice while
         # exploring, and failing the whole account for that reported a broken
@@ -511,9 +768,13 @@ class AIWorkerClient:
         # below: the exact one-time value has to come back in the result.
         tools_supported = check_tool.calls >= 1
         output_supported = returned_check_value(result["output"].value, check_tool.value)
-        return {"usage": result["usage"], "actual_model": result["usage"].get("actual_model"),
-                "tools_supported": tools_supported, "output_supported": output_supported,
-                "checked_count": check_tool.calls}
+        return {
+            "usage": result["usage"],
+            "actual_model": result["usage"].get("actual_model"),
+            "tools_supported": tools_supported,
+            "output_supported": output_supported,
+            "checked_count": check_tool.calls,
+        }
 
     async def close(self):
         self.closed = True

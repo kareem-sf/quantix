@@ -235,8 +235,11 @@ class EstimateService:
             tender = self.repo.get_tender(tender_id)
             with self.repo.db.connect(write=True) as conn:
                 conn.execute("UPDATE boq_items SET active=0 WHERE tender_id=?", (tender_id,))
-                conn.execute("""UPDATE boq_items SET active=1 WHERE tender_id=? AND row_key<>''
-                    AND EXISTS (SELECT 1 FROM artifacts a WHERE a.id=boq_items.artifact_id AND a.is_current=1)""", (tender_id,))
+                conn.execute(
+                    """UPDATE boq_items SET active=1 WHERE tender_id=? AND row_key<>''
+                    AND EXISTS (SELECT 1 FROM artifacts a WHERE a.id=boq_items.artifact_id AND a.is_current=1)""",
+                    (tender_id,),
+                )
                 for artifact in self.repo.list_artifacts(tender_id):
                     if artifact["kind"] != "spreadsheet":
                         continue
@@ -534,10 +537,14 @@ class EstimateService:
 
         request = AgentQuantityProposal.model_validate(values)
         if not isinstance(expected_basis, str) or not re.fullmatch(r"[a-f0-9]{64}", expected_basis):
-            raise ValueError("An agent quantity must retain the BOQ item basis actually read in this run.")
+            raise ValueError(
+                "An agent quantity must retain the BOQ item basis actually read in this run."
+            )
         basis = self.rate_basis(tender_id, request.item_id)
         if basis["fingerprint"] != expected_basis:
-            raise ValueError("The BOQ item changed since it was read. Review the current item before proposing a quantity.")
+            raise ValueError(
+                "The BOQ item changed since it was read. Review the current item before proposing a quantity."
+            )
         for source_id in [basis["source_id"], *request.source_ids]:
             evidence = self.repo.get_evidence(tender_id, source_id)
             if not self.repo.get_artifact(tender_id, evidence["artifact_id"])["is_current"]:
@@ -552,7 +559,11 @@ class EstimateService:
             data = request.model_dump(exclude={"item_id"})
             data["source_ids"] = list(dict.fromkeys([basis["source_id"], *request.source_ids]))
             return self._store_quantity_proposal(
-                tender_id, request.item_id, data, origin="agent", run_id=run_id,
+                tender_id,
+                request.item_id,
+                data,
+                origin="agent",
+                run_id=run_id,
                 basis_fingerprint=self.quantity_item_fingerprint(tender_id, request.item_id),
             )
 
@@ -562,14 +573,32 @@ class EstimateService:
             item = self._item(conn, tender_id, item_id)
             artifact = self.repo.get_artifact(tender_id, item["artifact_id"])
             basis = {
-                key: item[key] for key in (
-                    "source_id", "artifact_id", "description", "unit", "quantity_cell", "supplied_quantity",
+                key: item[key]
+                for key in (
+                    "source_id",
+                    "artifact_id",
+                    "description",
+                    "unit",
+                    "quantity_cell",
+                    "supplied_quantity",
                 )
             }
             basis["content_hash"] = artifact["content_hash"]
-            return hashlib.sha256(json.dumps(basis, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+            return hashlib.sha256(
+                json.dumps(basis, sort_keys=True, ensure_ascii=False).encode()
+            ).hexdigest()
 
-    def _store_quantity_proposal(self, tender_id, item_id, values, *, origin, rationale=None, run_id=None, basis_fingerprint=None):
+    def _store_quantity_proposal(
+        self,
+        tender_id,
+        item_id,
+        values,
+        *,
+        origin,
+        rationale=None,
+        run_id=None,
+        basis_fingerprint=None,
+    ):
         with self.repo.db.connect(write=True) as conn:
             self._item(conn, tender_id, item_id)
             for source_id in values["source_ids"]:
@@ -577,13 +606,19 @@ class EstimateService:
                 if not self.repo.get_artifact(tender_id, evidence["artifact_id"])["is_current"]:
                     raise ValueError("A quantity proposal source is no longer current.")
             identifier, stamp = new_id(), now()
-            data = values | {"origin": origin, "run_id": run_id, "basis_fingerprint": basis_fingerprint}
+            data = values | {
+                "origin": origin,
+                "run_id": run_id,
+                "basis_fingerprint": basis_fingerprint,
+            }
             conn.execute(
                 "INSERT INTO quantity_proposals VALUES(?,?,?,'proposed',?,?,?)",
                 (identifier, tender_id, item_id, dump(data), stamp, stamp),
             )
             if origin == "engineer":
-                self._decision(conn, tender_id, "quantity_proposal", identifier, "propose", rationale)
+                self._decision(
+                    conn, tender_id, "quantity_proposal", identifier, "propose", rationale
+                )
         return {
             "id": identifier,
             "item_id": item_id,
@@ -604,8 +639,12 @@ class EstimateService:
             self._item(conn, tender_id, proposal["item_id"])
             if proposal["status"] != "proposed":
                 raise ValueError("Only a proposed quantity can be approved.")
-            if proposal["data"].get("origin") == "agent" and proposal["data"].get("basis_fingerprint") != self.quantity_item_fingerprint(tender_id, proposal["item_id"]):
-                raise ValueError("The BOQ source or quantity interpretation changed after this proposal. Ask for a new quantity proposal from the current item.")
+            if proposal["data"].get("origin") == "agent" and proposal["data"].get(
+                "basis_fingerprint"
+            ) != self.quantity_item_fingerprint(tender_id, proposal["item_id"]):
+                raise ValueError(
+                    "The BOQ source or quantity interpretation changed after this proposal. Ask for a new quantity proposal from the current item."
+                )
             if not _current_sources(conn, proposal["data"]["source_ids"]):
                 raise ValueError(
                     "Measurement evidence has changed. Create a new proposal from current sources."
@@ -631,7 +670,9 @@ class EstimateService:
     def _quantity_current(self, conn, tender_id, proposal):
         if not _current_sources(conn, proposal["data"]["source_ids"]):
             return False
-        if proposal["data"].get("origin") == "agent" and proposal["data"].get("basis_fingerprint") != self.quantity_item_fingerprint(tender_id, proposal["item_id"]):
+        if proposal["data"].get("origin") == "agent" and proposal["data"].get(
+            "basis_fingerprint"
+        ) != self.quantity_item_fingerprint(tender_id, proposal["item_id"]):
             return False
         return True
 
@@ -656,7 +697,9 @@ class EstimateService:
                     evidence = self.repo.get_evidence(tender_id, item["source_id"])
                     if item["source_excerpt"] not in evidence["text"]:
                         item["confirmed"] = False
-                        item["issues"].append("The extracted source passage changed. Review and replace this BOQ proposal before pricing.")
+                        item["issues"].append(
+                            "The extracted source passage changed. Review and replace this BOQ proposal before pricing."
+                        )
                 proposals = [
                     record(row)
                     for row in conn.execute(
@@ -780,9 +823,13 @@ class EstimateService:
         if refresh_required:
             reasons.append("Refresh BOQ candidates after source changes.")
         if retired:
-            reasons.append(f"{len(retired)} BOQ rows from earlier source revisions need a checked replacement or an explicit scope decision.")
+            reasons.append(
+                f"{len(retired)} BOQ rows from earlier source revisions need a checked replacement or an explicit scope decision."
+            )
         if not items:
-            reasons.append("No current BOQ rows are saved. Review revised rows above, refresh Excel source rows or add a row from an exact source passage.")
+            reasons.append(
+                "No current BOQ rows are saved. Review revised rows above, refresh Excel source rows or add a row from an exact source passage."
+            )
         return {
             "tender_id": tender_id,
             "items": items,

@@ -29,17 +29,22 @@ def main():
         parser.error(f"unrecognised arguments: {' '.join(command_args)}")
     from .reset_credentials import checked_owned_path
     from .storage import connection_file, logs_dir, prepare_process_environment, resolve_home
+
     lexical_home = (args.home.expanduser() if args.home else Path.home() / ".quantix").absolute()
     checked_owned_path(lexical_home, lexical_home)
     home = resolve_home(args.home)
     from .factory_reset import load_journal
+
     reset = load_journal(home)
     if reset and (reset["phase"] in {"ready", "deleting"} or command_args):
-        raise SystemExit("Quantix reset is pending. Open the desktop launcher to finish the reset before starting its service.")
+        raise SystemExit(
+            "Quantix reset is pending. Open the desktop launcher to finish the reset before starting its service."
+        )
     home = prepare_process_environment(home)
     # Keep this import and initialization before service/database imports so
     # startup failures have the same local diagnostic destination as requests.
     from .diagnostics import initialize, record, record_exception
+
     initialize(logs_dir(home))
     record("service_start", phase="startup", outcome="starting")
     if len(command_args) == 2 and command_args[0] == "semantic-download":
@@ -55,6 +60,7 @@ def main():
     if len(command_args) == 4 and command_args[0] == "word-convert":
         try:
             from .document_word import _run
+
             result = _run(*(Path(value) for value in command_args[1:4]))
             record("service_command", phase="word_convert", outcome="completed", exit_code=result)
             raise SystemExit(result)
@@ -105,7 +111,10 @@ def main():
             app.state.request_shutdown = lambda: setattr(server, "should_exit", True)
             if connection:
                 from .connection_record import write_connection_record
-                write_connection_record(connection, {"base_url": f"http://127.0.0.1:{actual_port}/api", "token": token})
+
+                write_connection_record(
+                    connection, {"base_url": f"http://127.0.0.1:{actual_port}/api", "token": token}
+                )
             try:
                 record("service_start", phase="startup", outcome="ready")
                 server.run(sockets=[listener])

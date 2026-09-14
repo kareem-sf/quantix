@@ -24,12 +24,20 @@ class ComponentUnavailable(ValueError):
 
 
 def asset_directory() -> Path:
-    base = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
+    base = (
+        Path(sys._MEIPASS)
+        if getattr(sys, "frozen", False)
+        else Path(__file__).resolve().parent.parent
+    )
     return base / "ai-components"
 
 
 def worker_directory() -> Path:
-    base = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
+    base = (
+        Path(sys._MEIPASS)
+        if getattr(sys, "frozen", False)
+        else Path(__file__).resolve().parent.parent
+    )
     return base / "ai_worker"
 
 
@@ -43,19 +51,37 @@ def native_host() -> Path:
     elif getattr(sys, "frozen", False):
         candidate = Path(sys._MEIPASS) / "native" / f"quantix-ai-host{suffix}"
     else:
-        candidate = Path(__file__).resolve().parents[2] / "src-tauri" / "target" / "debug" / f"quantix-ai-host{suffix}"
+        candidate = (
+            Path(__file__).resolve().parents[2]
+            / "src-tauri"
+            / "target"
+            / "debug"
+            / f"quantix-ai-host{suffix}"
+        )
     if not candidate.is_file() or candidate.stat().st_size == 0:
-        raise ComponentUnavailable("Quantix's AI launcher is missing. Repair the Quantix application before preparing AI software.")
+        raise ComponentUnavailable(
+            "Quantix's AI launcher is missing. Repair the Quantix application before preparing AI software."
+        )
     if os.name != "nt" and not os.access(candidate, os.X_OK):
-        raise ComponentUnavailable("Quantix's AI launcher cannot run. Repair the Quantix application.")
+        raise ComponentUnavailable(
+            "Quantix's AI launcher cannot run. Repair the Quantix application."
+        )
     return candidate.resolve()
 
 
 def platform_key() -> str:
-    arch = {"amd64": "x86_64", "x86_64": "x86_64", "arm64": "aarch64", "aarch64": "aarch64"}.get(platform.machine().lower())
+    arch = {"amd64": "x86_64", "x86_64": "x86_64", "arm64": "aarch64", "aarch64": "aarch64"}.get(
+        platform.machine().lower()
+    )
     operating_system = {"win32": "windows", "darwin": "macos", "linux": "linux"}.get(sys.platform)
-    if not arch or not operating_system or (sys.platform == "linux" and any(Path("/lib").glob("ld-musl-*.so.1"))):
-        raise ComponentUnavailable("The pinned AI software does not support this operating system and processor.")
+    if (
+        not arch
+        or not operating_system
+        or (sys.platform == "linux" and any(Path("/lib").glob("ld-musl-*.so.1")))
+    ):
+        raise ComponentUnavailable(
+            "The pinned AI software does not support this operating system and processor."
+        )
     return f"{operating_system}-{arch}"
 
 
@@ -66,7 +92,9 @@ def read_manifest() -> dict:
             raise ValueError()
         return value
     except (OSError, ValueError, KeyError, TypeError):
-        raise ComponentUnavailable("Quantix's AI software manifest is missing or damaged. Repair the Quantix application.") from None
+        raise ComponentUnavailable(
+            "Quantix's AI software manifest is missing or damaged. Repair the Quantix application."
+        ) from None
 
 
 def sha256(path: Path) -> str:
@@ -80,14 +108,18 @@ def sha256(path: Path) -> str:
 def inside(root: Path, relative: str | Path) -> Path:
     path = (root / relative).resolve()
     if path == root.resolve() or not path.is_relative_to(root.resolve()):
-        raise ComponentUnavailable("An AI software path is outside its private installation directory.")
+        raise ComponentUnavailable(
+            "An AI software path is outside its private installation directory."
+        )
     return path
 
 
 def manifest_file(definition: dict, key="path", hash_key="sha256") -> Path:
     path = inside(asset_directory(), definition[key])
     if not path.is_file() or sha256(path) != definition[hash_key]:
-        raise ComponentUnavailable("An AI software lock is missing or damaged. Repair the Quantix application.")
+        raise ComponentUnavailable(
+            "An AI software lock is missing or damaged. Repair the Quantix application."
+        )
     return path
 
 
@@ -95,7 +127,9 @@ def worker_files() -> list[Path]:
     root = worker_directory()
     files = sorted(path for path in root.rglob("*.py") if "__pycache__" not in path.parts)
     if not (root / "worker_entry.py").is_file() or not files:
-        raise ComponentUnavailable("Quantix's AI worker files are missing. Repair the Quantix application.")
+        raise ComponentUnavailable(
+            "Quantix's AI worker files are missing. Repair the Quantix application."
+        )
     return files
 
 
@@ -103,7 +137,9 @@ def diagnostics_writer() -> Path:
     """Return the canonical dependency-free writer copied into workers."""
     path = Path(__file__).resolve().with_name("diagnostics.py")
     if not path.is_file() or path.stat().st_size == 0:
-        raise ComponentUnavailable("Quantix's diagnostic writer is missing. Repair the Quantix application.")
+        raise ComponentUnavailable(
+            "Quantix's diagnostic writer is missing. Repair the Quantix application."
+        )
     return path
 
 
@@ -125,7 +161,9 @@ def checked_download(asset: dict, target: Path, cancelled) -> None:
     expected = {}
     if "sha256" in asset:
         if not re.fullmatch(r"[a-f0-9]{64}", asset.get("sha256", "")):
-            raise ComponentUnavailable("The selected AI software download has no reviewed publisher hash.")
+            raise ComponentUnavailable(
+                "The selected AI software download has no reviewed publisher hash."
+            )
         expected["sha256"] = bytes.fromhex(asset["sha256"])
     if "integrity" in asset:
         try:
@@ -135,9 +173,13 @@ def checked_download(asset: dict, target: Path, cancelled) -> None:
                 raise ValueError()
             expected["sha512"] = digest
         except (AttributeError, binascii.Error, TypeError, ValueError):
-            raise ComponentUnavailable("The selected AI software download has no reviewed publisher SHA-512 integrity.") from None
+            raise ComponentUnavailable(
+                "The selected AI software download has no reviewed publisher SHA-512 integrity."
+            ) from None
     if not expected or not asset.get("url", "").startswith("https://"):
-        raise ComponentUnavailable("The selected AI software download has no reviewed publisher hash.")
+        raise ComponentUnavailable(
+            "The selected AI software download has no reviewed publisher hash."
+        )
     if cancelled.is_set():
         raise InterruptedError("AI software preparation was cancelled.")
     request = urllib.request.Request(asset["url"], headers={"User-Agent": "Quantix-AI-Setup"})
@@ -148,12 +190,16 @@ def checked_download(asset: dict, target: Path, cancelled) -> None:
                 raise InterruptedError("AI software preparation was cancelled.")
             size += len(chunk)
             if size > 600 * 1024 * 1024:
-                raise ComponentUnavailable("The AI software archive exceeds the supported download size.")
+                raise ComponentUnavailable(
+                    "The AI software archive exceeds the supported download size."
+                )
             for digest in digests.values():
                 digest.update(chunk)
             destination.write(chunk)
     if any(digests[algorithm].digest() != value for algorithm, value in expected.items()):
-        raise ComponentUnavailable("The AI software download did not match its reviewed publisher hash. Retry preparation.")
+        raise ComponentUnavailable(
+            "The AI software download did not match its reviewed publisher hash. Retry preparation."
+        )
 
 
 def extract_archive(archive: Path, destination: Path, cancelled, allow_links=True) -> None:
@@ -162,21 +208,32 @@ def extract_archive(archive: Path, destination: Path, cancelled, allow_links=Tru
 
     def member_path(name):
         parts = PurePosixPath(name).parts
-        if not parts or PurePosixPath(name).is_absolute() or ".." in parts or "\\" in name or ":" in name:
+        if (
+            not parts
+            or PurePosixPath(name).is_absolute()
+            or ".." in parts
+            or "\\" in name
+            or ":" in name
+        ):
             raise ComponentUnavailable("The AI software archive contains an unsafe path.")
         return inside(destination, name)
 
     if zipfile.is_zipfile(archive):
         with zipfile.ZipFile(archive) as bundle:
             members = bundle.infolist()
-            if len(members) > maximum_files or sum(item.file_size for item in members) > maximum_size:
+            if (
+                len(members) > maximum_files
+                or sum(item.file_size for item in members) > maximum_size
+            ):
                 raise ComponentUnavailable("The AI software archive exceeds its extraction limits.")
             for member in members:
                 if cancelled.is_set():
                     raise InterruptedError("AI software preparation was cancelled.")
                 target = member_path(member.filename)
                 if stat.S_ISLNK(member.external_attr >> 16):
-                    raise ComponentUnavailable("The Windows AI software archive contains an unexpected link.")
+                    raise ComponentUnavailable(
+                        "The Windows AI software archive contains an unexpected link."
+                    )
                 if member.is_dir():
                     target.mkdir(parents=True, exist_ok=True)
                 else:
@@ -195,9 +252,13 @@ def extract_archive(archive: Path, destination: Path, cancelled, allow_links=Tru
                     raise InterruptedError("AI software preparation was cancelled.")
                 member_path(member.name)
                 if not (member.isfile() or member.isdir() or member.issym() or member.islnk()):
-                    raise ComponentUnavailable("The AI software archive contains an unsupported device entry.")
+                    raise ComponentUnavailable(
+                        "The AI software archive contains an unsupported device entry."
+                    )
                 if not allow_links and (member.issym() or member.islnk()):
-                    raise ComponentUnavailable("The native AI software archive contains an unexpected link.")
+                    raise ComponentUnavailable(
+                        "The native AI software archive contains an unexpected link."
+                    )
                 # Python's data filter bounds symbolic/hard links and metadata.
                 bundle.extract(member, destination, filter="data")
 
@@ -210,7 +271,10 @@ def inventory(directory: Path, cancelled=None) -> dict:
         if path.name == "receipt.json" or "__pycache__" in path.parts:
             continue
         if path.is_file():
-            result[path.relative_to(directory).as_posix()] = {"size": path.stat().st_size, "sha256": sha256(path)}
+            result[path.relative_to(directory).as_posix()] = {
+                "size": path.stat().st_size,
+                "sha256": sha256(path),
+            }
     return result
 
 
@@ -230,7 +294,9 @@ def receipt_valid(directory: Path, *, deep=False, allowed_roots=()) -> bool:
             if not path.is_relative_to(directory.absolute()) or path == directory.absolute():
                 return False
             resolved = path.resolve()
-            if not resolved.is_relative_to(directory.resolve()) and not any(resolved.is_relative_to(root.resolve()) for root in allowed_roots):
+            if not resolved.is_relative_to(directory.resolve()) and not any(
+                resolved.is_relative_to(root.resolve()) for root in allowed_roots
+            ):
                 return False
             if not path.is_file() or path.stat().st_size != expected["size"]:
                 return False

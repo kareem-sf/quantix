@@ -33,6 +33,7 @@ _SCHEMA = (
     """,
 )
 
+
 class MemoryDependency(OfficeModel):
     source_id: IdentifierText
     artifact_id: IdentifierText
@@ -49,7 +50,6 @@ class DependencyImpact(OfficeModel):
     state: Literal["current", "needs_review"]
     review_reasons: list[str]
     dependencies: list[MemoryDependency]
-
 
 
 def _evidence_hash(evidence: dict) -> str:

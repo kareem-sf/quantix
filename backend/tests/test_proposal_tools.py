@@ -18,7 +18,10 @@ def workspace(tmp_path):
     tender = repo.create_tender("Synthetic proposals")
     text = "Ground slab concrete shall be C30/37."
     artifact, _ = repo.register_artifact(
-        tender["id"], "Specs/concrete.pdf", hashlib.sha256(text.encode()).hexdigest(), len(text),
+        tender["id"],
+        "Specs/concrete.pdf",
+        hashlib.sha256(text.encode()).hexdigest(),
+        len(text),
         {"kind": "pdf", "status": "extracted", "segments": [{"locator": "page:1", "text": text}]},
     )
     source_id = repo.artifact_evidence(tender["id"], artifact["id"])[0]["id"]
@@ -31,8 +34,17 @@ def _tool(name):
 
 
 def _plan(source_id, title="Concrete review"):
-    return {"title": title, "tasks": [{"title": "Check slab", "description": "Check the ground slab.",
-                                       "role": "Quantity Surveyor", "source_ids": [source_id]}]}
+    return {
+        "title": title,
+        "tasks": [
+            {
+                "title": "Check slab",
+                "description": "Check the ground slab.",
+                "role": "Quantity Surveyor",
+                "source_ids": [source_id],
+            }
+        ],
+    }
 
 
 @pytest.mark.asyncio
@@ -65,25 +77,39 @@ async def test_a_plan_is_replaced_and_list_kinds_append_until_replaced(workspace
     output = compose(ManagerAnswer(summary="Plan proposed.", source_ids=[source_id]), context)
     assert output.plan.title == "Second"
     with pytest.raises(ToolArgumentError, match="exactly one"):
-        await propose.invoke(context, {"kind": "plan", "items": [_plan(source_id), _plan(source_id)]})
+        await propose.invoke(
+            context, {"kind": "plan", "items": [_plan(source_id), _plan(source_id)]}
+        )
     await propose.invoke(context, {"kind": "plan", "items": []})
     assert compose(ManagerAnswer(summary="Withdrawn."), context).plan is None
 
     def line(description):
-        return {"description": description, "unit": "m3", "quantity": "12.5", "method": "dimensions",
-                "working": "10 x 5 x 0.25", "source_ids": [source_id]}
+        return {
+            "description": description,
+            "unit": "m3",
+            "quantity": "12.5",
+            "method": "dimensions",
+            "working": "10 x 5 x 0.25",
+            "source_ids": [source_id],
+        }
 
     await propose.invoke(context, {"kind": "takeoff", "items": [line("Slab")]})
-    result = json.loads(await propose.invoke(context, {"kind": "takeoff", "items": [line("Footings")]}))
+    result = json.loads(
+        await propose.invoke(context, {"kind": "takeoff", "items": [line("Footings")]})
+    )
     assert result["staged_total"] == 2
     await propose.invoke(context, {"kind": "takeoff", "items": [line("Walls")], "replace": True})
-    assert [item.description for item in compose(ManagerAnswer(summary="x"), context).takeoff] == ["Walls"]
+    assert [item.description for item in compose(ManagerAnswer(summary="x"), context).takeoff] == [
+        "Walls"
+    ]
 
 
 @pytest.mark.asyncio
 async def test_staff_stage_takeoff_but_not_plans(workspace):
     context, source_id = workspace
-    staff = OfficeContext(context.repo, context.tender_id, context.run_id, actor_id="staff-1", assignment_id="a-1")
+    staff = OfficeContext(
+        context.repo, context.tender_id, context.run_id, actor_id="staff-1", assignment_id="a-1"
+    )
     staff.seen_sources.add(source_id)
     with pytest.raises(ToolArgumentError, match="Staff stage"):
         await _tool("propose").invoke(staff, {"kind": "plan", "items": [_plan(source_id)]})

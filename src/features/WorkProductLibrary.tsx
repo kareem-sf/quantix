@@ -65,12 +65,7 @@ function FocusedWorkProduct({
   );
   const [showList, setShowList] = useState(false);
   if (showList)
-    return (
-      <WorkProductList
-        tenderId={tenderId}
-        onSource={onSource}
-      />
-    );
+    return <WorkProductList tenderId={tenderId} onSource={onSource} />;
   if (current.isPending) return <Loading>Opening saved draft…</Loading>;
   if (current.error || !current.data?.items?.[0])
     return (

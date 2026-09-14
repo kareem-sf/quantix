@@ -120,7 +120,11 @@ export function FindingRow({
       <div className="flex flex-wrap items-center gap-1.5">
         {finding.state === "proposed" ? (
           <>
-            <Button type="button" size="sm" onClick={() => setDecision("accept")}>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => setDecision("accept")}
+            >
               Accept
             </Button>
             <Button

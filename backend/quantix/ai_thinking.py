@@ -25,7 +25,18 @@ _DIRECT_LEVELS = {
     "anthropic": ("disabled", "low", "medium", "high"),
 }
 
-_ORDER = ("none", "disabled", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "adaptive")
+_ORDER = (
+    "none",
+    "disabled",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "ultra",
+    "adaptive",
+)
 
 _TEXT = {
     "none": ("Off", "Answers straight away. Uses the least."),
@@ -53,7 +64,8 @@ def thinking_levels(connection: dict, model: dict) -> list[str]:
     from .ai_connections import is_direct_profile
 
     recorded = [
-        level for level in (model.get("capabilities") or {}).get("reasoning") or []
+        level
+        for level in (model.get("capabilities") or {}).get("reasoning") or []
         if isinstance(level, str) and level and not level.startswith("budget:")
     ]
     levels = recorded or (
@@ -90,6 +102,13 @@ def light_level(connection: dict, model: dict) -> str | None:
 
 def describe(level: str | None) -> dict:
     if level is None:
-        return {"value": None, "label": "Default", "detail": "The AI's own default setting.", "off": False}
-    label, detail = _TEXT.get(level, (level.replace("_", " ").capitalize(), "A level reported by this AI."))
+        return {
+            "value": None,
+            "label": "Default",
+            "detail": "The AI's own default setting.",
+            "off": False,
+        }
+    label, detail = _TEXT.get(
+        level, (level.replace("_", " ").capitalize(), "A level reported by this AI.")
+    )
     return {"value": level, "label": label, "detail": detail, "off": level in _OFF}

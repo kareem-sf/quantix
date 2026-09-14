@@ -245,7 +245,9 @@ class OutputRequest(EngineerDecision):
         if (self.kind == "programme_xlsx") != (self.programme is not None):
             raise ValueError("A construction programme requires explicit activities and calendar.")
         if (self.kind == "client_boq") != (self.client_boq is not None):
-            raise ValueError("A client-format BOQ requires its selected workbook and reviewed column mappings.")
+            raise ValueError(
+                "A client-format BOQ requires its selected workbook and reviewed column mappings."
+            )
         return self
 
 

@@ -25,9 +25,22 @@ def create_router(repo, runtimes, setup):
 
     def runtime_view(account):
         active = account["active"]
-        state = "login_pending" if active and account["stage"] == "needs_sign_in" else "installing" if active else account["stage"]
-        return {"connection_id": account["id"], "installed": account["software"]["state"] == "ready", "state": state,
-                "detail": account["detail"], "login_url": account["login_url"], "user_code": account["user_code"], "docs_url": None}
+        state = (
+            "login_pending"
+            if active and account["stage"] == "needs_sign_in"
+            else "installing"
+            if active
+            else account["stage"]
+        )
+        return {
+            "connection_id": account["id"],
+            "installed": account["software"]["state"] == "ready",
+            "state": state,
+            "detail": account["detail"],
+            "login_url": account["login_url"],
+            "user_code": account["user_code"],
+            "docs_url": None,
+        }
 
     @router.get("/ai/providers", response_model=list[ProviderPreset])
     def presets():
@@ -69,7 +82,9 @@ def create_router(repo, runtimes, setup):
     @router.post("/ai/connections/{connection_id}/discover", response_model=list[ModelRecord])
     async def discover(connection_id: str):
         if not is_supported_profile(connections.get(connection_id)):
-            raise ValueError("This saved AI account is retired. Choose one of the five supported provider routes.")
+            raise ValueError(
+                "This saved AI account is retired. Choose one of the five supported provider routes."
+            )
         return await connections.discover(connection_id)
 
     @router.get("/ai/connections/{connection_id}/runtime", response_model=RuntimeStatus)
@@ -100,9 +115,14 @@ def create_router(repo, runtimes, setup):
     def usage(tender_id: str):
         # Stored rows also carry internal search accounting that is not part of the record.
         fields = AIUsageRecord.model_fields
-        return [{key: value for key, value in row.items() if key in fields} for row in policies.usage(tender_id)]
+        return [
+            {key: value for key, value in row.items() if key in fields}
+            for row in policies.usage(tender_id)
+        ]
 
-    @router.post("/tenders/{tender_id}/ai-usage/{usage_id}/reconcile", response_model=MutationReceipt)
+    @router.post(
+        "/tenders/{tender_id}/ai-usage/{usage_id}/reconcile", response_model=MutationReceipt
+    )
     def reconcile(tender_id: str, usage_id: str, request: AIReconcile):
         return policies.reconcile(tender_id, usage_id, request)
 

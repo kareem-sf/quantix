@@ -87,7 +87,16 @@ class Evidence(ApiModel):
 
 
 class ResultLink(ApiModel):
-    kind: Literal["finding", "plan", "task", "output", "requirement", "boq_item", "work_product", "calculation"]
+    kind: Literal[
+        "finding",
+        "plan",
+        "task",
+        "output",
+        "requirement",
+        "boq_item",
+        "work_product",
+        "calculation",
+    ]
     id: str
     title: str
     target: str

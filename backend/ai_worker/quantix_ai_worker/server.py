@@ -46,22 +46,43 @@ class Worker:
             session_id=os.environ.get("QUANTIX_DIAGNOSTICS_SESSION_ID"),
             require_directory=True,
         )
-        self.server = Server("quantix-ai-worker", version="1.0.0",
-                             on_list_tools=self.list_tools, on_call_tool=self.call_tool)
+        self.server = Server(
+            "quantix-ai-worker",
+            version="1.0.0",
+            on_list_tools=self.list_tools,
+            on_call_tool=self.call_tool,
+        )
 
     async def list_tools(self, _ctx, _params):
         schemas = {
-            "initialize_connection": {"connection": {"type": "object"}, "account_home": {"type": "string"}},
+            "initialize_connection": {
+                "connection": {"type": "object"},
+                "account_home": {"type": "string"},
+            },
             "catalog": {"credentials": {"type": "object"}},
-            "runtime_status": {}, "login": {}, "login_device": {}, "logout": {}, "billing": {},
+            "runtime_status": {},
+            "login": {},
+            "login_device": {},
+            "logout": {},
+            "billing": {},
             "execute": {"credentials": {"type": "object"}, "execution": {"type": "object"}},
             "check": {"credentials": {"type": "object"}, "execution": {"type": "object"}},
         }
-        return types.ListToolsResult(tools=[types.Tool(
-            name=name, description="Quantix host operation; never supplied to a model.",
-            inputSchema={"type": "object", "properties": properties,
-                         "required": list(properties), "additionalProperties": False},
-        ) for name, properties in schemas.items()])
+        return types.ListToolsResult(
+            tools=[
+                types.Tool(
+                    name=name,
+                    description="Quantix host operation; never supplied to a model.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": properties,
+                        "required": list(properties),
+                        "additionalProperties": False,
+                    },
+                )
+                for name, properties in schemas.items()
+            ]
+        )
 
     async def operation(self, name, arguments):
         if name == "initialize_connection":
@@ -70,11 +91,19 @@ class Worker:
             connection = arguments["connection"]
             identifier = connection.get("id", "")
             home = Path(arguments["account_home"])
-            if (not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", identifier)
-                    or not home.is_absolute() or home.name != identifier or home.parent.name != "ai-runtimes"):
-                raise RuntimeUnavailable("The worker received an invalid private account directory.")
+            if (
+                not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", identifier)
+                or not home.is_absolute()
+                or home.name != identifier
+                or home.parent.name != "ai-runtimes"
+            ):
+                raise RuntimeUnavailable(
+                    "The worker received an invalid private account directory."
+                )
             if connection.get("protocol") not in RUNTIMES:
-                raise RuntimeUnavailable("This worker supports only the Codex and Grok subscription clients.")
+                raise RuntimeUnavailable(
+                    "This worker supports only the Codex and Grok subscription clients."
+                )
             from .accounts import AccountService
 
             self.connection = connection
@@ -82,17 +111,27 @@ class Worker:
             self.accounts = AccountService(connection, home)
             return {"initialized": True, "protocol": connection["protocol"]}
         if self.connection is None:
-            raise RuntimeUnavailable("Initialize this worker's connection before starting an operation.")
+            raise RuntimeUnavailable(
+                "Initialize this worker's connection before starting an operation."
+            )
         if name == "catalog":
             from .runtime_catalog import discover_runtime_models
-            return await discover_runtime_models(self.account_home, self.connection, arguments["credentials"])
+
+            return await discover_runtime_models(
+                self.account_home, self.connection, arguments["credentials"]
+            )
         if name in {"runtime_status", "login", "login_device", "logout"}:
-            method = self.accounts.status if name == "runtime_status" else getattr(self.accounts, name)
+            method = (
+                self.accounts.status if name == "runtime_status" else getattr(self.accounts, name)
+            )
             return await method()
         if name == "billing":
             if self.connection["protocol"] != "grok_build":
-                raise RuntimeUnavailable("This connection does not expose subscription usage through its original client.")
+                raise RuntimeUnavailable(
+                    "This connection does not expose subscription usage through its original client."
+                )
             from .grok_auth import subscription_usage
+
             return await subscription_usage(self.account_home, self.connection)
         if name in {"execute", "check"}:
             from .execution import execute_runtime
@@ -100,7 +139,9 @@ class Worker:
 
             execution = arguments["execution"]
             if execution.get("account_home") != str(self.account_home):
-                raise RuntimeUnavailable("The execution account directory does not match its initialized worker.")
+                raise RuntimeUnavailable(
+                    "The execution account directory does not match its initialized worker."
+                )
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", execution.get("operation_id", "")):
                 raise RuntimeUnavailable("The worker operation identifier is invalid.")
             connection = dict(self.connection)
@@ -108,16 +149,30 @@ class Worker:
             connection["_model"] = execution["model"]
             connection["_operation"] = name
             if self.connection["protocol"] == "grok_build":
-                connection["_grok_check_maximum_cost_usd"] = execution.get("grok_check_maximum_cost_usd")
+                connection["_grok_check_maximum_cost_usd"] = execution.get(
+                    "grok_check_maximum_cost_usd"
+                )
             # Keep this worker boundary aligned with the core Grok check contract.
-            check_requests = GROK_CHECK_MAX_ROUNDS if self.connection["protocol"] == "grok_build" else 3
-            if name == "check" and (execution["limits"].get("max_requests", 0) > check_requests
-                                     or execution["route"].get("max_output_tokens", 0) > 1024
-                                     or execution["route"].get("web_search")):
-                raise RuntimeUnavailable("The connection check exceeds its small approved request limits.")
+            check_requests = (
+                GROK_CHECK_MAX_ROUNDS if self.connection["protocol"] == "grok_build" else 3
+            )
+            if name == "check" and (
+                execution["limits"].get("max_requests", 0) > check_requests
+                or execution["route"].get("max_output_tokens", 0) > 1024
+                or execution["route"].get("web_search")
+            ):
+                raise RuntimeUnavailable(
+                    "The connection check exceeds its small approved request limits."
+                )
             async with execution_context(execution) as context:
-                return await execute_runtime(execution["route"], connection, arguments["credentials"], context,
-                                     execution["instruction"], execution["output_schema"])
+                return await execute_runtime(
+                    execution["route"],
+                    connection,
+                    arguments["credentials"],
+                    context,
+                    execution["instruction"],
+                    execution["output_schema"],
+                )
         raise RuntimeUnavailable("This worker operation is unsupported.")
 
     async def call_tool(self, _ctx, params):
@@ -125,17 +180,28 @@ class Worker:
         arguments = params.arguments or {}
         execution = arguments.get("execution") if isinstance(arguments, dict) else None
         operation_id = execution.get("operation_id") if isinstance(execution, dict) else None
-        self.diagnostics.record("worker_operation", phase=params.name, outcome="started",
-                                operation_id=operation_id,
-                                protocol=(self.connection or {}).get("protocol"))
+        self.diagnostics.record(
+            "worker_operation",
+            phase=params.name,
+            outcome="started",
+            operation_id=operation_id,
+            protocol=(self.connection or {}).get("protocol"),
+        )
         try:
             result = await self.operation(params.name, params.arguments or {})
             body = {"ok": True, "result": result}
-            self.diagnostics.record("worker_operation", phase=params.name, outcome="completed",
-                                    operation_id=operation_id,
-                                    protocol=(self.connection or {}).get("protocol"),
-                                    duration_ms=int((asyncio.get_running_loop().time() - started) * 1000))
-            return types.CallToolResult(content=[types.TextContent(type="text", text=json.dumps(body, ensure_ascii=False))], structuredContent=body)
+            self.diagnostics.record(
+                "worker_operation",
+                phase=params.name,
+                outcome="completed",
+                operation_id=operation_id,
+                protocol=(self.connection or {}).get("protocol"),
+                duration_ms=int((asyncio.get_running_loop().time() - started) * 1000),
+            )
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=json.dumps(body, ensure_ascii=False))],
+                structuredContent=body,
+            )
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -145,20 +211,36 @@ class Worker:
             failure = _nested_known_failure(error)
             if failure is not None:
                 error = failure
-            kind, message = "unavailable", "The selected AI component could not complete this operation. Review its connection, model and limits."
+            kind, message = (
+                "unavailable",
+                "The selected AI component could not complete this operation. Review its connection, model and limits.",
+            )
             if isinstance(error, RuntimeUnavailable):
                 message = str(error)
             elif isinstance(error, InterruptedError):
-                kind, message = "interrupted", "The AI operation ended before completion. No result was published."
+                kind, message = (
+                    "interrupted",
+                    "The AI operation ended before completion. No result was published.",
+                )
             elif isinstance(error, (RuntimeConnectionFailure, ConnectionError, TimeoutError)):
-                kind, message = "connection", "The selected provider connection was interrupted or unavailable."
+                kind, message = (
+                    "connection",
+                    "The selected provider connection was interrupted or unavailable.",
+                )
             self.diagnostics.record_exception(
-                "worker_operation_failed", error, phase=params.name, operation_id=operation_id,
+                "worker_operation_failed",
+                error,
+                phase=params.name,
+                operation_id=operation_id,
                 protocol=(self.connection or {}).get("protocol"),
                 duration_ms=int((asyncio.get_running_loop().time() - started) * 1000),
             )
             body = {"ok": False, "error": {"kind": kind, "message": message[:1200]}}
-            return types.CallToolResult(isError=True, content=[types.TextContent(type="text", text=json.dumps(body))], structuredContent=body)
+            return types.CallToolResult(
+                isError=True,
+                content=[types.TextContent(type="text", text=json.dumps(body))],
+                structuredContent=body,
+            )
 
     async def run(self):
         self.diagnostics.record("worker_process", phase="startup", outcome="starting")

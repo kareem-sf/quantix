@@ -7,12 +7,7 @@ import {
   useResource,
   type Schema,
 } from "../api";
-import {
-  ErrorNotice,
-  Loading,
-  Modal,
-  Status,
-} from "../components/common";
+import { ErrorNotice, Loading, Modal, Status } from "../components/common";
 import { Citations, type SourceSelection } from "./Sources";
 import { FieldError } from "../components/FieldError";
 import { createDraftScope, useFormDraft } from "./useFormDraft";

@@ -114,8 +114,13 @@ async def test_revision_compare_and_impact_name_exact_changes_and_dependent_reco
     repo.add_finding(tender["id"], "Unrelated", "Not linked.", "observation", [], origin="agent")
     WorkProductService(repo).save_draft(
         engineer_identity(tender["id"]),
-        WorkProductDraft(kind="note", title="Grade", content="Use C30/37.",
-                         source_refs=[old_grade["id"]], idempotency_key="grade-note"),
+        WorkProductDraft(
+            kind="note",
+            title="Grade",
+            content="Use C30/37.",
+            source_refs=[old_grade["id"]],
+            idempotency_key="grade-note",
+        ),
     )
     context = _manager(repo, tender["id"])
     with pytest.raises(ToolArgumentError, match="no earlier version"):

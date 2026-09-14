@@ -55,7 +55,9 @@ class RunChatStream:
                 ).fetchall()
             return dict(run), [dict(item) for item in events], [dict(item) for item in messages]
 
-    async def chunks(self, tender_id: str, run_id: str, *, after: int = 0, cursor: str | None = None):
+    async def chunks(
+        self, tender_id: str, run_id: str, *, after: int = 0, cursor: str | None = None
+    ):
         if self.should_stop():
             return
         self.require_run(tender_id, run_id)
@@ -96,7 +98,12 @@ class RunChatStream:
                     yield {
                         "type": "data-staff-draft" if is_staff else "data-draft",
                         "id": draft_id,
-                        "data": {"text": drafts[draft_id], "tentative": True, "preview_only": True, **actor},
+                        "data": {
+                            "text": drafts[draft_id],
+                            "tentative": True,
+                            "preview_only": True,
+                            **actor,
+                        },
                     }
                 elif event["kind"] == "assistant_reasoning_summary" and isinstance(
                     data.get("text"), str

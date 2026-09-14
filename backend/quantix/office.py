@@ -136,7 +136,10 @@ def _prompt(
             "title": safe_text(plan.get("title"), 200),
             "status": plan.get("status"),
             "tasks": [
-                {key: safe_text(row.get(key), 1500) for key in ("title", "description", "role", "status")}
+                {
+                    key: safe_text(row.get(key), 1500)
+                    for key in ("title", "description", "role", "status")
+                }
                 for row in plan.get("tasks", [])[:12]
             ],
         }
@@ -185,11 +188,14 @@ def validate_proposals(output: OfficeOutput, context: OfficeContext, web_sources
     for document in output.draft_documents:
         if document.programme:
             from .output_programme import schedule_programme
+
             schedule_programme(document.programme)
             for activity in document.programme.activities:
                 context.validate_sources(activity.source_ids)
                 if not activity.source_ids and not activity.assumptions:
-                    raise ValueError("Programme activities require evidence or explicit assumptions.")
+                    raise ValueError(
+                        "Programme activities require evidence or explicit assumptions."
+                    )
     if output.programme_proposal:
         from .output_programme import schedule_programme
 
@@ -197,9 +203,12 @@ def validate_proposals(output: OfficeOutput, context: OfficeContext, web_sources
         for activity in output.programme_proposal.activities:
             context.validate_sources(activity.source_ids)
             if not activity.source_ids and not activity.assumptions:
-                raise ValueError("A proposed construction activity needs source references or explicit assumptions.")
+                raise ValueError(
+                    "A proposed construction activity needs source references or explicit assumptions."
+                )
     validate_business(output, context, web_sources)
     from .office_quantities import validate_quantity_proposals
+
     validate_quantity_proposals(output, context)
 
 
@@ -212,7 +221,9 @@ def _validate_output(output: OfficeOutput, context: OfficeContext, web_sources=N
 
 def compose(answer: ManagerAnswer, context: OfficeContext) -> OfficeOutput:
     """The Manager's answer together with every proposal staged during the run."""
-    return OfficeOutput.model_validate({**context.proposals, **answer.model_dump(include=set(ManagerAnswer.model_fields))})
+    return OfficeOutput.model_validate(
+        {**context.proposals, **answer.model_dump(include=set(ManagerAnswer.model_fields))}
+    )
 
 
 def publication_checks(context: OfficeContext, research: ResearchRecord, unwrap=None):
@@ -226,7 +237,11 @@ def publication_checks(context: OfficeContext, research: ResearchRecord, unwrap=
         answer = unwrap(candidate) if unwrap is not None else candidate
         if answer is None:
             return
-        output = compose(answer, context) if isinstance(answer, ManagerAnswer) and not isinstance(answer, OfficeOutput) else answer
+        output = (
+            compose(answer, context)
+            if isinstance(answer, ManagerAnswer) and not isinstance(answer, OfficeOutput)
+            else answer
+        )
         trial = ResearchRecord(context)
         trial.sources = dict(research.sources)
         trial.add_sources(web_sources)
@@ -289,6 +304,7 @@ def publish_prepared(repo: "Repository", prepared: PreparedOfficeResult) -> dict
 
     project = publish_project(output, context)
     from .office_quantities import publish_quantities
+
     quantities = publish_quantities(output, context)
     from .takeoff import TakeoffService
 
@@ -362,7 +378,9 @@ def publish_prepared(repo: "Repository", prepared: PreparedOfficeResult) -> dict
         "web_findings": web_findings,
         "price_proposals": prices,
         "web_sources": web_sources,
-        "requested_drafts": [document.model_dump(mode="json") for document in output.draft_documents],
+        "requested_drafts": [
+            document.model_dump(mode="json") for document in output.draft_documents
+        ],
         "takeoff": takeoff,
         **business,
         **project,
@@ -391,7 +409,9 @@ async def run_manager(repo, tender_id, run_id, instruction):
     context.actor_id = manager_profile.id
     context.standing_preferences = repo.setting("preferences", "")
     context.trusted_recipients.update(recipient_addresses(instruction))
-    approved = next((plan for plan in repo.list_plans(tender_id) if plan["status"] == "approved"), None)
+    approved = next(
+        (plan for plan in repo.list_plans(tender_id) if plan["status"] == "approved"), None
+    )
     if approved:
         context.approved_scope = repo.approved_scope(tender_id, approved["id"])
     if context.approved_scope:
@@ -419,13 +439,25 @@ async def run_manager(repo, tender_id, run_id, instruction):
             instructions += (
                 "\n\nEngineer steering received during the previous step. It applies from this step "
                 "onward; it never rewrites already published results.\n"
-                + "\n".join(f"- [{item.kind}] {steering.admission_text(tender_id, item.id)}" for item in pending)
+                + "\n".join(
+                    f"- [{item.kind}] {steering.admission_text(tender_id, item.id)}"
+                    for item in pending
+                )
             )
         route = policies.routes_for(tender_id)[0]
-        prompt = _prompt(context, instructions, prompt_profile(manager_profile), team_updates=team_updates)
+        prompt = _prompt(
+            context, instructions, prompt_profile(manager_profile), team_updates=team_updates
+        )
         response = await run_turn(
-            repo, tender_id, run_id, route, context, prompt, ManagerAnswer,
-            system_instructions=INSTRUCTIONS, definitions=definitions,
+            repo,
+            tender_id,
+            run_id,
+            route,
+            context,
+            prompt,
+            ManagerAnswer,
+            system_instructions=INSTRUCTIONS,
+            definitions=definitions,
             validate_output=publication_checks(context, research),
             role="Tender Manager",
         )
@@ -446,10 +478,22 @@ async def run_manager(repo, tender_id, run_id, instruction):
             break
         usage_parts.extend(assignment.usage for assignment in finished)
         team_updates = [outcome_view(repo, assignment) for assignment in finished]
-    usage = {key: sum(part.get(key, 0) or 0 for part in usage_parts) for key in (
-        "requests", "input_tokens", "output_tokens", "cached_input_tokens", "reasoning_tokens", "web_search_calls")}
+    usage = {
+        key: sum(part.get(key, 0) or 0 for part in usage_parts)
+        for key in (
+            "requests",
+            "input_tokens",
+            "output_tokens",
+            "cached_input_tokens",
+            "reasoning_tokens",
+            "web_search_calls",
+        )
+    }
     usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
     usage["usage_complete"] = all(part.get("usage_complete", True) for part in usage_parts)
-    usage.update(request_details=[row for part in usage_parts for row in part.get("request_details", [])],
-                 estimated_cost_usd=None, cost_basis="See the per-connection AI usage ledger for reported tokens and budget estimates.")
+    usage.update(
+        request_details=[row for part in usage_parts for row in part.get("request_details", [])],
+        estimated_cost_usd=None,
+        cost_basis="See the per-connection AI usage ledger for reported tokens and budget estimates.",
+    )
     return prepare_result(output, context, usage, research)

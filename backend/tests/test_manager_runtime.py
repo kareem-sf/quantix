@@ -133,9 +133,12 @@ def test_concurrent_duplicate_capture_keeps_one_pinned_version(tmp_path):
 
     assert {(item.id, item.version) for item in captured} == {(captured[0].id, captured[0].version)}
     with repo.db.connect() as conn:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM office_manager_run_profiles WHERE run_id=?", (run["id"],)
-        ).fetchone()[0] == 1
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM office_manager_run_profiles WHERE run_id=?", (run["id"],)
+            ).fetchone()[0]
+            == 1
+        )
 
 
 def test_prompt_profile_contains_complete_user_fields_without_authority(tmp_path):

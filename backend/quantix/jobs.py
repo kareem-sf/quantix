@@ -29,6 +29,7 @@ def safe_error(error: BaseException, secret: str | None = None) -> str:
 # A Manager run includes its colleagues' turns, so it is allowed longer than one agent loop.
 MANAGER_RUN_SECONDS = 45 * 60
 
+
 class JobManager:
     def __init__(self, repo: Repository, settings: SettingsService):
         self.repo = repo
@@ -105,8 +106,14 @@ class JobManager:
         tender = self.repo.get_tender(tender_id)
         if tender["name_source"] != "pending":
             return
-        source = next((run["instruction"] for run in self.repo.list_runs(tender_id)
-                       if run["kind"] == "import" and run["status"] == "completed"), None)
+        source = next(
+            (
+                run["instruction"]
+                for run in self.repo.list_runs(tender_id)
+                if run["kind"] == "import" and run["status"] == "completed"
+            ),
+            None,
+        )
         if source:
             self.repo.rename_tender(tender_id, package_name(source), source="package")
 
@@ -165,8 +172,13 @@ class JobManager:
                 return None
             return self.start_analysis(tender_id)
         except (KeyError, ValueError) as error:
-            record("package_analysis", phase="admission", outcome="skipped", tender_id=tender_id,
-                   detail=type(error).__name__)
+            record(
+                "package_analysis",
+                phase="admission",
+                outcome="skipped",
+                tender_id=tender_id,
+                detail=type(error).__name__,
+            )
             return None
 
     def maybe_identify(self, tender_id):
@@ -182,15 +194,21 @@ class JobManager:
                 return None
             return self.start_identify(tender_id)
         except (KeyError, ValueError) as error:
-            record("project_identify", phase="admission", outcome="skipped", tender_id=tender_id,
-                   detail=type(error).__name__)
+            record(
+                "project_identify",
+                phase="admission",
+                outcome="skipped",
+                tender_id=tender_id,
+                detail=type(error).__name__,
+            )
             # Without usable AI the Tender keeps a provisional folder name and
             # tells the engineer what finishes the analysis.
             try:
                 if self.repo.get_tender(tender_id)["name_source"] == "pending":
                     self._provisional_name(tender_id)
                     self.repo.add_message(
-                        tender_id, "system",
+                        tender_id,
+                        "system",
                         "The documents are registered. Choose the AI for this Tender in the message box "
                         "to finish analyzing the tender package and identify the project.",
                     )
@@ -226,7 +244,9 @@ class JobManager:
         message = str(error).lower()
         if any(value in message for value in ("budget", "spending", "allowance", "price")):
             return "budget"
-        if any(value in message for value in ("model", "account", "sign in", "connection", "setup")):
+        if any(
+            value in message for value in ("model", "account", "sign in", "connection", "setup")
+        ):
             return "model"
         if "source" in message or "evidence" in message:
             return "source"
@@ -247,35 +267,59 @@ class JobManager:
         connections = policy.connections
         connection = connections.get(route["connection_id"])
         if not is_supported_profile(connection):
-            raise ValueError("This saved AI account is retired. Choose one of the five supported provider routes.")
+            raise ValueError(
+                "This saved AI account is retired. Choose one of the five supported provider routes."
+            )
         if not connection["enabled"]:
-            raise ValueError("The selected AI account is disabled. Enable it in Settings before continuing.")
+            raise ValueError(
+                "The selected AI account is disabled. Enable it in Settings before continuing."
+            )
         # Reading credentials here confirms the selected account is usable;
         # values never leave this process or enter a request/result record.
         credentials = connections.credentials(connection["id"])
         if connection["auth_type"] in {"api_key", "environment"} and not credentials.get("api_key"):
-            raise ValueError("Enter the selected AI account credential in Settings before continuing.")
+            raise ValueError(
+                "Enter the selected AI account credential in Settings before continuing."
+            )
         try:
             require_ready(self.repo, connection, route["model_id"])
             meter = BudgetMeter(policy, tender_id, tender_id, route)
         except (KeyError, StopIteration) as error:
-            raise ValueError("The selected AI model is no longer available. Refresh its setup before continuing.") from error
+            raise ValueError(
+                "The selected AI model is no longer available. Refresh its setup before continuing."
+            ) from error
         current = policy.get(tender_id)
-        if allows_extras(connection) and current.get("provider_managed_extras", {}).get(connection["id"]) != connection["revision"]:
+        if (
+            allows_extras(connection)
+            and current.get("provider_managed_extras", {}).get(connection["id"])
+            != connection["revision"]
+        ):
             raise ValueError("Review this AI account's spending settings before continuing.")
-        if (meter.connection["billing"] in {"metered", "unknown"} or allows_extras(connection)) and current["restore_reconciliation_required"]:
-            raise ValueError("Review spending after restoring this workspace before continuing paid AI work.")
+        if (
+            meter.connection["billing"] in {"metered", "unknown"} or allows_extras(connection)
+        ) and current["restore_reconciliation_required"]:
+            raise ValueError(
+                "Review spending after restoring this workspace before continuing paid AI work."
+            )
         prices = meter.model.get("pricing")
         if meter.connection["billing"] in {"metered", "unknown"} and (
             not prices or not current["run_budget_usd"] or not current["tender_budget_usd"]
         ):
-            raise ValueError("Confirm the AI prices and Tender spending allowance in Settings before continuing.")
+            raise ValueError(
+                "Confirm the AI prices and Tender spending allowance in Settings before continuing."
+            )
         with self.repo.db.connect() as conn:
             spent, reserved, _request_count = policy._totals(conn, tender_id)
         if current["max_requests"] < 1:
-            raise ValueError("The Tender AI request allowance is exhausted. Review its limits before continuing.")
-        if current["tender_budget_usd"] is not None and spent + reserved >= Decimal(str(current["tender_budget_usd"])):
-            raise ValueError("The Tender spending allowance is exhausted. Review its limits before continuing.")
+            raise ValueError(
+                "The Tender AI request allowance is exhausted. Review its limits before continuing."
+            )
+        if current["tender_budget_usd"] is not None and spent + reserved >= Decimal(
+            str(current["tender_budget_usd"])
+        ):
+            raise ValueError(
+                "The Tender spending allowance is exhausted. Review its limits before continuing."
+            )
         return route
 
     def _immediate_result(self, run):
@@ -310,7 +354,9 @@ class JobManager:
                 if current is not None and current["id"] == existing.get("pending_id"):
                     return self._pending_result(current)
                 if existing["outcome_kind"] == "pending":
-                    raise ValueError("This pending message was cancelled or replaced. Use a new idempotency key.")
+                    raise ValueError(
+                        "This pending message was cancelled or replaced. Use a new idempotency key."
+                    )
             active = self.active(tender_id)
             if active:
                 pending = self.pending.upsert(
@@ -322,7 +368,9 @@ class JobManager:
                 )
                 return self._pending_result(pending)
             if policy.get(tender_id)["manager"] is None:
-                raise ValueError("Open Settings and choose a Tender Manager connection before sending this instruction.")
+                raise ValueError(
+                    "Open Settings and choose a Tender Manager connection before sending this instruction."
+                )
             self._preflight_route(tender_id, policy)
             run = self._queue(tender_id, "manager", instruction)
             self.repo.add_message(tender_id, "engineer", instruction, run_id=run["id"])
@@ -345,7 +393,9 @@ class JobManager:
         policy = AIPolicyService(self.repo)
         with policy.connections.authority_guard(), self.repo.atomic():
             if self.active(tender_id):
-                raise ValueError("Finish or stop the current Tender work before sending this instruction.")
+                raise ValueError(
+                    "Finish or stop the current Tender work before sending this instruction."
+                )
             current = self.pending.get(tender_id)
             if current is None:
                 raise ValueError("There is no pending instruction to send.")
@@ -420,17 +470,26 @@ class JobManager:
             task = self.repo.get_task(tender_id, task_id)
             plan = self.repo.get_plan(tender_id, task["plan_id"])
             if plan["status"] != "approved" or task["status"] not in {
-                "ready", "failed", "cancelled", "interrupted",
+                "ready",
+                "failed",
+                "cancelled",
+                "interrupted",
             }:
-                raise ValueError("This task requires an approved current plan before work can start.")
+                raise ValueError(
+                    "This task requires an approved current plan before work can start."
+                )
             self.repo.approved_scope(tender_id, task["plan_id"])
             self._preflight_route(tender_id, policy)
             self.repo._check_sources(conn, tender_id, task["source_ids"])
             instruction = f"Carry out the approved task '{task['title']}': {task['description']}"
             run = self._queue(tender_id, "manager", instruction)
             self.repo.add_message(tender_id, "engineer", instruction, run_id=run["id"])
-            self.repo.event(run["id"], "requested_task", "The engineer asked the Tender Manager to carry out this approved task.",
-                            {"task_id": task_id, "plan_id": task["plan_id"]})
+            self.repo.event(
+                run["id"],
+                "requested_task",
+                "The engineer asked the Tender Manager to carry out this approved task.",
+                {"task_id": task_id, "plan_id": task["plan_id"]},
+            )
         return self._schedule(run)
 
     def carry_out_plan(self, tender_id, plan_id):
@@ -446,7 +505,12 @@ class JobManager:
             self._preflight_route(tender_id, policy)
             instruction = f"Carry out the approved work plan: {plan['title']}. Assign your team as the work needs."
             run = self._queue(tender_id, "manager", instruction)
-            self.repo.event(run["id"], "approved_plan", "The Tender Manager is carrying out the approved plan.", {"plan_id": plan_id})
+            self.repo.event(
+                run["id"],
+                "approved_plan",
+                "The Tender Manager is carrying out the approved plan.",
+                {"plan_id": plan_id},
+            )
         return self._schedule(run)
 
     async def _execute(self, run, task_id):
@@ -455,19 +519,32 @@ class JobManager:
         from .run_activity import ActivityRecorder, activity_scope
 
         identifier, tender_id = run["id"], run["tender_id"]
-        publication_task_id = task_id or next((event["data"].get("task_id") for event in self.repo.run_events(identifier) if event["kind"] == "requested_task"), None)
+        publication_task_id = task_id or next(
+            (
+                event["data"].get("task_id")
+                for event in self.repo.run_events(identifier)
+                if event["kind"] == "requested_task"
+            ),
+            None,
+        )
         started = asyncio.get_running_loop().time()
         record("job_lifecycle", phase="queued", outcome="started", run_id=identifier)
         cancelled = self.cancelled[identifier]
         prepared = None
         created_outputs = []
         publication_committed = False
-        monitor = ActivityRecorder(SimpleNamespace(repo=self.repo, run_id=identifier, tender_id=tender_id))
+        monitor = ActivityRecorder(
+            SimpleNamespace(repo=self.repo, run_id=identifier, tender_id=tender_id)
+        )
         execution_operation = None
         execution_scope = None
         try:
-            execution_operation = monitor.start("run", "Instruction accepted; waiting for this Tender's current work.",
-                                                {"instruction": run["instruction"], "kind": run["kind"]}, phase="queued")
+            execution_operation = monitor.start(
+                "run",
+                "Instruction accepted; waiting for this Tender's current work.",
+                {"instruction": run["instruction"], "kind": run["kind"]},
+                phase="queued",
+            )
             execution_scope = activity_scope(execution_operation)
             execution_scope.__enter__()
             lane = f"{tender_id}:index" if run["kind"] == "index" else tender_id
@@ -483,7 +560,9 @@ class JobManager:
                 monitor.record(execution_operation, "run", "started", initial_detail)
                 record("job_lifecycle", phase="running", outcome="started", run_id=identifier)
                 if publication_task_id:
-                    self.repo.update_task(tender_id, publication_task_id, status="running", run_id=identifier)
+                    self.repo.update_task(
+                        tender_id, publication_task_id, status="running", run_id=identifier
+                    )
                 if run["kind"] == "import":
                     result = await asyncio.to_thread(
                         import_package,
@@ -514,8 +593,13 @@ class JobManager:
                     from .package_analysis import run_analysis
 
                     prepared = await asyncio.wait_for(
-                        run_analysis(self.repo, tender_id, identifier, cancelled,
-                                     ai_ready=lambda: self._ai_ready(tender_id)),
+                        run_analysis(
+                            self.repo,
+                            tender_id,
+                            identifier,
+                            cancelled,
+                            ai_ready=lambda: self._ai_ready(tender_id),
+                        ),
                         timeout=3 * 60 * 60,
                     )
                 elif run["kind"] == "identify":
@@ -533,7 +617,9 @@ class JobManager:
                     )
                 if cancelled.is_set():
                     raise InterruptedError("Work stopped at your request.")
-                validation_operation = monitor.start("validation", "Checking the result before saving Tender records.")
+                validation_operation = monitor.start(
+                    "validation", "Checking the result before saving Tender records."
+                )
                 with AIConnectionService(self.repo).authority_guard(), self.repo.atomic():
                     if cancelled.is_set():
                         raise InterruptedError("Work stopped before publication.")
@@ -548,7 +634,9 @@ class JobManager:
                             self._provisional_name(tender_id)
                     elif isinstance(prepared, PreparedIdentityResult):
                         if prepared.run_id != identifier or prepared.tender_id != tender_id:
-                            raise ValueError("The worker returned an invalid project identification.")
+                            raise ValueError(
+                                "The worker returned an invalid project identification."
+                            )
                         result = apply_identity(self.repo, prepared)
                     elif isinstance(prepared, PreparedOfficeResult):
                         from .office import publish_prepared
@@ -569,31 +657,64 @@ class JobManager:
                         usage=result.get("usage", {}),
                     )
                     if publication_task_id:
-                        waiting = any(assignment.status == "waiting" for assignment in self.team.list(tender_id, run_id=identifier))
-                        self.repo.update_task(
-                            tender_id, publication_task_id, status="interrupted" if waiting else "completed", result=result, run_id=identifier
+                        waiting = any(
+                            assignment.status == "waiting"
+                            for assignment in self.team.list(tender_id, run_id=identifier)
                         )
-                    if isinstance(prepared, PreparedOfficeResult) and prepared.output.draft_documents:
+                        self.repo.update_task(
+                            tender_id,
+                            publication_task_id,
+                            status="interrupted" if waiting else "completed",
+                            result=result,
+                            run_id=identifier,
+                        )
+                    if (
+                        isinstance(prepared, PreparedOfficeResult)
+                        and prepared.output.draft_documents
+                    ):
                         from .outputs import OutputService
 
                         if not prepared.approved_plan_id:
                             raise ValueError("The draft requests have no approved work scope.")
                         outputs = OutputService(self.repo)
                         for document in prepared.output.draft_documents:
-                            created_outputs.append(outputs.generate_from_office(
-                                tender_id, document.model_dump(mode="json"), identifier, prepared.approved_plan_id,
-                            ))
+                            created_outputs.append(
+                                outputs.generate_from_office(
+                                    tender_id,
+                                    document.model_dump(mode="json"),
+                                    identifier,
+                                    prepared.approved_plan_id,
+                                )
+                            )
                         result = result | {"generated_outputs": created_outputs}
                         self.repo.update_run(identifier, result=result)
                     self.repo.event(
                         identifier, "completed", "Work is saved and available for review."
                     )
-                    monitor.record(validation_operation, "validation", "completed", "Result checks passed and Tender records were saved.")
-                    monitor.record(execution_operation, "run", "completed", "Work is saved and available for review.",
-                                   {"usage": result.get("usage", {}), "generated_outputs": result.get("generated_outputs", [])})
+                    monitor.record(
+                        validation_operation,
+                        "validation",
+                        "completed",
+                        "Result checks passed and Tender records were saved.",
+                    )
+                    monitor.record(
+                        execution_operation,
+                        "run",
+                        "completed",
+                        "Work is saved and available for review.",
+                        {
+                            "usage": result.get("usage", {}),
+                            "generated_outputs": result.get("generated_outputs", []),
+                        },
+                    )
                 publication_committed = True
-                record("job_lifecycle", phase="completed", outcome="saved", run_id=identifier,
-                       duration_ms=int((asyncio.get_running_loop().time() - started) * 1000))
+                record(
+                    "job_lifecycle",
+                    phase="completed",
+                    outcome="saved",
+                    run_id=identifier,
+                    duration_ms=int((asyncio.get_running_loop().time() - started) * 1000),
+                )
             self.pending.on_run_finished(identifier, "completed")
             if run["kind"] == "import" and self.auto_analyze:
                 self.maybe_analyze(tender_id)
@@ -619,7 +740,12 @@ class JobManager:
                     # durable work is already saved. Keep that parent run
                     # complete and leave one visible, restart-safe action.
                     followup = "The completed work is saved. Review AI access, then ask the Tender Manager to continue."
-                    self.repo.event(identifier, "manager_followup_needed", followup, {"error_reference": reference})
+                    self.repo.event(
+                        identifier,
+                        "manager_followup_needed",
+                        followup,
+                        {"error_reference": reference},
+                    )
                     self.repo.add_message(tender_id, "system", followup)
                     return
                 if current["status"] in {"queued", "running"}:
@@ -630,7 +756,8 @@ class JobManager:
                         # Never leave the failure silent or the Tender unnamed.
                         self._provisional_name(tender_id)
                         self.repo.add_message(
-                            tender_id, "system",
+                            tender_id,
+                            "system",
                             "Quantix could not finish analyzing the tender package: "
                             f"{message} Use Resume on the analysis to try again.",
                         )
@@ -638,10 +765,17 @@ class JobManager:
                     from .run_activity import ActivityRecordingError, settle_open_operations
 
                     try:
-                        settle_open_operations(self.repo, identifier, "failed", "Run ended before this step had a confirmed completion.")
+                        settle_open_operations(
+                            self.repo,
+                            identifier,
+                            "failed",
+                            "Run ended before this step had a confirmed completion.",
+                        )
                     except ActivityRecordingError:
                         pass  # Saving failure must not roll back revoked authority.
-                    self.team.cancel_run(tender_id, identifier, "The Manager run stopped before this work finished.")
+                    self.team.cancel_run(
+                        tender_id, identifier, "The Manager run stopped before this work finished."
+                    )
                     if publication_task_id:
                         self.repo.update_task(
                             tender_id, publication_task_id, status="failed", run_id=identifier
@@ -659,7 +793,11 @@ class JobManager:
                             path.unlink(missing_ok=True)
                             path.with_suffix(".json").unlink(missing_ok=True)
                         except OSError:
-                            self.repo.event(identifier, "cleanup_needed", "An unfinished draft file could not be removed. Its generation was not published.")
+                            self.repo.event(
+                                identifier,
+                                "cleanup_needed",
+                                "An unfinished draft file could not be removed. Its generation was not published.",
+                            )
             self._cleanup(identifier)
 
     def _stop(self, run, task_id):
@@ -677,7 +815,12 @@ class JobManager:
             from .run_activity import ActivityRecordingError, settle_open_operations
 
             try:
-                settle_open_operations(self.repo, run["id"], "interrupted", "Work stopped before this step had a confirmed completion.")
+                settle_open_operations(
+                    self.repo,
+                    run["id"],
+                    "interrupted",
+                    "Work stopped before this step had a confirmed completion.",
+                )
             except ActivityRecordingError:
                 pass
             self.team.cancel_run(run["tender_id"], run["id"], "This work was stopped.")
@@ -693,8 +836,11 @@ class JobManager:
         if event := self.cancelled.get(run_id):
             event.set()
         task_id = next(
-            (e["data"]["task_id"] for e in self.repo.run_events(run_id)
-             if e["kind"] in {"assigned_task", "requested_task"}),
+            (
+                e["data"]["task_id"]
+                for e in self.repo.run_events(run_id)
+                if e["kind"] in {"assigned_task", "requested_task"}
+            ),
             None,
         )
         # Revoke durable authority before returning, while the tracked task
@@ -726,9 +872,21 @@ class JobManager:
             with policy.connections.authority_guard(), self.repo.atomic():
                 self._preflight_route(run["tender_id"], policy)
                 retry = self._queue(run["tender_id"], "manager", run["instruction"])
-                selected_task = next((event["data"] for event in self.repo.run_events(run_id) if event["kind"] == "requested_task"), None)
+                selected_task = next(
+                    (
+                        event["data"]
+                        for event in self.repo.run_events(run_id)
+                        if event["kind"] == "requested_task"
+                    ),
+                    None,
+                )
                 if selected_task:
-                    self.repo.event(retry["id"], "requested_task", "Continuing the engineer's selected task after Resume.", selected_task)
+                    self.repo.event(
+                        retry["id"],
+                        "requested_task",
+                        "Continuing the engineer's selected task after Resume.",
+                        selected_task,
+                    )
             # Retrying the original accepted instruction creates only a new
             # run. Its engineer message and original submission receipt stay
             # unchanged, and any held pending instruction stays held.

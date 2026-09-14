@@ -19,7 +19,11 @@ def _bundle(root, *, revision="rev-1", damage=False):
     manifest = {
         "format": 1,
         "tesseract": {"executable": "tesseract/tesseract.exe"},
-        "model": {"name": "intfloat/multilingual-e5-small", "revision": revision, "path": "models/e5"},
+        "model": {
+            "name": "intfloat/multilingual-e5-small",
+            "revision": revision,
+            "path": "models/e5",
+        },
         "files": {
             relative: {"size": len(content), "sha256": hashlib.sha256(content).hexdigest()}
             for relative, content in files.items()
@@ -62,5 +66,9 @@ def test_damaged_files_are_detected_by_the_full_check(tmp_path, monkeypatch):
 def test_missing_bundle_reports_not_ready(tmp_path, monkeypatch):
     _fresh(monkeypatch, tmp_path / "nothing")
     monkeypatch.setattr(engines, "__file__", str(tmp_path / "quantix" / "engines.py"))
-    assert engines.verify() == {"ocr": False, "meaning": False, "detail": "The bundled engines folder is missing."}
+    assert engines.verify() == {
+        "ocr": False,
+        "meaning": False,
+        "detail": "The bundled engines folder is missing.",
+    }
     assert engines.tesseract_path() is None

@@ -66,7 +66,9 @@ def save_staff_records(repo, context: OfficeContext, author: str) -> dict[str, i
         publish_quantities(output, context)
         publish_project(output, context)
         TakeoffService(repo).publish(context, output.takeoff, author=author)
-    return {kind: len(value) for kind, value in context.proposals.items() if isinstance(value, list)}
+    return {
+        kind: len(value) for kind, value in context.proposals.items() if isinstance(value, list)
+    }
 
 
 def _packet(repo, assignment: Assignment, staff) -> str:
@@ -77,12 +79,19 @@ def _packet(repo, assignment: Assignment, staff) -> str:
             evidence = repo.get_evidence(assignment.tender_id, source_id)
         except KeyError:
             continue
-        documents.append({"source_id": source_id, "document": safe_text(evidence.get("artifact_name"), 200),
-                          "locator": safe_text(evidence.get("locator"), 200)})
+        documents.append(
+            {
+                "source_id": source_id,
+                "document": safe_text(evidence.get("artifact_name"), 200),
+                "locator": safe_text(evidence.get("locator"), 200),
+            }
+        )
     content = {
         "today_utc": datetime.now(UTC).date().isoformat(),
         "tender": safe_text(tender["name"], 200),
-        "staff_profile": redact_prompt_data(staff.model_dump(include={"name", "role", "specialisms", "background", "working_style"})),
+        "staff_profile": redact_prompt_data(
+            staff.model_dump(include={"name", "role", "specialisms", "background", "working_style"})
+        ),
         "assignment": {
             "title": redact_text(assignment.title),
             "brief": redact_text(assignment.brief),
@@ -97,7 +106,11 @@ def _packet(repo, assignment: Assignment, staff) -> str:
 
 def _checks(context: OfficeContext):
     def check(candidate, _web_sources) -> None:
-        output = candidate if isinstance(candidate, StaffOutput) else StaffOutput.model_validate(candidate)
+        output = (
+            candidate
+            if isinstance(candidate, StaffOutput)
+            else StaffOutput.model_validate(candidate)
+        )
         if output.kind == "question":
             if not output.question.strip():
                 raise ValueError("State the question for the Tender Manager.")
@@ -109,6 +122,7 @@ def _checks(context: OfficeContext):
             context.validate_sources(finding.source_ids)
             if finding.kind in {"requirement", "risk", "observation"} and not finding.source_ids:
                 raise ValueError("Factual findings need the Tender evidence IDs you read.")
+
     return check
 
 
@@ -121,49 +135,94 @@ async def run_assignment(repo, tender_id: str, assignment_id: str) -> Assignment
     team = TeamService(repo)
     assignment = team.start(tender_id, assignment_id)
     staff = team.get_staff(tender_id, assignment.staff_id)
-    context = OfficeContext(repo, tender_id, assignment.run_id, actor_id=staff.id, assignment_id=assignment.id)
+    context = OfficeContext(
+        repo, tender_id, assignment.run_id, actor_id=staff.id, assignment_id=assignment.id
+    )
     policies = AIPolicyService(repo)
     base = policies.routes_for(tender_id, role="specialist")[0]
     route = policies.validate_route(
         base | {"connection_id": assignment.connection_id, "model_id": assignment.model_id},
         policies.get(tender_id)["allowed_connection_ids"],
     )
-    repo.event(assignment.run_id, "staff_started", f"{staff.name} started: {assignment.title}",
-               {"assignment_id": assignment.id, "staff_id": staff.id})
+    repo.event(
+        assignment.run_id,
+        "staff_started",
+        f"{staff.name} started: {assignment.title}",
+        {"assignment_id": assignment.id, "staff_id": staff.id},
+    )
     try:
         response = await run_turn(
-            repo, tender_id, assignment.run_id, route, context, _packet(repo, assignment, staff), StaffOutput,
-            system_instructions=STAFF_INSTRUCTIONS, definitions=staff_tools(), validate_output=_checks(context),
-            role=staff.role, metadata={"assignment_id": assignment.id, "staff_id": staff.id},
+            repo,
+            tender_id,
+            assignment.run_id,
+            route,
+            context,
+            _packet(repo, assignment, staff),
+            StaffOutput,
+            system_instructions=STAFF_INSTRUCTIONS,
+            definitions=staff_tools(),
+            validate_output=_checks(context),
+            role=staff.role,
+            metadata={"assignment_id": assignment.id, "staff_id": staff.id},
         )
         output = StaffOutput.model_validate(response["output"])
         _checks(context)(output, response.get("web_sources", []))
     except asyncio.CancelledError:
-        team.fail(team.get(tender_id, assignment.id), "Stopped before this work finished.", status="cancelled")
+        team.fail(
+            team.get(tender_id, assignment.id),
+            "Stopped before this work finished.",
+            status="cancelled",
+        )
         raise
     except Exception as error:
-        failed = team.fail(team.get(tender_id, assignment.id), str(error) or "This work could not be completed.")
-        repo.event(assignment.run_id, "staff_failed", f"{staff.name} could not finish: {assignment.title}",
-                   {"assignment_id": assignment.id, "staff_id": staff.id})
+        failed = team.fail(
+            team.get(tender_id, assignment.id), str(error) or "This work could not be completed."
+        )
+        repo.event(
+            assignment.run_id,
+            "staff_failed",
+            f"{staff.name} could not finish: {assignment.title}",
+            {"assignment_id": assignment.id, "staff_id": staff.id},
+        )
         return failed
     usage = response.get("usage", {})
     current = team.get(tender_id, assignment.id)
     if output.kind == "question":
         saved = team.ask(current, output.question, usage)
-        repo.event(assignment.run_id, "staff_question", f"{staff.name} has a question about: {assignment.title}",
-                   {"assignment_id": assignment.id, "staff_id": staff.id})
+        repo.event(
+            assignment.run_id,
+            "staff_question",
+            f"{staff.name} has a question about: {assignment.title}",
+            {"assignment_id": assignment.id, "staff_id": staff.id},
+        )
         return saved
     try:
         saved_records = save_staff_records(repo, context, staff.name)
     except (KeyError, ValueError) as error:
         failed = team.fail(current, f"The staged records could not be saved: {error}")
-        repo.event(assignment.run_id, "staff_failed", f"{staff.name} could not save records for: {assignment.title}",
-                   {"assignment_id": assignment.id, "staff_id": staff.id})
+        repo.event(
+            assignment.run_id,
+            "staff_failed",
+            f"{staff.name} could not save records for: {assignment.title}",
+            {"assignment_id": assignment.id, "staff_id": staff.id},
+        )
         return failed
-    saved = team.complete(current, AssignmentResult(summary=output.summary, findings=output.findings,
-                                                    source_ids=output.source_ids, saved_records=saved_records), usage)
-    repo.event(assignment.run_id, "staff_completed", f"{staff.name} finished: {assignment.title}",
-               {"assignment_id": assignment.id, "staff_id": staff.id})
+    saved = team.complete(
+        current,
+        AssignmentResult(
+            summary=output.summary,
+            findings=output.findings,
+            source_ids=output.source_ids,
+            saved_records=saved_records,
+        ),
+        usage,
+    )
+    repo.event(
+        assignment.run_id,
+        "staff_completed",
+        f"{staff.name} finished: {assignment.title}",
+        {"assignment_id": assignment.id, "staff_id": staff.id},
+    )
     return saved
 
 
@@ -186,7 +245,11 @@ async def run_queued(repo, tender_id: str, run_id: str) -> list[Assignment]:
 
     async def one(assignment: Assignment) -> Assignment:
         connection = connections.get(assignment.connection_id)
-        lock = serial.setdefault(connection["id"], asyncio.Lock()) if is_subscription_profile(connection) else nullcontext()
+        lock = (
+            serial.setdefault(connection["id"], asyncio.Lock())
+            if is_subscription_profile(connection)
+            else nullcontext()
+        )
         async with parallel:
             async with lock:
                 return await run_assignment(repo, tender_id, assignment.id)
@@ -198,8 +261,13 @@ def outcome_view(repo, assignment: Assignment) -> dict:
     """What the Manager sees about a finished, failed or waiting assignment on its next turn."""
 
     staff = TeamService(repo).get_staff(assignment.tender_id, assignment.staff_id)
-    view = {"assignment_id": assignment.id, "staff": staff.name, "role": staff.role,
-            "title": assignment.title, "status": assignment.status}
+    view = {
+        "assignment_id": assignment.id,
+        "staff": staff.name,
+        "role": staff.role,
+        "title": assignment.title,
+        "status": assignment.status,
+    }
     if assignment.status == "waiting":
         view["question"] = assignment.question
     elif assignment.status == "completed" and assignment.result:

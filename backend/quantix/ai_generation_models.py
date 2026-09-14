@@ -1,4 +1,5 @@
 """Provider-independent generation preferences and source-backed capability views."""
+
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field

@@ -53,14 +53,25 @@ async def test_codex_turn_points_the_model_at_the_request(tmp_path, monkeypatch)
 
     monkeypatch.setattr(openai_codex, "AsyncCodex", lambda *_: Client())
     monkeypatch.setattr(codex, "codex_config", lambda *_args, **_kwargs: {})
-    context = SimpleNamespace(account_home=tmp_path, operation_id="synthetic",
-                              bridge=SimpleNamespace(serve=serve, names=[SUBMIT_TOOL]),
-                              control=SimpleNamespace(event=AsyncMock()))
+    context = SimpleNamespace(
+        account_home=tmp_path,
+        operation_id="synthetic",
+        bridge=SimpleNamespace(serve=serve, names=[SUBMIT_TOOL]),
+        control=SimpleNamespace(event=AsyncMock()),
+    )
     with pytest.raises(TurnObserved):
         await codex.execute_codex(
             {"model_id": "synthetic-model", "web_search": False, "max_output_tokens": 1024},
-            {"protocol": "codex", "billing": "subscription", "auth_type": "client_login", "_operation": "execute"},
-            {}, context, "Supplied instruction", {},
+            {
+                "protocol": "codex",
+                "billing": "subscription",
+                "auth_type": "client_login",
+                "_operation": "execute",
+            },
+            {},
+            context,
+            "Supplied instruction",
+            {},
         )
     assert SUBMIT_TOOL in observed["base"]
     assert "Do not run commands" in observed["base"]
@@ -71,9 +82,10 @@ async def test_codex_turn_points_the_model_at_the_request(tmp_path, monkeypatch)
     assert "do not describe this process" in observed["turn"]
 
 
-
 @pytest.mark.asyncio
-async def test_codex_names_the_quantix_server_so_deferred_tools_can_be_loaded(tmp_path, monkeypatch):
+async def test_codex_names_the_quantix_server_so_deferred_tools_can_be_loaded(
+    tmp_path, monkeypatch
+):
     """This account's Codex hides MCP tools behind its own tool-search step."""
 
     import openai_codex
@@ -109,15 +121,25 @@ async def test_codex_names_the_quantix_server_so_deferred_tools_can_be_loaded(tm
 
     monkeypatch.setattr(openai_codex, "AsyncCodex", lambda *_: Client())
     monkeypatch.setattr(codex, "codex_config", lambda *_args, **_kwargs: {})
-    context = SimpleNamespace(account_home=tmp_path, operation_id="synthetic",
-                              bridge=SimpleNamespace(serve=serve, names=[SUBMIT_TOOL]),
-                              control=SimpleNamespace(event=AsyncMock()))
+    context = SimpleNamespace(
+        account_home=tmp_path,
+        operation_id="synthetic",
+        bridge=SimpleNamespace(serve=serve, names=[SUBMIT_TOOL]),
+        control=SimpleNamespace(event=AsyncMock()),
+    )
     with pytest.raises(TurnObserved):
         await codex.execute_codex(
             {"model_id": "synthetic-model", "web_search": False, "max_output_tokens": 1024},
-            {"protocol": "codex", "billing": "subscription", "auth_type": "client_login",
-             "_operation": "conversation"},
-            {}, context, "Supplied instruction", {},
+            {
+                "protocol": "codex",
+                "billing": "subscription",
+                "auth_type": "client_login",
+                "_operation": "conversation",
+            },
+            {},
+            context,
+            "Supplied instruction",
+            {},
         )
     assert "quantix MCP server" in observed["base"]
     assert "tool search by name" in observed["base"]
@@ -131,11 +153,13 @@ def test_codex_reads_the_closing_message_from_the_completed_turn():
     def item(kind, text=""):
         return SimpleNamespace(root=SimpleNamespace(type=kind, text=text))
 
-    turn = SimpleNamespace(items=[
-        item("agentMessage", "First answer"),
-        item("reasoning"),
-        item("agentMessage", "  Hello, how can I help with this Tender?  "),
-    ])
+    turn = SimpleNamespace(
+        items=[
+            item("agentMessage", "First answer"),
+            item("reasoning"),
+            item("agentMessage", "  Hello, how can I help with this Tender?  "),
+        ]
+    )
     assert codex.final_message(turn) == "Hello, how can I help with this Tender?"
     assert codex.final_message(SimpleNamespace(items=[])) == ""
     assert codex.final_message(SimpleNamespace(items=None)) == ""
@@ -186,8 +210,15 @@ def test_a_usage_limit_is_reported_as_a_usage_limit_with_its_reset_time():
 def test_each_named_codex_failure_explains_what_to_do():
     from quantix_ai_worker import codex
 
-    for kind in ("contextWindowExceeded", "sessionBudgetExceeded", "unauthorized",
-                 "cyberPolicy", "badRequest", "threadRollbackFailed", "sandboxError"):
+    for kind in (
+        "contextWindowExceeded",
+        "sessionBudgetExceeded",
+        "unauthorized",
+        "cyberPolicy",
+        "badRequest",
+        "threadRollbackFailed",
+        "sandboxError",
+    ):
         explained = codex.turn_failure(_failed_turn(kind), "gpt-5.3-codex-spark")
         assert explained and explained[0].isupper()
         assert "codexErrorInfo" not in explained and kind not in explained

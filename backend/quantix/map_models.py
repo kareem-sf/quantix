@@ -70,8 +70,14 @@ class ReviewInput(MapModel):
     @model_validator(mode="after")
     def exact_scope(self):
         if self.scope_type == "artifact":
-            if not self.whole_document_reviewed or self.page is not None or self.locator is not None:
-                raise ValueError("A whole-document review needs explicit confirmation and no partial-page or passage selection.")
+            if (
+                not self.whole_document_reviewed
+                or self.page is not None
+                or self.locator is not None
+            ):
+                raise ValueError(
+                    "A whole-document review needs explicit confirmation and no partial-page or passage selection."
+                )
         elif self.whole_document_reviewed:
             raise ValueError("A partial review cannot mark the whole document reviewed.")
         elif self.scope_type == "page" and (self.page is None or self.locator is not None):

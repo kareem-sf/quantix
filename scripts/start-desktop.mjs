@@ -16,16 +16,26 @@ const startedAt = Date.now();
 const runtime = storage.runtime;
 diagnostics.record("startup_started", { phase: "desktop_launcher" });
 process.on("uncaughtExceptionMonitor", (error) => {
-  diagnostics.recordError("uncaught_exception", { phase: "desktop_launcher" }, error);
+  diagnostics.recordError(
+    "uncaught_exception",
+    { phase: "desktop_launcher" },
+    error,
+  );
 });
 let unhandledRejectionEscalated = false;
 process.on("unhandledRejection", (reason) => {
-  diagnostics.recordError("unhandled_rejection", { phase: "desktop_launcher" }, reason);
+  diagnostics.recordError(
+    "unhandled_rejection",
+    { phase: "desktop_launcher" },
+    reason,
+  );
   if (unhandledRejectionEscalated) return;
   unhandledRejectionEscalated = true;
   process.exitCode = 1;
   queueMicrotask(() => {
-    throw reason instanceof Error ? reason : new Error("Unhandled promise rejection.");
+    throw reason instanceof Error
+      ? reason
+      : new Error("Unhandled promise rejection.");
   });
 });
 process.on("exit", (code) => {
@@ -42,14 +52,25 @@ try {
   await mkdir(storage.tmp, { recursive: true });
   await mkdir(storage.cache, { recursive: true });
 } catch (error) {
-  diagnostics.recordError("startup_failed", { phase: "runtime_directory" }, error);
+  diagnostics.recordError(
+    "startup_failed",
+    { phase: "runtime_directory" },
+    error,
+  );
   throw error;
 }
 try {
   await prepareAIHost();
-  diagnostics.record("ai_host_prepared", { phase: "prepare_ai_host", outcome: "success" });
+  diagnostics.record("ai_host_prepared", {
+    phase: "prepare_ai_host",
+    outcome: "success",
+  });
 } catch (error) {
-  diagnostics.recordError("startup_failed", { phase: "prepare_ai_host" }, error);
+  diagnostics.recordError(
+    "startup_failed",
+    { phase: "prepare_ai_host" },
+    error,
+  );
   throw error;
 }
 const args = [
@@ -61,13 +82,20 @@ let reuseWorkspace;
 try {
   reuseWorkspace = await reuseRunningWorkspace(runtime);
 } catch (error) {
-  diagnostics.recordError("startup_failed", { phase: "workspace_reuse" }, error);
+  diagnostics.recordError(
+    "startup_failed",
+    { phase: "workspace_reuse" },
+    error,
+  );
   throw error;
 }
 if (reuseWorkspace) {
   const config = storage.tauriRunningConfig;
   try {
-    await writeFile(config, JSON.stringify({ build: { beforeDevCommand: "" } }));
+    await writeFile(
+      config,
+      JSON.stringify({ build: { beforeDevCommand: "" } }),
+    );
   } catch (error) {
     diagnostics.recordError("startup_failed", { phase: "tauri_config" }, error);
     throw error;
@@ -82,13 +110,26 @@ try {
     stdio: "inherit",
     windowsHide: true,
   });
-  diagnostics.record("process_spawned", { phase: "tauri_spawn", process: "tauri", outcome: "success", child_process_id: child.pid });
+  diagnostics.record("process_spawned", {
+    phase: "tauri_spawn",
+    process: "tauri",
+    outcome: "success",
+    child_process_id: child.pid,
+  });
 } catch (error) {
-  diagnostics.recordError("process_spawn_failed", { phase: "tauri_spawn", process: "tauri" }, error);
+  diagnostics.recordError(
+    "process_spawn_failed",
+    { phase: "tauri_spawn", process: "tauri" },
+    error,
+  );
   throw error;
 }
 child.on("error", (error) => {
-  diagnostics.recordError("process_error", { phase: "tauri", process: "tauri" }, error);
+  diagnostics.recordError(
+    "process_error",
+    { phase: "tauri", process: "tauri" },
+    error,
+  );
   console.error(error.message);
   process.exitCode = 1;
 });

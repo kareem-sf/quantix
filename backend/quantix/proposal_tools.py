@@ -30,7 +30,13 @@ ProposalKind = Literal[
 
 SINGLE = {"plan", "programme_proposal"}
 # Staff stage records inside their own assignment; plans, commercial and web records stay with the Manager.
-STAFF_KINDS = {"takeoff", "boq_item_proposals", "quantity_proposals", "submission_requirements", "project_map_nodes"}
+STAFF_KINDS = {
+    "takeoff",
+    "boq_item_proposals",
+    "quantity_proposals",
+    "submission_requirements",
+    "project_map_nodes",
+}
 
 RULES: dict[str, str] = {
     "takeoff": (
@@ -116,7 +122,10 @@ def _item_type(kind: str):
 def proposal_tools() -> list:
     @tool(read_only=False)
     async def propose(
-        ctx: ToolContext[OfficeContext], kind: ProposalKind, items: list[dict], replace: bool = False
+        ctx: ToolContext[OfficeContext],
+        kind: ProposalKind,
+        items: list[dict],
+        replace: bool = False,
     ) -> str:
         """Stage records for the engineer to review: a plan, takeoff lines, BOQ rows, quantities, unit rates, market prices, web findings, quote drafts, submission requirements, project map items, a programme or draft documents. Call proposal_format first for the fields and rules of a kind. Items are added to what you already staged for that kind; pass replace=true to replace that kind's list, or replace=true with no items to withdraw it. A plan or programme is always replaced. Everything staged is checked now and saved for review when your work finishes. Nothing is approved."""
         context = ctx.context
@@ -138,19 +147,30 @@ def proposal_tools() -> list:
         from .office import validate_proposals
 
         try:
-            validate_proposals(OfficeOutput(summary="Staged proposals", **proposals.model_dump()), context)
+            validate_proposals(
+                OfficeOutput(summary="Staged proposals", **proposals.model_dump()), context
+            )
         except (KeyError, ValueError) as error:
             raise ToolArgumentError(str(error.args[0] if error.args else error)) from None
         context.proposals = {key: value for key, value in staged.items() if value}
         current = staged[kind]
-        return json.dumps({"kind": kind, "staged_total": len(current) if isinstance(current, list) else int(current is not None),
-                           "detail": "Staged. It is saved for the engineer's review when your work finishes."})
+        return json.dumps(
+            {
+                "kind": kind,
+                "staged_total": len(current)
+                if isinstance(current, list)
+                else int(current is not None),
+                "detail": "Staged. It is saved for the engineer's review when your work finishes.",
+            }
+        )
 
     @tool(read_only=True, idempotent=True)
     async def proposal_format(ctx: ToolContext[OfficeContext], kind: ProposalKind) -> str:
         """Return the fields and rules for one kind of record before you call propose."""
         schema = TypeAdapter(_item_type(kind)).json_schema()
-        return json.dumps({"kind": kind, "one_item": kind in SINGLE, "rules": RULES[kind], "item_schema": schema},
-                          ensure_ascii=False)
+        return json.dumps(
+            {"kind": kind, "one_item": kind in SINGLE, "rules": RULES[kind], "item_schema": schema},
+            ensure_ascii=False,
+        )
 
     return [propose, proposal_format]

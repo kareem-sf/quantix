@@ -94,7 +94,9 @@ class WorkProductService:
 
         validate_result_value(draft.model_dump(mode="json"))
         if any(item.startswith(("http://", "https://")) for item in draft.source_refs):
-            raise ValueError("Cite Tender evidence IDs here. Web sources belong in the answer's web findings.")
+            raise ValueError(
+                "Cite Tender evidence IDs here. Web sources belong in the answer's web findings."
+            )
         for source_id in draft.source_refs:
             self.repo.get_evidence(ctx.tender_id, source_id)
         payload = draft.model_dump(mode="json")
@@ -276,9 +278,7 @@ class WorkProductService:
         if offset < 0 or not 1 <= limit <= 100:
             raise ValueError("Work-product row paging is outside the supported range.")
         rows = self.export_rows(tender_id, product_id, version)
-        return WorkProductRowPage(
-            total=len(rows), items=rows[offset : offset + limit], missing=0
-        )
+        return WorkProductRowPage(total=len(rows), items=rows[offset : offset + limit], missing=0)
 
     def _version(self, conn, version_id: str) -> WorkProductVersion:
         row = conn.execute(
@@ -313,9 +313,7 @@ class WorkProductService:
         )
 
     def _summary(self, row) -> WorkProductVersionSummary:
-        dependency = self.dependencies.status(
-            row["tender_id"], "work_product_version", row["id"]
-        )
+        dependency = self.dependencies.status(row["tender_id"], "work_product_version", row["id"])
         source_refs = json.loads(row["source_refs_json"])
         return WorkProductVersionSummary(
             id=row["id"],
