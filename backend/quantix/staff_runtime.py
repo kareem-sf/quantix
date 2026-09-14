@@ -216,7 +216,6 @@ async def run_staff_assignment(repo, tender_id: str, assignment_id: str) -> Staf
             context = build_staff_context(repo, binding.id, running.id)
             packet = _provider_packet(context)
         route = binding.route.model_dump(mode="json")
-        adoption_route = dict(route)
         connection = connections.get(route["connection_id"])
         if connection["revision"] != binding.connection_revision:
             raise ValueError(
@@ -267,10 +266,7 @@ async def run_staff_assignment(repo, tender_id: str, assignment_id: str) -> Staf
         with connections.lease(connection["id"]) as active_connection:
             routing.validate_binding(tender_id, running.route_binding_id)
             checked_component_version = require_ready(repo, active_connection, route["model_id"])
-            from .benchmark_adoption import BenchmarkAdoptionService
-            before_request = BenchmarkAdoptionService(repo).guard(
-                tender_id, running.root_run_id, adoption_route, meter.before_request
-            )
+            before_request = meter.before_request
             credentials = connections.credentials(connection["id"])
             leased_connection = {**leased_connection, **active_connection}
             leased_connection["_checked_component_version"] = checked_component_version

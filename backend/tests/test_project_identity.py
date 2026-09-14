@@ -240,7 +240,7 @@ def test_identification_runs_pin_the_manager_profile(tmp_path):
     tender = repo.create_tender()
     with repo.atomic():
         run = JobManager(repo, object())._queue(tender["id"], "identify", "Identify the project from its package.")
-    # Budget and benchmark guards read this snapshot; a missing one failed the live run.
+    # Budget guards read this snapshot; a missing one failed the live run.
     ManagerRunProfiles(repo).get(tender["id"], run["id"])
 
 

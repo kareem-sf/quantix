@@ -647,9 +647,6 @@ def create_app(home: Path, token: str) -> FastAPI:
     from .run_activity_routes import create_router as create_activity_router
 
     app.include_router(create_activity_router(repo, should_stop=lambda: reset.pending))
-    from .benchmark_adoption_routes import create_router as create_benchmark_adoption_router
-
-    app.include_router(create_benchmark_adoption_router(repo))
     from .agent_definition_routes import create_router as create_agent_definition_router
     from .sandbox_routes import create_router as create_sandbox_router
 

@@ -550,7 +550,6 @@ async def _run(repo, tender_id, run_id, instruction, task=None):
                          staff_outcomes=staff_outcomes,
                          public_search_receipts=public_search_outcomes)
         for index, route in enumerate(routes):
-            adoption_route = dict(route)
             policy = routing.get(tender_id)
             with connections.lease(route["connection_id"]) as connection:
                 # Recheck after leasing: a profile edited between route lookup
@@ -586,10 +585,7 @@ async def _run(repo, tender_id, run_id, instruction, task=None):
                             "connection_settings": connection["settings"], "model_snapshot": meter.model,
                             "role": (assigned or {}).get("role", "Tender Manager"), "fallback": index > 0})
                 try:
-                    from .benchmark_adoption import BenchmarkAdoptionService
-                    before_request = BenchmarkAdoptionService(repo).guard(
-                        tender_id, run_id, adoption_route, meter.before_request
-                    )
+                    before_request = meter.before_request
                     private_credentials = connections.credentials(connection["id"])
                     runner = execute_api
                     response = await runner(route, connection, private_credentials, context,

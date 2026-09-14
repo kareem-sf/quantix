@@ -30,7 +30,6 @@ import { Backups } from "./Backups";
 import { MailSettings } from "./MailSettings";
 import { Knowledge } from "./Knowledge";
 import { AIConnections } from "./AIConnections";
-import { BenchmarkAdoptionReviewPanel } from "./BenchmarkAdoptionReviewPanel";
 import { Diagnostics } from "./Diagnostics";
 import { FactoryReset } from "./FactoryReset";
 import { ManagerPersonality } from "./ManagerPersonality";
@@ -132,13 +131,10 @@ function SettingsLayout({
         {active !== "preferences" && active !== "diagnostics" ? (
           <div className="legacy-screen">
             {active === "accounts" ? (
-              <div className="space-y-6">
-                <AIConnections
-                  connectionId={connectionId}
-                  onConnectionClose={onConnectionClose}
-                />
-                <BenchmarkAdoptionReviewPanel />
-              </div>
+              <AIConnections
+                connectionId={connectionId}
+                onConnectionClose={onConnectionClose}
+              />
             ) : null}
             {active === "manager" ? <ManagerPersonality /> : null}
             {active === "agents" ? <AgentLibrary /> : null}

@@ -176,7 +176,6 @@ async def run_conversation(repo: "Repository", tender_id: str, run_id: str, inst
     )
     plan_id = approved["id"] if approved else None
     route = policy.routes_for(tender_id, plan_id=plan_id)[:1][0]
-    adoption_route = dict(route)
     context = OfficeContext(repo, tender_id, run_id)
     with connections.lease(route["connection_id"]) as connection:
         policy.routes_for(tender_id, plan_id=plan_id)
@@ -186,10 +185,7 @@ async def run_conversation(repo: "Repository", tender_id: str, run_id: str, inst
         route = classification_route(route, connection, model)
         checked_component = require_ready(repo, connection, route["model_id"])
         meter = BudgetMeter(policy, tender_id, run_id, route)
-        from .benchmark_adoption import BenchmarkAdoptionService
-        before_request = BenchmarkAdoptionService(repo).guard(
-            tender_id, run_id, adoption_route, meter.before_request
-        )
+        before_request = meter.before_request
         with repo.db.connect() as conn:
             _, _, used_requests = policy._totals(conn, tender_id, run_id)
         # A direct API returns the structured reply in a single request. A local

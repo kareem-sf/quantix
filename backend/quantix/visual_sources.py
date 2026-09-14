@@ -12,7 +12,6 @@ import pypdfium2
 from .db import dump, new_id
 from .documents import PDFIUM_LOCK
 
-
 # Tool results are capped at 1 MB of JSON; base64 adds a third, so images stay well below.
 MAX_IMAGE_BYTES = 600_000
 

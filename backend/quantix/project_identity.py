@@ -10,9 +10,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from .clipped_fields import OptionalText, Text, TextList
 from .office_tools import redact_text, safe_text

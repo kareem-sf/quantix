@@ -19,7 +19,7 @@ import json
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 

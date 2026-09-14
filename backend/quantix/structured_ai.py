@@ -28,7 +28,6 @@ async def ask_structured(
     from .ai_execution import execute_api
     from .ai_policy import AIPolicyService, BudgetMeter
     from .ai_readiness import require_ready
-    from .benchmark_adoption import BenchmarkAdoptionService
     from .conversation import classification_route
 
     if repo.get_run(run_id)["tender_id"] != tender_id:
@@ -36,7 +35,6 @@ async def ask_structured(
     policy = AIPolicyService(repo)
     connections = AIConnectionService(repo)
     route = policy.routes_for(tender_id)[:1][0]
-    adoption_route = dict(route)
     context = OfficeContext(repo, tender_id, run_id)
     with connections.lease(route["connection_id"]) as connection:
         policy.routes_for(tender_id)
@@ -47,7 +45,7 @@ async def ask_structured(
         route = classification_route(route, connection, model) | {"max_output_tokens": approved_output}
         checked_component = require_ready(repo, connection, route["model_id"])
         meter = BudgetMeter(policy, tender_id, run_id, route)
-        before_request = BenchmarkAdoptionService(repo).guard(tender_id, run_id, adoption_route, meter.before_request)
+        before_request = meter.before_request
         with repo.db.connect() as conn:
             _, _, used_requests = policy._totals(conn, tender_id, run_id)
         local_client = connection["protocol"] in {"codex", "grok_build"}

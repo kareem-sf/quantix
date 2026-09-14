@@ -37,8 +37,8 @@ class JobManager:
         self.cancelled: dict[str, threading.Event] = {}
         self.lanes: dict[str, asyncio.Lock] = {}
         self.closing = False
-        # Analyzing tender package runs automatically after every import. Controlled
-        # benchmarks switch it off so their measured AI work stays isolated.
+        # Analyzing tender package runs automatically after every import. Tests that
+        # measure a single job switch it off.
         self.auto_analyze = True
         self.pending = PendingInstructionService(repo)
         self.manager_profiles = ManagerRunProfiles(repo)
