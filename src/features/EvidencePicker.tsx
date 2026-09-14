@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { tenderPath, useApi, type Schema } from "../api";
 import { ErrorNotice, Loading } from "../components/common";
+import { searchHits } from "./DocumentSearch";
 
 export function EvidencePicker({
   tenderId,
@@ -20,7 +21,7 @@ export function EvidencePicker({
   const results = useQuery({
     queryKey: [tenderPath(tenderId), "evidence-picker", deferred],
     queryFn: () =>
-      api.get<Schema<"Evidence">[]>(
+      api.get<Schema<"RetrievalResponse">>(
         `${tenderPath(tenderId)}/search?q=${encodeURIComponent(deferred)}`,
       ),
     enabled: !!deferred,
@@ -60,29 +61,31 @@ export function EvidencePicker({
       ) : null}
       {deferred && results.data ? (
         <div className="evidence-options">
-          {results.data.length === 0 ? (
+          {searchHits(results.data).length === 0 ? (
             <p className="muted">No matching source text.</p>
           ) : (
-            results.data.slice(0, 8).map((source) => (
-              <button
-                type="button"
-                disabled={selected.includes(source.id)}
-                key={source.id}
-                onClick={() => {
-                  onChange([...selected, source.id]);
-                  setLabels((current) => ({
-                    ...current,
-                    [source.id]: `${source.artifact_name} · ${source.locator}`,
-                  }));
-                  setQuery("");
-                }}
-              >
-                <strong>
-                  {source.artifact_name} · {source.locator}
-                </strong>
-                <p>{source.text.slice(0, 240)}</p>
-              </button>
-            ))
+            searchHits(results.data)
+              .slice(0, 8)
+              .map((source) => (
+                <button
+                  type="button"
+                  disabled={selected.includes(source.id)}
+                  key={source.id}
+                  onClick={() => {
+                    onChange([...selected, source.id]);
+                    setLabels((current) => ({
+                      ...current,
+                      [source.id]: `${source.artifact_name} · ${source.locator}`,
+                    }));
+                    setQuery("");
+                  }}
+                >
+                  <strong>
+                    {source.artifact_name} · {source.locator}
+                  </strong>
+                  <p>{source.text.slice(0, 240)}</p>
+                </button>
+              ))
           )}
         </div>
       ) : null}

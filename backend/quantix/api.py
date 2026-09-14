@@ -45,6 +45,8 @@ from .plan_review_routes import create_router as create_plan_review_router
 from .repository import Repository
 from .requirement_routes import create_router as create_requirement_router
 from .reset_routes import create_router as create_reset_router
+from .retrieval_models import RetrievalResponse
+from .retrieval_service import retrieve
 from .semantic import SemanticService
 from .semantic_models import SemanticStatus
 from .settings import SettingsService
@@ -88,25 +90,37 @@ def create_app(home: Path, token: str) -> FastAPI:
         blockers = []
         if jobs and any(not task.done() for task in jobs.tasks.values()):
             blockers.append("Finish or stop the current Tender work before resetting Quantix.")
+        if jobs and jobs.indexer.busy():
+            blockers.append("Finish or stop meaning-search preparation before resetting Quantix.")
         if ai_setup and any(not task.done() for task in ai_setup.tasks.values()):
             blockers.append("Finish or stop AI account setup before resetting Quantix.")
         from .ai_connections import AIConnectionService
+
         with AIConnectionService._states_lock:
             state = AIConnectionService._states.get(str(home))
             if state:
                 with state.lock:
                     if state.leases or state.exclusive:
-                        blockers.append("An AI account is still in use. Finish or stop its work before resetting Quantix.")
+                        blockers.append(
+                            "An AI account is still in use. Finish or stop its work before resetting Quantix."
+                        )
         worker = getattr(repo, "_ai_worker_client", None)
         if worker and worker.executions:
             blockers.append("Finish or stop current AI work before resetting Quantix.")
-        if code_runtime and (code_runtime.active_runs or code_runtime.operations or code_runtime.lock.locked()):
-            blockers.append("Finish or stop calculations and local code setup before resetting Quantix.")
+        if code_runtime and (
+            code_runtime.active_runs or code_runtime.operations or code_runtime.lock.locked()
+        ):
+            blockers.append(
+                "Finish or stop calculations and local code setup before resetting Quantix."
+            )
         return blockers
 
     async def close_clients():
         if jobs:
             await jobs.close()
+        from .embedding_runtime import release_runtimes
+
+        release_runtimes(home)
         if ai_setup:
             await ai_setup.close()
         if runtimes:
@@ -136,6 +150,8 @@ def create_app(home: Path, token: str) -> FastAPI:
                 repair_orphaned_accounts(repo)
             except Exception as error:  # A repair must never block startup.
                 diagnostics.record_exception("ai_policy_repair_failed", error)
+            jobs.indexer.bind_loop(asyncio.get_running_loop())
+            jobs.indexer.recover()
         yield
         await close_clients()
         diagnostics.close()
@@ -182,10 +198,15 @@ def create_app(home: Path, token: str) -> FastAPI:
     async def invalid_request(request, error):
         # Validation errors can otherwise echo write-only credentials in their
         # raw input/context, including a whole rejected connection body.
-        return JSONResponse({"detail": [
-            {"loc": item["loc"], "msg": item["msg"], "type": item["type"]}
-            for item in error.errors()
-        ]}, status_code=422)
+        return JSONResponse(
+            {
+                "detail": [
+                    {"loc": item["loc"], "msg": item["msg"], "type": item["type"]}
+                    for item in error.errors()
+                ]
+            },
+            status_code=422,
+        )
 
     @app.get("/healthz")
     def healthz():
@@ -202,8 +223,14 @@ def create_app(home: Path, token: str) -> FastAPI:
     @app.get("/api/health", response_model=m.Health)
     def health():
         if reset.pending:
-            return m.Health(version=__version__, provider_ready=False, model="", home=str(home),
-                reset_pending=True, capabilities=["factory_reset"] if reset.supported else [])
+            return m.Health(
+                version=__version__,
+                provider_ready=False,
+                model="",
+                home=str(home),
+                reset_pending=True,
+                capabilities=["factory_reset"] if reset.supported else [],
+            )
         public = settings.public()
         return m.Health(
             version=__version__,
@@ -213,7 +240,8 @@ def create_app(home: Path, token: str) -> FastAPI:
             workspace_revision=2,
             office_revision=2,
             reset_pending=False,
-            capabilities=(["factory_reset"] if reset.supported else []) + [
+            capabilities=(["factory_reset"] if reset.supported else [])
+            + [
                 "run_activity",
                 "manager_profile",
                 "dynamic_office",
@@ -240,7 +268,8 @@ def create_app(home: Path, token: str) -> FastAPI:
                 "tender_profile",
                 "company_library",
                 "voice_input",
-            ] + engine_capabilities(),
+            ]
+            + engine_capabilities(),
         )
 
     @app.get("/api/settings", response_model=m.Settings)
@@ -301,7 +330,9 @@ def create_app(home: Path, token: str) -> FastAPI:
         sheet: str | None = Query(None, max_length=300),
         cell_range: str | None = Query(None, max_length=80),
     ):
-        return repo.artifact_evidence(tender_id, artifact_id, offset, limit, sheet=sheet, cell_range=cell_range)
+        return repo.artifact_evidence(
+            tender_id, artifact_id, offset, limit, sheet=sheet, cell_range=cell_range
+        )
 
     @app.get("/api/tenders/{tender_id}/artifacts/{artifact_id}/preview")
     async def preview(tender_id: str, artifact_id: str, page: int = Query(1, ge=1)):
@@ -320,34 +351,41 @@ def create_app(home: Path, token: str) -> FastAPI:
     def evidence(tender_id: str, evidence_id: str):
         return repo.get_evidence(tender_id, evidence_id)
 
-    @app.get("/api/tenders/{tender_id}/search", response_model=list[m.Evidence])
+    @app.get("/api/tenders/{tender_id}/search", response_model=RetrievalResponse)
     def search(
         tender_id: str,
         q: str = Query("", max_length=1000),
-        mode: Literal["words", "meaning", "combined"] = "words",
+        mode: Literal["auto", "words", "meaning", "combined"] = "auto",
         area: str | None = Query(None, max_length=300),
         status: str | None = Query(None, max_length=50),
+        document_kind: str | None = Query(None, max_length=50),
+        limit: int = Query(20, ge=1, le=50),
+        cursor: str | None = Query(None, max_length=2000),
     ):
-        if not q.strip():
-            return []
-        if mode == "words":
-            return repo.search(tender_id, q, area=area, status=status)
-        meaning = semantic.search(tender_id, q, area=area, status=status, collapse_duplicates=True)
-        if mode == "meaning":
-            return meaning
-        from .retrieval_service import hybrid_search
-
-        hits, _info = hybrid_search(repo, tender_id, q, 20, semantic=semantic, area=area, status=status)
-        public = set(m.Evidence.model_fields)
-        return [{key: value for key, value in hit.items() if key in public} for hit in hits]
+        return retrieve(
+            repo,
+            tender_id,
+            q,
+            mode=mode,
+            limit=limit,
+            cursor=cursor,
+            semantic=semantic,
+            area=area,
+            status=status,
+            document_kind=document_kind,
+        )
 
     @app.get("/api/tenders/{tender_id}/search-status", response_model=SemanticStatus)
     def search_status(tender_id: str):
-        return semantic.status(tender_id)
+        return jobs.indexer.status(tender_id)
 
-    @app.post("/api/tenders/{tender_id}/search-index", response_model=m.Run)
+    @app.post("/api/tenders/{tender_id}/search-index", response_model=SemanticStatus)
     async def prepare_search(tender_id: str):
         return jobs.start_index(tender_id)
+
+    @app.post("/api/tenders/{tender_id}/search-index/cancel", response_model=SemanticStatus)
+    async def cancel_search_index(tender_id: str):
+        return jobs.cancel_index(tender_id)
 
     @app.get(
         "/api/tenders/{tender_id}/messages",
@@ -448,21 +486,33 @@ def create_app(home: Path, token: str) -> FastAPI:
     def stop_tender_work(tender_id: str):
         return jobs.stop_tender_work(tender_id)
 
-    @app.get("/api/tenders/{tender_id}/programme-proposals", response_model=list[ProgrammeProposalRecord])
+    @app.get(
+        "/api/tenders/{tender_id}/programme-proposals", response_model=list[ProgrammeProposalRecord]
+    )
     def programme_proposals(tender_id: str):
         proposals = []
         for run in repo.list_runs(tender_id):
             if run["status"] != "completed" or not run["result"].get("programme_proposal"):
                 continue
             programme = ConstructionProgramme.model_validate(run["result"]["programme_proposal"])
-            source_ids = sorted({sid for activity in programme.activities for sid in activity.source_ids})
+            source_ids = sorted(
+                {sid for activity in programme.activities for sid in activity.source_ids}
+            )
             current = True
             with repo.db.connect() as conn:
                 try:
                     repo._check_sources(conn, tender_id, source_ids)
                 except (ValueError, KeyError):
                     current = False
-            proposals.append({"run_id": run["id"], "created_at": run["updated_at"], "source_ids": source_ids, "is_current": current, "programme": programme.model_dump(mode="json")})
+            proposals.append(
+                {
+                    "run_id": run["id"],
+                    "created_at": run["updated_at"],
+                    "source_ids": source_ids,
+                    "is_current": current,
+                    "programme": programme.model_dump(mode="json"),
+                }
+            )
         return proposals
 
     @app.post("/api/tenders/{tender_id}/tasks/{task_id}/run", response_model=m.Run)
@@ -535,12 +585,19 @@ def create_app(home: Path, token: str) -> FastAPI:
                 # provider messages, URLs, paths, prompts or request bodies.
                 route = route_template(request.scope)
                 record_exception(
-                    "api_unexpected_error", error, route=route, method=request.method,
-                    phase="request", outcome="error", error_reference=request_id,
+                    "api_unexpected_error",
+                    error,
+                    route=route,
+                    method=request.method,
+                    phase="request",
+                    outcome="error",
+                    error_reference=request_id,
                 )
                 response = JSONResponse(
-                    {"detail": "Quantix could not complete that request. Use the request reference when asking for support.",
-                     "error_reference": request_id},
+                    {
+                        "detail": "Quantix could not complete that request. Use the request reference when asking for support.",
+                        "error_reference": request_id,
+                    },
                     status_code=500,
                 )
                 origin = request.headers.get("origin")
@@ -554,10 +611,13 @@ def create_app(home: Path, token: str) -> FastAPI:
             if request.method != "OPTIONS":
                 response.headers.setdefault("Cache-Control", "no-store")
             record(
-                "api_request", route=route_template(request.scope), method=request.method,
+                "api_request",
+                route=route_template(request.scope),
+                method=request.method,
                 http_status=response.status_code,
                 duration_ms=int((time.monotonic() - started) * 1000),
-                phase="request", outcome="success" if response.status_code < 400 else "handled_error",
+                phase="request",
+                outcome="success" if response.status_code < 400 else "handled_error",
                 error_reference=request_id if response.status_code >= 400 else None,
             )
             return response
@@ -619,13 +679,14 @@ def create_app(home: Path, token: str) -> FastAPI:
     # infer the request model from the handler signature. Keep the generated
     # OpenAPI component sourced from the same strict Pydantic contract.
     from .diagnostic_models import DiagnosticEventInput
+
     _openapi = app.openapi
 
     def openapi_with_diagnostics():
         schema = _openapi()
-        schema.setdefault("components", {}).setdefault("schemas", {})[
-            "DiagnosticEventInput"
-        ] = DiagnosticEventInput.model_json_schema(ref_template="#/components/schemas/{model}")
+        schema.setdefault("components", {}).setdefault("schemas", {})["DiagnosticEventInput"] = (
+            DiagnosticEventInput.model_json_schema(ref_template="#/components/schemas/{model}")
+        )
         return schema
 
     app.openapi = openapi_with_diagnostics

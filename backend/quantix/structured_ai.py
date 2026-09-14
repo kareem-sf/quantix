@@ -41,7 +41,10 @@ async def ask_structured(
     with connections.lease(route["connection_id"]) as connection:
         policy.routes_for(tender_id)
         model = next((m for m in connections.models(connection["id"]) if m["model_id"] == route["model_id"]), {})
-        route = classification_route(route, connection, model)
+        approved_output = route["max_output_tokens"]
+        # The lightest thinking level, but not the routing pass's short reply cap:
+        # a batch of document briefs needs the Tender's full approved output limit.
+        route = classification_route(route, connection, model) | {"max_output_tokens": approved_output}
         checked_component = require_ready(repo, connection, route["model_id"])
         meter = BudgetMeter(policy, tender_id, run_id, route)
         before_request = BenchmarkAdoptionService(repo).guard(tender_id, run_id, adoption_route, meter.before_request)
@@ -61,10 +64,16 @@ async def ask_structured(
             },
         }
         credentials = connections.credentials(connection["id"])
+        # The prepared AI worker accepts only execute, check and conversation. A
+        # no-tools structured request is an execute with the submit tool alone;
+        # the analysis step name stays in the run's own events.
+        from .ai_connections import is_subscription_profile
+
+        worker_operation = "execute" if is_subscription_profile(connection) else operation
         try:
             response = await execute_api(
                 route, bounded, credentials, context, prompt, output_type,
-                definitions=[], operation=operation, system_instructions="",
+                definitions=[], operation=worker_operation, system_instructions="",
                 before_request=before_request, on_response=meter.on_response,
             )
             output = output_type.model_validate(response["output"])

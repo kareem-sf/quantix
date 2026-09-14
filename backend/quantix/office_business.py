@@ -33,9 +33,7 @@ def _clean(value, *, _source_container=False):
         return {
             key: _clean(
                 item,
-                _source_container=(
-                    _source_container and key == "text"
-                )
+                _source_container=(_source_container and key == "text")
                 or key in {"source", "sources"},
             )
             for key, item in value.items()
@@ -63,7 +61,9 @@ def _record_source_ids(value):
     def collect(item):
         if isinstance(item, dict):
             for key, child in item.items():
-                if key in {"source_ids", "source_ids_read", "supporting_source_ids"} and isinstance(child, list):
+                if key in {"source_ids", "source_ids_read", "supporting_source_ids"} and isinstance(
+                    child, list
+                ):
                     found.extend(source_id for source_id in child if isinstance(source_id, str))
                 elif key == "source_id" and isinstance(child, str):
                     found.append(child)
@@ -85,7 +85,11 @@ def _record_artifact_ids(value):
             for key, child in item.items():
                 if key == "artifact_id" and isinstance(child, str):
                     found.append(child)
-                elif key in {"artifact_ids", "attachment_ids", "related_artifact_ids"} and isinstance(child, list):
+                elif key in {
+                    "artifact_ids",
+                    "attachment_ids",
+                    "related_artifact_ids",
+                } and isinstance(child, list):
                     found.extend(identifier for identifier in child if isinstance(identifier, str))
                 else:
                     collect(child)
@@ -104,10 +108,10 @@ def _record_allowed(context, row, record_type=None):
         return False
     source_ids = _record_source_ids(row)
     artifact_ids = _record_artifact_ids(row)
-    return bool(source_ids or artifact_ids) and all(
-        context.evidence_allowed(source_id) for source_id in source_ids
-    ) and all(
-        _artifact_allowed(context, artifact_id) for artifact_id in artifact_ids
+    return (
+        bool(source_ids or artifact_ids)
+        and all(context.evidence_allowed(source_id) for source_id in source_ids)
+        and all(_artifact_allowed(context, artifact_id) for artifact_id in artifact_ids)
     )
 
 
@@ -228,13 +232,19 @@ def business_tools():
                         record(row)
                         for row in conn.execute(
                             f"SELECT * FROM {table} WHERE tender_id=? ORDER BY rowid LIMIT ? OFFSET ?",
-                            (ctx.context.tender_id, min(batch_size, initial_total - raw_offset), raw_offset),
+                            (
+                                ctx.context.tender_id,
+                                min(batch_size, initial_total - raw_offset),
+                                raw_offset,
+                            ),
                         )
                     ]
                     raw_offset += len(batch)
                     if not batch:
                         break
-                    rows.extend(row for row in batch if _record_allowed(ctx.context, row, record_type))
+                    rows.extend(
+                        row for row in batch if _record_allowed(ctx.context, row, record_type)
+                    )
             else:
                 rows = [
                     record(row)
@@ -348,9 +358,7 @@ def business_tools():
         )
 
     @scoped_tool
-    async def inspect_estimate(
-        ctx: ToolContext[OfficeContext], offset: int, limit: int
-    ) -> str:
+    async def inspect_estimate(ctx: ToolContext[OfficeContext], offset: int, limit: int) -> str:
         """Read current BOQ quantities, installed rates and incomplete pricing state. Rate proposals cannot alter these values."""
         ctx.context.require_tool("inspect_estimate")
         ctx.context.ensure_scope_current()
@@ -359,11 +367,7 @@ def business_tools():
         view = estimates.view(ctx.context.tender_id)
         all_items = view["items"]
         if ctx.context.is_staff:
-            all_items = [
-                item
-                for item in all_items
-                if _record_allowed(ctx.context, item)
-            ]
+            all_items = [item for item in all_items if _record_allowed(ctx.context, item)]
         selected = []
         for item in all_items[offset : offset + limit]:
             basis = estimates.rate_basis(ctx.context.tender_id, item["id"])
@@ -372,9 +376,7 @@ def business_tools():
                 {
                     "item": item,
                     "basis_fingerprint": basis["fingerprint"],
-                    "source": ctx.context.source(
-                        item["source_id"], tool_id="inspect_estimate"
-                    ),
+                    "source": ctx.context.source(item["source_id"], tool_id="inspect_estimate"),
                 }
             )
         if ctx.context.is_staff:
@@ -461,26 +463,28 @@ def business_tools():
         )
         selected = []
         for row in visible_rows:
-            selected.append({
-                **{
-                    key: row.get(key)
-                    for key in (
-                        "id",
-                        "origin",
-                        "sender",
-                        "received_at",
-                        "date_header",
-                        "date_basis",
-                        "subject",
-                        "warnings",
-                    )
-                },
-                "sources": [
-                    ctx.context.source(source_id, tool_id="read_quote_replies")
-                    for source_id in row["source_ids"][:2]
-                ],
-                "remaining_source_ids": row["source_ids"][2:],
-            })
+            selected.append(
+                {
+                    **{
+                        key: row.get(key)
+                        for key in (
+                            "id",
+                            "origin",
+                            "sender",
+                            "received_at",
+                            "date_header",
+                            "date_basis",
+                            "subject",
+                            "warnings",
+                        )
+                    },
+                    "sources": [
+                        ctx.context.source(source_id, tool_id="read_quote_replies")
+                        for source_id in row["source_ids"][:2]
+                    ],
+                    "remaining_source_ids": row["source_ids"][2:],
+                }
+            )
         result = {
             "replies": selected,
             "next_offset": offset + limit if has_more else None,
@@ -498,6 +502,7 @@ def business_tools():
         """Search the local semantic index. Unavailable indexes return explicit status; this tool never substitutes keyword search."""
         ctx.context.require_tool("search_semantic_sources")
         ctx.context.ensure_scope_current()
+        from .retrieval_service import retrieve
         from .semantic import SemanticService
         from .semantic_models import SemanticUnavailable
 
@@ -506,9 +511,17 @@ def business_tools():
         semantic_service = ctx.context.semantic_service
         if semantic_service is None:
             semantic_service = SemanticService(ctx.context.repo)
+        artifact_ids = list(ctx.context.reviewed_artifacts) if ctx.context.is_staff else None
         try:
-            hits = await asyncio.to_thread(
-                semantic_service.search, ctx.context.tender_id, query, limit
+            response = await asyncio.to_thread(
+                retrieve,
+                ctx.context.repo,
+                ctx.context.tender_id,
+                query,
+                mode="meaning",
+                limit=limit,
+                semantic=semantic_service,
+                artifact_ids=artifact_ids,
             )
         except SemanticUnavailable as exc:
             result = {
@@ -521,30 +534,41 @@ def business_tools():
                 result["scope_filter_applied"] = True
             return json.dumps(result)
         sources = []
-        filtered = False
-        for hit in hits:
-            if ctx.context.is_staff and not ctx.context.evidence_allowed(hit["id"]):
-                filtered = True
-                continue
-            match = hit["metadata"]["semantic_match"]
+        for hit in response.hits:
+            match = (hit.metadata or {}).get("semantic_match") or {}
+            start = hit.spans[0].start if hit.spans else int(match.get("start") or 0)
+            end = hit.spans[0].end if hit.spans else int(match.get("end") or start)
             source = ctx.context.source(
-                hit["id"],
-                match["start"],
-                min(12000, max(1, match["end"] - match["start"])),
+                hit.id,
+                start,
+                min(12000, max(1, end - start)),
                 tool_id="search_semantic_sources",
             )
-            source["score"] = hit["score"]
-            source["semantic_match"] = {"start": match["start"], "end": match["end"]}
+            source["score"] = hit.score
+            source["found_by"] = hit.found_by
+            source["semantic_match"] = {
+                "start": start,
+                "end": end,
+                "structure": match.get("structure"),
+                "language": match.get("language"),
+                "source_version": hit.source_version,
+            }
             sources.append(source)
         if ctx.context.semantic_service is None:
             ctx.context.set_semantic_service(semantic_service)
-        result = {"available": True, "status": "ready", "sources": sources}
+        result = {
+            "available": True,
+            "status": "ready",
+            "sources": sources,
+            "actual_mode": response.actual_mode,
+            "limitations": response.limitations,
+        }
         if ctx.context.is_staff:
             result.update(
                 {
-                    "partial_results": filtered,
+                    "partial_results": response.coverage.truncated,
                     "scope_filter_applied": True,
-                    "limitation": "The semantic index ranks before assignment-scope filtering; fewer results may be shown.",
+                    "limitation": None,
                 }
             )
         return json.dumps(result, ensure_ascii=False)

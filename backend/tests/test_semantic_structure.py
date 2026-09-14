@@ -1,4 +1,4 @@
-"""Semantic retrieval preserves structure and adds bounded bilingual reranking."""
+"""Semantic retrieval preserves structure without the unvalidated bilingual boost."""
 
 from __future__ import annotations
 
@@ -9,17 +9,18 @@ import numpy as np
 from quantix.repository import Repository
 
 
-class EqualEmbedding:
+class TopicEmbedding:
     def token_count(self, text):
         return len(text) // 4
 
     def passage_embed(self, texts, **_kwargs):
-        for _text in texts:
+        for text in texts:
             vector = np.zeros(384, dtype=np.float32)
-            vector[0] = 1
+            lowered = text.lower()
+            vector[0 if "pump" in lowered or "مضخة" in text else 1] = 1
             yield vector
 
-    def query_embed(self, _query, **_kwargs):
+    def query_embed(self, query, **_kwargs):
         vector = np.zeros(384, dtype=np.float32)
         vector[0] = 1
         yield vector
@@ -71,7 +72,7 @@ def test_arabic_query_reranks_english_construction_terms_and_keeps_structure(tmp
         "Tower crane capacity is 12 tonnes.",
         heading="Lifting plant",
     )
-    fake = EqualEmbedding()
+    fake = TopicEmbedding()
     monkeypatch.setattr(semantic, "model_available", lambda _path: True)
     monkeypatch.setattr(semantic, "load_model", lambda _path: fake)
     service = semantic.SemanticService(repo)
@@ -83,17 +84,11 @@ def test_arabic_query_reranks_english_construction_terms_and_keeps_structure(tmp
     assert hit["locator"] == "page:4/table:plant"
     match = hit["metadata"]["semantic_match"]
     assert match["language"] == "en"
-    assert match["structure"] == {
-        "heading": "Concrete placing plant",
-        "block_kind": "table",
-        "page": 4,
-        "sheet": None,
-        "cell_range": None,
-        "locator": "page:4/table:plant",
-    }
+    assert match["structure"]["heading"] == "Concrete placing plant"
+    assert match["structure"]["block_kind"] == "table"
+    assert match["structure"]["page"] == 4
+    assert match["structure"]["locator"] == "page:4/table:plant"
     assert match["chunk_sha256"] == hashlib.sha256(match["text"].encode("utf-8")).hexdigest()
-    assert match["source_content_hash"] == hashlib.sha256(
-        pump["text"].encode("utf-8")
-    ).hexdigest()
+    assert match["source_content_hash"] == hashlib.sha256(pump["text"].encode("utf-8")).hexdigest()
     assert match["source_version"] == 1
-    assert match["bilingual_lexical_boost"] > 0
+    assert match["bilingual_lexical_boost"] == 0

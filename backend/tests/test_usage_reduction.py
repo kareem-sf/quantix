@@ -297,3 +297,14 @@ def test_codex_usage_keeps_its_own_token_counts():
     assert usage["output_tokens"] == 450
     assert usage["reasoning_tokens"] == 300
     assert usage["usage_complete"] is True
+
+
+def test_a_passage_is_resent_at_most_once_and_oversized_searches_are_capped(tmp_path):
+    _repo, context, _artifact, evidence = _reading_workspace(tmp_path, "The bid bond is two percent. " * 50)
+    first = _call(context, "read_source", {"source_id": evidence["id"]}, "r1")
+    again = _call(context, "read_source", {"source_id": evidence["id"], "reread": True}, "r2")
+    assert again["text"] == first["text"]
+    third = _call(context, "read_source", {"source_id": evidence["id"], "reread": True, "limit": 3000}, "r3")
+    assert third["already_returned"] is True and "already sent again" in third["note"]
+    hits = _call(context, "search_sources", {"query": "bid bond", "limit": 80, "exact": True}, "s1")
+    assert len(hits) <= 20

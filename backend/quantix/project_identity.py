@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .clipped_fields import OptionalText, Text, TextList
 from .office_tools import redact_text, safe_text
 
 if TYPE_CHECKING:
@@ -37,26 +38,22 @@ class ProjectIdentity(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(
-        max_length=120,
+    name: Text(
+        120,
         description="The project's own short name as the documents state it, without tender "
         "numbers or words like 'Tender documents'. If no document names the project, a short "
         "descriptive name from the package folder name.",
     )
-    client: str | None = Field(default=None, max_length=200, description="Employer or client organisation.")
-    location: str | None = Field(default=None, max_length=200, description="Site, city or region.")
-    country: str | None = Field(default=None, max_length=80)
-    reference: str | None = Field(default=None, max_length=120, description="Tender or contract reference number.")
-    contract_type: str | None = Field(default=None, max_length=120, description="For example FIDIC Red Book, lump sum.")
-    currencies: list[Annotated[str, Field(max_length=8)]] = Field(
-        default_factory=list, max_length=5, description="ISO 4217 codes the documents require for pricing."
-    )
-    submission_deadline: str | None = Field(default=None, max_length=120, description="As written, with time zone if stated.")
-    measurement_method: str | None = Field(default=None, max_length=120, description="For example POMI, CESMM4, NRM2.")
-    summary: str = Field(default="", max_length=400, description="One sentence describing the works.")
-    sources: list[Annotated[str, Field(max_length=300)]] = Field(
-        default_factory=list, max_length=8, description="Relative paths of the documents that state these facts."
-    )
+    client: OptionalText(200, description="Employer or client organisation.")
+    location: OptionalText(200, description="Site, city or region.")
+    country: OptionalText(80)
+    reference: OptionalText(120, description="Tender or contract reference number.")
+    contract_type: OptionalText(120, description="For example FIDIC Red Book, lump sum.")
+    currencies: TextList(8, 5, description="ISO 4217 codes the documents require for pricing.")
+    submission_deadline: OptionalText(120, description="As written, with time zone if stated.")
+    measurement_method: OptionalText(120, description="For example POMI, CESMM4, NRM2.")
+    summary: Text(400, default="", description="One sentence describing the works.")
+    sources: TextList(300, 8, description="Relative paths of the documents that state these facts.")
 
 
 @dataclass(frozen=True)

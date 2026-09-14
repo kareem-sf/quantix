@@ -13,7 +13,7 @@ from .company_library_models import CompanyAsset, CompanyAssetDraft
 from .documents import MAX_PDF_PAGES
 from .execution_context import engineer_identity
 from .extraction_adapters import ExtractionService
-from .extraction_models import ReprocessRequest
+from .extraction_models import ReprocessRequest, ReprocessResult
 from .office_reviews import (
     OfficeReviewService,
     ReviewContribution,
@@ -178,7 +178,7 @@ def create_router(repo) -> APIRouter:
     def propose_asset(command: CompanyAssetDraft):
         return _call(lambda: library.propose(engineer_identity(None), command))
 
-    @router.post("/tenders/{tender_id}/extractions/reprocess")
+    @router.post("/tenders/{tender_id}/extractions/reprocess", response_model=ReprocessResult)
     def reprocess_extraction(tender_id: str, command: ReprocessRequest):
         if not re.fullmatch(r"[0-9a-f]{64}", command.original_hash):
             raise HTTPException(status_code=409, detail="The original hash must be a SHA-256 hex identity.")
@@ -205,6 +205,7 @@ def create_router(repo) -> APIRouter:
                 command.original_hash,
                 successful_pages=command.page_limit,
                 request=command,
+                tender_id=tender_id,
             )
         )
 

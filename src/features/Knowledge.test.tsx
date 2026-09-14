@@ -126,7 +126,14 @@ function setup(
         return new Response(
           JSON.stringify(
             path.endsWith("/search")
-              ? [evidence(id)]
+              ? {
+                  hits: [evidence(id)],
+                  requested_mode: "auto",
+                  actual_mode: "words",
+                  ranking_version: "rrf-1",
+                  coverage: { truncated: false, scanned: 1, ceiling: 2000 },
+                  limitations: [],
+                }
               : path.endsWith("/artifacts")
                 ? [artifact(id)]
                 : evidence(id),

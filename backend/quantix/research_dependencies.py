@@ -128,6 +128,8 @@ class DependencyService:
                     or artifact["content_hash"] != row["content_hash"]
                 ):
                     reason = "source_revision_changed"
+                elif evidence.get("extraction_current") is False:
+                    reason = "source_extraction_changed"
                 elif _evidence_hash(evidence) != row["evidence_hash"]:
                     reason = "source_evidence_changed"
             except KeyError:

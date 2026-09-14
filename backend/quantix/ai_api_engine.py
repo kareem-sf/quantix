@@ -756,27 +756,18 @@ class MeteredModel(WrapperModel):
                 _source_urls(getattr(part, "provider_details", None), self.sources)
         actual_model = usage.get("actual_model")
         requested_model = self.expected_model or self.route.get("model_id")
-        from .ai_api_provider import canonical_model_id
+        from .ai_api_provider import same_reported_model
 
-        actual_identity = (
-            canonical_model_id(
-                self.connection.get("provider_id", ""),
-                self.connection.get("protocol", ""),
-                actual_model,
-            )
-            if isinstance(actual_model, str)
-            else actual_model
-        )
-        requested_identity = (
-            canonical_model_id(
+        if (
+            isinstance(actual_model, str) and actual_model
+            and isinstance(requested_model, str) and requested_model
+            and not same_reported_model(
                 self.connection.get("provider_id", ""),
                 self.connection.get("protocol", ""),
                 requested_model,
+                actual_model,
             )
-            if isinstance(requested_model, str)
-            else requested_model
-        )
-        if actual_identity and requested_identity and actual_identity != requested_identity:
+        ):
             raise DirectAPIError(
                 "The provider reported a different model. Its result was withheld; select the exact approved model identifier before retrying."
             )

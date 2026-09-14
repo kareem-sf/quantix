@@ -33,20 +33,28 @@ it("sends area and reading-status filters to Meaning search and shows the matche
       expect(url.searchParams.get("area")).toBe("Area B");
       expect(url.searchParams.get("status")).toBe("needs_attention");
       return new Response(
-        JSON.stringify([
-          {
-            id: "evidence",
-            artifact_id: "pdf",
-            artifact_name: "Scope.pdf",
-            locator: "p. 4",
-            text: "Unrelated introduction",
-            metadata: {
-              semantic_match: {
-                text: "Matched passage: drainage to the inspection chamber.",
+        JSON.stringify({
+          hits: [
+            {
+              id: "evidence",
+              artifact_id: "pdf",
+              artifact_name: "Scope.pdf",
+              locator: "p. 4",
+              text: "Unrelated introduction",
+              kind: "pdf",
+              metadata: {
+                semantic_match: {
+                  text: "Matched passage: drainage to the inspection chamber.",
+                },
               },
             },
-          },
-        ]),
+          ],
+          requested_mode: "meaning",
+          actual_mode: "meaning",
+          ranking_version: "rrf-1",
+          coverage: { truncated: false, scanned: 1, ceiling: 2000 },
+          limitations: [],
+        }),
       );
     },
   );
@@ -310,9 +318,7 @@ it("shows recorded reading status without inventing document analysis or human r
     screen.getByRole("table", { name: "Document register" }),
   ).toBeInTheDocument();
   const row = screen.getByRole("row", { name: /Scope\.pdf/ });
-  expect(
-    within(row).getByText("Read", { exact: true }),
-  ).toBeInTheDocument();
+  expect(within(row).getByText("Read", { exact: true })).toBeInTheDocument();
   expect(screen.queryByText("AI analysis: Complete")).not.toBeInTheDocument();
   expect(
     screen.queryByText("Human review: Not started"),

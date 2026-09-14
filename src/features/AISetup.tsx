@@ -802,7 +802,8 @@ function DirectKeyForm({ account, disabled, onSaved }: { account: AccountView; d
         </label>
       </fieldset>
       <ErrorNotice error={error} />
-      <Button className="w-fit" disabled={disabled || busy || !key.trim()}>{busy ? "Saving…" : "Save API key"}</Button>
+      {/* Base UI buttons default to type="button"; this one must submit the form. */}
+      <Button type="submit" className="w-fit" disabled={disabled || busy || !key.trim()}>{busy ? "Saving…" : "Save API key"}</Button>
     </form>
   );
 }

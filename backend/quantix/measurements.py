@@ -400,6 +400,8 @@ class MeasurementService:
                     "INSERT INTO decisions VALUES(?,?,?,?,?,?,?)",
                     (new_id(), tender_id, "measurement", identifier, "review_proposal", review_rationale, stamp),
                 )
+            self.repo.advance_retrieval_generation(tender_id, conn)
+        self.repo.notify_retrieval_generation(tender_id)
         return self.get(tender_id, identifier)
 
     def _get(self, conn, tender_id, measurement_id):

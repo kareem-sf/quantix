@@ -278,6 +278,24 @@ def canonical_model_id(provider_id: str, protocol: str, model_name: str) -> str:
     return _resolve_exact_alias(provider_id, model_name)
 
 
+def same_reported_model(provider_id: str, protocol: str, requested: str, actual: str) -> bool:
+    """Whether a provider's reported model is the requested one.
+
+    OpenAI-compatible gateways often report the model with its vendor
+    namespace ("deepseek/deepseek-v4.1-flash" for "deepseek-v4.1-flash").
+    Only that namespace may differ; any other difference is a different model.
+    """
+
+    wanted = canonical_model_id(provider_id, protocol, requested)
+    reported = canonical_model_id(provider_id, protocol, actual)
+    if wanted == reported:
+        return True
+    if provider_id != "custom" or "/" in wanted:
+        return False
+    namespace, _, name = reported.rpartition("/")
+    return bool(namespace) and "/" not in namespace and name == wanted
+
+
 @asynccontextmanager
 async def model_for_route(route: dict, connection: dict, credentials: dict[str, str]):
     """Yield a request-scoped Pydantic AI model and SDK client."""

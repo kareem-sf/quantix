@@ -3,7 +3,7 @@
 Stages, in engineering terms the engineer sees:
   1. Registering documents               (the import run itself)
   2. Recognising scanned pages           (OCR coverage and uncertain pages)
-  3. Indexing tender evidence            (keyword index plus local meaning vectors)
+  3. Indexing tender evidence            (schedules background meaning search; words stay available)
   4. Extracting BOQ, schedules and tables
   5. Mapping the tender package          (one-time AI: document types, briefs, project identity)
 
@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .clipped_fields import OptionalText, Text, TextList
 from .db import dump, now
 from .office_tools import redact_text, safe_text
 from .project_identity import ProjectIdentity
@@ -32,8 +33,9 @@ if TYPE_CHECKING:
 
 BRIEF_VERSION = 2
 OPENING_CHARS = 1200
-BATCH_CHARS = 24_000
-BATCH_DOCUMENTS = 25
+BATCH_CHARS = 12_000
+# Small batches keep every reply well inside the approved output limit.
+BATCH_DOCUMENTS = 8
 
 STAGES = {
     "register": "Registering documents",
@@ -62,13 +64,13 @@ class DocumentBrief(BaseModel):
 
     document_id: str = Field(max_length=64)
     document_type: DocumentType
-    title: str | None = Field(default=None, max_length=200, description="The document's own title as written.")
-    discipline: str | None = Field(default=None, max_length=80, description="For example civil, structural, MEP.")
-    brief: str = Field(max_length=600, description="Two or three sentences: what this document is and covers.")
-    key_topics: list[Annotated[str, Field(max_length=80)]] = Field(default_factory=list, max_length=8)
-    key_locations: list[Annotated[str, Field(max_length=120)]] = Field(
-        default_factory=list, max_length=6, description="Where key content is, for example 'page 3: form of tender'.")
-    related_document_ids: list[Annotated[str, Field(max_length=64)]] = Field(default_factory=list, max_length=8)
+    title: OptionalText(200, description="The document's own title as written.")
+    discipline: OptionalText(80, description="For example civil, structural, MEP.")
+    brief: Text(600, description="Two or three sentences: what this document is and covers.")
+    key_topics: TextList(80, 8)
+    key_locations: TextList(120, 6, description="Where key content is, for example 'page 3: form of tender'.")
+    # Entries that are not listed document ids are dropped when the brief is saved.
+    related_document_ids: TextList(64, 8)
 
 
 class BriefBatch(BaseModel):
@@ -81,10 +83,8 @@ class PackageOverview(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     identity: ProjectIdentity
-    overview: str = Field(max_length=1500, description="What this tender package is for and what it contains.")
-    gaps: list[Annotated[str, Field(max_length=300)]] = Field(
-        default_factory=list, max_length=10,
-        description="Important documents or facts a tender package normally has but this one lacks.")
+    overview: Text(1500, description="What this tender package is for and what it contains.")
+    gaps: TextList(300, 10, description="Important documents or facts a tender package normally has but this one lacks.")
 
 
 @dataclass
@@ -200,7 +200,6 @@ async def run_analysis(repo: "Repository", tender_id: str, run_id: str, cancelle
     import asyncio
 
     from .estimates import EstimateService
-    from .semantic import SemanticService
     from .structured_ai import add_usage, ask_structured
 
     ensure_schema(repo)
@@ -224,15 +223,15 @@ async def run_analysis(repo: "Repository", tender_id: str, run_id: str, cancelle
 
     _stage(repo, run_id, "index", "running")
     repo.update_run(run_id, progress=10)
-
-    def progress(percent, detail):
-        repo.update_run(run_id, progress=10 + int(min(99, max(0, percent)) * 0.5),
-                        detail=f"{STAGES['index']}… {detail}")
-
     try:
-        indexed = await asyncio.to_thread(SemanticService(repo).index, tender_id, cancelled.is_set, progress)
-        finish("index", "completed", "Keyword and meaning search are ready for every readable passage",
-               chunks=getattr(indexed, "chunk_count", None))
+        notify = getattr(repo, "on_retrieval_generation", None)
+        if notify:
+            notify(tender_id)
+        finish(
+            "index",
+            "completed",
+            "Meaning search is preparing in the background. Exact-word search is available now.",
+        )
     except InterruptedError:
         raise
     except Exception as error:  # noqa: BLE001 - reported to the engineer, later stages continue

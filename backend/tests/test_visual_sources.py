@@ -78,5 +78,21 @@ def test_visual_tool_refuses_another_tenders_file(drawing):
     other = repo.create_tender("Other")
     run = repo.create_run(other["id"], "manager")
     context = OfficeContext(repo, other["id"], run["id"])
-    with pytest.raises(KeyError):
+    # Another Tender's file is unknown here: refused, with nothing about it revealed.
+    with pytest.raises((KeyError, ValueError), match="No document with this ID"):
         asyncio.run(module().visual_source(context, artifact["id"], 1, [0, 0, 1, 1]))
+
+
+def test_large_page_images_are_reencoded_to_fit_a_tool_result():
+    import os
+
+    from PIL import Image
+
+    from quantix.visual_sources import MAX_IMAGE_BYTES, fit_image
+
+    noisy = Image.frombytes("RGB", (1800, 2400), os.urandom(1800 * 2400 * 3))
+    buffer = io.BytesIO()
+    noisy.save(buffer, format="PNG")
+    assert len(buffer.getvalue()) > MAX_IMAGE_BYTES
+    data, mime = fit_image(buffer.getvalue())
+    assert mime == "image/jpeg" and len(data) <= MAX_IMAGE_BYTES * 1.2

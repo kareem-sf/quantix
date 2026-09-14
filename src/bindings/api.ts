@@ -262,6 +262,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tenders/{tender_id}/search-index/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Search Index */
+        post: operations["cancel_search_index_api_tenders__tender_id__search_index_cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tenders/{tender_id}/messages": {
         parameters: {
             query?: never;
@@ -4931,6 +4948,10 @@ export interface components {
              * @default 0
              */
             score: number;
+            /** Extraction Id */
+            extraction_id?: string | null;
+            /** Extraction Current */
+            extraction_current?: boolean | null;
         };
         /** Finding */
         Finding: {
@@ -7944,6 +7965,31 @@ export interface components {
              * @default pypdfium2-5.13.0
              */
             reader_version: string;
+            /** Artifact Id */
+            artifact_id?: string | null;
+        };
+        /** ReprocessResult */
+        ReprocessResult: {
+            /** Id */
+            id: string;
+            /** Original Hash Unchanged */
+            original_hash_unchanged: boolean;
+            /** Extracted Pages */
+            extracted_pages: number;
+            /** Exception Pages */
+            exception_pages: number;
+            /** Reader Id */
+            reader_id: string;
+            /** Reader Version */
+            reader_version: string;
+            /** Published Artifact Ids */
+            published_artifact_ids?: string[];
+            /** Published Evidence Ids */
+            published_evidence_ids?: string[];
+            /** Retained Locators */
+            retained_locators?: string[];
+            /** Retrieval Generation */
+            retrieval_generation?: number | null;
         };
         /** RequirementAudit */
         RequirementAudit: {
@@ -8348,6 +8394,158 @@ export interface components {
             unit: string;
             /** Supplied Quantity */
             supplied_quantity: string | null;
+        };
+        /** RetrievalCoverage */
+        RetrievalCoverage: {
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+            /**
+             * Scanned
+             * @default 0
+             */
+            scanned: number;
+            /**
+             * Ceiling
+             * @default 0
+             */
+            ceiling: number;
+            /** Meaning Status */
+            meaning_status?: string | null;
+            /**
+             * Unsupported Answer
+             * @default false
+             */
+            unsupported_answer: boolean;
+            /** Unsupported Reason */
+            unsupported_reason?: string | null;
+        };
+        /** RetrievalHit */
+        RetrievalHit: {
+            /** Id */
+            id: string;
+            /** Artifact Id */
+            artifact_id: string;
+            /** Artifact Name */
+            artifact_name: string;
+            /** Relative Path */
+            relative_path: string;
+            /** Locator */
+            locator: string;
+            /** Text */
+            text: string;
+            /** Page */
+            page?: number | null;
+            /** Sheet */
+            sheet?: string | null;
+            /** Cell Range */
+            cell_range?: string | null;
+            /** Kind */
+            kind: string;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Score
+             * @default 0
+             */
+            score: number;
+            /** Extraction Id */
+            extraction_id?: string | null;
+            /** Extraction Current */
+            extraction_current?: boolean | null;
+            /**
+             * Collection
+             * @default tender_evidence
+             * @constant
+             */
+            collection: "tender_evidence";
+            /**
+             * Found By
+             * @default words
+             */
+            found_by: string;
+            /**
+             * Weak Match
+             * @default false
+             */
+            weak_match: boolean;
+            /** Content Hash */
+            content_hash?: string | null;
+            /** Source Version */
+            source_version?: number | null;
+            /** Document Kind */
+            document_kind?: string | null;
+            /** Spans */
+            spans?: components["schemas"]["RetrievalSpan"][];
+            /** Duplicate Occurrences */
+            duplicate_occurrences?: components["schemas"]["RetrievalOccurrence"][];
+            open_target?: components["schemas"]["RetrievalOpenTarget"] | null;
+        };
+        /** RetrievalOccurrence */
+        RetrievalOccurrence: {
+            /** Evidence Id */
+            evidence_id: string;
+            /** Artifact Id */
+            artifact_id: string;
+            /** Relative Path */
+            relative_path: string;
+            /** Locator */
+            locator: string;
+        };
+        /** RetrievalOpenTarget */
+        RetrievalOpenTarget: {
+            /** Evidence Id */
+            evidence_id: string;
+            /** Artifact Id */
+            artifact_id: string;
+            /** Locator */
+            locator: string;
+            /** Start */
+            start?: number | null;
+            /** End */
+            end?: number | null;
+        };
+        /** RetrievalResponse */
+        RetrievalResponse: {
+            /** Hits */
+            hits: components["schemas"]["RetrievalHit"][];
+            /**
+             * Requested Mode
+             * @enum {string}
+             */
+            requested_mode: "auto" | "words" | "meaning" | "combined";
+            /**
+             * Actual Mode
+             * @enum {string}
+             */
+            actual_mode: "words" | "meaning" | "combined";
+            /** Ranking Version */
+            ranking_version: string;
+            /** Generation */
+            generation?: string | null;
+            coverage: components["schemas"]["RetrievalCoverage"];
+            /** Limitations */
+            limitations?: string[];
+            /** Continuation */
+            continuation?: string | null;
+        };
+        /** RetrievalSpan */
+        RetrievalSpan: {
+            /** Start */
+            start: number;
+            /** End */
+            end: number;
+            /**
+             * Found By
+             * @enum {string}
+             */
+            found_by: "words" | "meaning";
+            /** Heading */
+            heading?: string | null;
         };
         /** ReviewContribution */
         ReviewContribution: {
@@ -8808,7 +9006,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "empty" | "model_missing" | "not_indexed" | "ready" | "stale" | "limit_exceeded";
+            status: "empty" | "model_missing" | "not_indexed" | "ready" | "stale" | "limit_exceeded" | "preparing" | "updating" | "stopped" | "failed";
             /** Ready */
             ready: boolean;
             /** Model */
@@ -8835,6 +9033,22 @@ export interface components {
             indexed_at?: string | null;
             /** Detail */
             detail: string;
+            /**
+             * Desired Generation
+             * @default 0
+             */
+            desired_generation: number;
+            /** Published Generation */
+            published_generation?: number | null;
+            /**
+             * Progress
+             * @default 0
+             */
+            progress: number;
+            /** Recovery Action */
+            recovery_action?: string | null;
+            /** Last Error */
+            last_error?: string | null;
         };
         /** SendDecision */
         SendDecision: {
@@ -11104,9 +11318,12 @@ export interface operations {
         parameters: {
             query?: {
                 q?: string;
-                mode?: "words" | "meaning" | "combined";
+                mode?: "auto" | "words" | "meaning" | "combined";
                 area?: string | null;
                 status?: string | null;
+                document_kind?: string | null;
+                limit?: number;
+                cursor?: string | null;
             };
             header?: never;
             path: {
@@ -11122,7 +11339,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Evidence"][];
+                    "application/json": components["schemas"]["RetrievalResponse"];
                 };
             };
             /** @description Validation Error */
@@ -11184,7 +11401,38 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Run"];
+                    "application/json": components["schemas"]["SemanticStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_search_index_api_tenders__tender_id__search_index_cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SemanticStatus"];
                 };
             };
             /** @description Validation Error */
@@ -18064,7 +18312,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ReprocessResult"];
                 };
             };
             /** @description Validation Error */

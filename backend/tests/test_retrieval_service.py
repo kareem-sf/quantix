@@ -113,3 +113,36 @@ def test_package_map_tool_reports_the_saved_map(tmp_path):
     mapped = _call(context, "read_package_map", {})
     assert mapped["current"] is True and mapped["gaps"] == ["No BOQ"]
     assert mapped["documents"][0]["type"] == "conditions of contract"
+
+
+def test_a_document_id_given_as_a_passage_id_is_a_correctable_mistake(tmp_path):
+    import pytest
+
+    from quantix.tool_policy import ToolFenceError
+
+    repo, tender, run, artifact, _evidence = _workspace(tmp_path, ["Site visit on 06/09/2026 at gate 02."])
+    context = OfficeContext(repo, tender["id"], run["id"])
+    definition = next(item for item in source_tools() if item.name == "read_source")
+    with pytest.raises(ToolFenceError, match="document ID, not a passage ID") as wrong_kind:
+        asyncio.run(dispatch("nested", definition, context, {"source_id": artifact["id"]}, invocation_id="doc-id"))
+    assert wrong_kind.value.recoverable is True
+    with pytest.raises(ToolFenceError, match="No passage with this ID") as unknown:
+        asyncio.run(dispatch("nested", definition, context, {"source_id": "f" * 32}, invocation_id="unknown"))
+    assert unknown.value.recoverable is True
+
+
+def test_documents_can_be_named_by_file_and_unknown_ones_are_correctable(tmp_path):
+    import pytest
+
+    from quantix.tool_policy import ToolFenceError
+
+    repo, tender, run, artifact, evidence = _workspace(tmp_path, ["Site visit form and gate pass."])
+    context = OfficeContext(repo, tender["id"], run["id"])
+    by_name = _call(context, "read_whole_document", {"artifact_id": "general.pdf"})
+    assert [passage["id"] for passage in by_name["passages"]] == [evidence[0]["id"]]
+    definition = next(item for item in source_tools() if item.name == "read_whole_document")
+    with pytest.raises(ToolFenceError, match="No document with this ID") as unknown:
+        asyncio.run(dispatch("nested", definition, context, {"artifact_id": "missing.pdf"}, invocation_id="missing"))
+    assert unknown.value.recoverable is True
+    with pytest.raises(ToolFenceError, match="passage ID, not a document ID"):
+        asyncio.run(dispatch("nested", definition, context, {"artifact_id": evidence[0]["id"]}, invocation_id="passage"))

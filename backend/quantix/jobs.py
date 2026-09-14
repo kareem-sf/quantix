@@ -16,6 +16,7 @@ from .manager_runtime import ManagerRunProfiles
 from .office_types import PreparedOfficeResult
 from .pending import PendingInstructionService
 from .repository import Repository
+from .retrieval_indexing import RetrievalIndexer
 from .settings import SettingsService
 from .staff_assignments import StaffAssignmentService
 
@@ -42,9 +43,15 @@ class JobManager:
         self.pending = PendingInstructionService(repo)
         self.manager_profiles = ManagerRunProfiles(repo)
         self.office_assignments = StaffAssignmentService(repo)
+        self.indexer = RetrievalIndexer(repo)
+        self.repo.on_retrieval_generation = self.indexer.request_refresh
 
     def active(self, tender_id):
-        return [r for r in self.repo.list_runs(tender_id) if r["status"] in {"queued", "running"}]
+        return [
+            r
+            for r in self.repo.list_runs(tender_id)
+            if r["status"] in {"queued", "running"} and r["kind"] != "index"
+        ]
 
     def _start(self, tender_id, kind, instruction, *, task_id=None):
         with self.repo.atomic():
@@ -192,9 +199,10 @@ class JobManager:
             return None
 
     def start_index(self, tender_id):
-        return self._start(
-            tender_id, "index", "Prepare search by meaning for the current documents."
-        )
+        return self.indexer.request_refresh(tender_id, force=True)
+
+    def cancel_index(self, tender_id):
+        return self.indexer.cancel(tender_id)
 
     def start_manager(self, tender_id, instruction, *, engineer_message=True):
         from .ai_policy import AIPolicyService
@@ -520,7 +528,8 @@ class JobManager:
                                                 {"instruction": run["instruction"], "kind": run["kind"]}, phase="queued")
             execution_scope = activity_scope(execution_operation)
             execution_scope.__enter__()
-            async with self.lanes.setdefault(tender_id, asyncio.Lock()):
+            lane = f"{tender_id}:index" if run["kind"] == "index" else tender_id
+            async with self.lanes.setdefault(lane, asyncio.Lock()):
                 if cancelled.is_set():
                     raise InterruptedError("Work stopped before it started.")
                 initial_detail = {
@@ -730,6 +739,8 @@ class JobManager:
             self.pending.on_run_finished(identifier, "completed")
             if run["kind"] == "import" and self.auto_analyze:
                 self.maybe_analyze(tender_id)
+            if run["kind"] == "import":
+                self.indexer.request_refresh(tender_id, force=True)
             self._maybe_dispatch_pending(tender_id)
         except (asyncio.CancelledError, InterruptedError):
             self._stop(run, publication_task_id)
@@ -844,7 +855,10 @@ class JobManager:
         if run["kind"] == "import":
             resumed = self.start_import(run["tender_id"], run["instruction"])
         elif run["kind"] == "index":
-            resumed = self.start_index(run["tender_id"])
+            self.indexer.request_refresh(run["tender_id"], force=True)
+            raise ValueError(
+                "Meaning search is preparing in the background. Exact-word search stays available."
+            )
         elif run["kind"] in {"identify", "analysis"}:
             resumed = self.start_analysis(run["tender_id"])
         elif run["kind"] in {"manager", "conversation"}:
@@ -908,6 +922,7 @@ class JobManager:
 
     async def close(self):
         self.closing = True
+        await self.indexer.close()
         pending = list(self.tasks.values())
         for run_id in list(self.tasks):
             self.cancel(run_id)

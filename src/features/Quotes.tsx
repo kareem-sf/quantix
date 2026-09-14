@@ -19,6 +19,7 @@ import { Citations, type SourceSelection } from "./Sources";
 import { FieldError } from "../components/FieldError";
 import { createDraftScope, useFormDraft } from "./useFormDraft";
 import { MailReplyCheck } from "./MailReplyCheck";
+import { searchHits } from "./DocumentSearch";
 
 type SourceAction = (source: SourceSelection) => void;
 const blockedStates = new Set([
@@ -432,7 +433,7 @@ function SourcePicker({
   const path = `${tenderPath(tenderId)}/search?q=${encodeURIComponent(query)}&mode=words`;
   const results = useQuery({
     queryKey: [path],
-    queryFn: () => api.get<Schema<"Evidence">[]>(path),
+    queryFn: () => api.get<Schema<"RetrievalResponse">>(path),
     enabled: !!query,
     retry: false,
   });
@@ -463,7 +464,7 @@ function SourcePicker({
       <ErrorNotice error={results.error} />
       {results.isFetching ? <Loading>Finding sources…</Loading> : null}
       <ul>
-        {results.data?.map((source) => (
+        {searchHits(results.data).map((source) => (
           <li key={source.id}>
             <button
               type="button"
@@ -486,7 +487,7 @@ function SourcePicker({
           </li>
         ))}
       </ul>
-      {results.data?.length === 0 ? (
+      {results.data && searchHits(results.data).length === 0 ? (
         <p className="field-help">No source text matched.</p>
       ) : null}
       {ids.map((id) => (

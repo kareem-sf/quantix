@@ -27,6 +27,7 @@ from huggingface_hub import HfApi
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "backend"))
+sys.path.insert(0, str(PROJECT_ROOT / "backend" / "tests"))
 
 from quantix.intake import import_package
 from quantix.repository import Repository
@@ -319,15 +320,54 @@ def main() -> None:
     parser.add_argument(
         "--home",
         type=Path,
-        default=Path.home()
+        default=None,
+        help="Isolated Quantix home. Defaults depend on --suite.",
+    )
+    parser.add_argument(
+        "--suite",
+        choices=("smoke", "baseline", "both"),
+        default="smoke",
+        help="smoke keeps the original six-query case; baseline runs the 80-question labeled set.",
+    )
+    args = parser.parse_args()
+    smoke_home = (
+        Path.home()
         / ".quantix"
         / "cache"
         / "development"
         / "2026-09-12-full-agentic-office"
-        / "retrieval",
+        / "retrieval"
     )
-    args = parser.parse_args()
-    run(args.home)
+    baseline_home = (
+        Path.home()
+        / ".quantix"
+        / "cache"
+        / "development"
+        / "2026-09-13-retrieval-baseline"
+    )
+    if args.suite in {"smoke", "both"}:
+        run(args.home or smoke_home)
+    if args.suite in {"baseline", "both"}:
+        from retrieval.baseline import run_baseline
+
+        result = run_baseline(args.home or baseline_home)
+        summary = {
+            "suite": "baseline",
+            "result_path": result["result_path"],
+            "dataset": result["dataset"],
+            "index_seconds": result["index_seconds"],
+            "reindex_seconds": result["reindex_seconds"],
+            "memory_peak_bytes": result["memory_peak_bytes"],
+            "model_available": (result.get("model") or {}).get("available"),
+            "methods": {
+                name: payload.get("summary") or {"available": payload.get("available")}
+                for name, payload in result["methods"].items()
+            },
+            "review_thresholds": result["review_thresholds"],
+        }
+        sys.stdout.buffer.write(
+            (json.dumps(summary, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        )
 
 
 if __name__ == "__main__":

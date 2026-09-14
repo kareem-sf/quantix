@@ -132,8 +132,9 @@ def test_real_import_and_search_through_http(client, tmp_path):
     overview = client.get(f"/api/tenders/{tender['id']}").json()
     assert overview["artifact_count"] == 1
     hits = client.get(f"/api/tenders/{tender['id']}/search", params={"q": "reinforced"}).json()
-    assert hits[0]["sheet"] == "Sheet"
-    source = client.get(f"/api/tenders/{tender['id']}/evidence/{hits[0]['id']}").json()
+    assert hits["actual_mode"] in {"words", "combined"}
+    assert hits["hits"][0]["sheet"] == "Sheet"
+    source = client.get(f"/api/tenders/{tender['id']}/evidence/{hits['hits'][0]['id']}").json()
     assert "28" in source["text"]
     messages = client.get(f"/api/tenders/{tender['id']}/messages").json()
     assert messages[0]["role"] == "system"

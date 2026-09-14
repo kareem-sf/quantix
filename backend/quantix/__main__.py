@@ -45,6 +45,7 @@ def main():
     if len(command_args) == 2 and command_args[0] == "semantic-download":
         try:
             from .semantic import _download_model
+
             _download_model(Path(command_args[1]))
             record("service_command", phase="semantic_download", outcome="completed")
             return

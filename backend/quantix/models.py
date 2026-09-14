@@ -82,6 +82,8 @@ class Evidence(ApiModel):
     kind: str
     metadata: dict[str, Any] = Field(default_factory=dict)
     score: float = 0
+    extraction_id: str | None = None
+    extraction_current: bool | None = None
 
 
 class ResultLink(ApiModel):

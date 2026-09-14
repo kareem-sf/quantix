@@ -157,7 +157,7 @@ def _database_references(database, package_size):
         with closing(sqlite3.connect(database.as_uri() + "?mode=ro&immutable=1", uri=True)) as conn:
             conn.execute("PRAGMA trusted_schema=OFF")
             schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
-            if schema_version not in {1, 2, 3}:
+            if schema_version not in {1, 2, 3, 4}:
                 raise ValueError("The backup uses an unsupported database format.")
             if (
                 conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok"
@@ -709,6 +709,8 @@ def apply_pending_restore(home: Path):
                         journal.restore_id,
                         member.sha256,
                     )
+            # Derived meaning-search cache. The next start rebuilds it from
+            # restored originals and the Tender's desired retrieval generation.
             for name in ("semantic.sqlite", "semantic.sqlite-wal", "semantic.sqlite-shm"):
                 old = _inside(home, name)
                 if old.exists():

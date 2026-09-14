@@ -57,8 +57,12 @@ def create_router(repo, setup, on_tender_ai=None):
         return setup.store.checks(account_id)
 
     @router.post("/tenders/{tender_id}/ai-setup", response_model=TenderAIRecord)
-    def tender_setup(tender_id: str, request: SimpleTenderAIInput):
-        record = select_tender_ai(repo, setup, tender_id, request)
+    async def tender_setup(tender_id: str, request: SimpleTenderAIInput):
+        import anyio
+
+        record = await anyio.to_thread.run_sync(select_tender_ai, repo, setup, tender_id, request)
+        # Work that follows the choice (package analysis) is scheduled on the
+        # service's event loop, never from a worker thread.
         if on_tender_ai:
             on_tender_ai(tender_id)
         return record

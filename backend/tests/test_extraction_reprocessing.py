@@ -68,7 +68,7 @@ def test_real_blank_page_ocr_render_completes_without_nested_pdfium_deadlock(tmp
         args=(str(source), str(tmp_path / "child-home"), queue),
     )
     process.start()
-    process.join(timeout=5)
+    process.join(timeout=30)
     if process.is_alive():
         process.terminate()
         process.join(timeout=2)

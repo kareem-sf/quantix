@@ -151,14 +151,22 @@ it("saves an exact source BOQ proposal and opens the returned unconfirmed row", 
         return Response.json(item);
       }
       if (path.endsWith("/search"))
-        return Response.json([
-          {
-            id: "source-page",
-            artifact_name: "BOQ.pdf",
-            locator: "page 2",
-            text: excerpt,
-          },
-        ]);
+        return Response.json({
+          hits: [
+            {
+              id: "source-page",
+              artifact_name: "BOQ.pdf",
+              locator: "page 2",
+              text: excerpt,
+              kind: "pdf",
+            },
+          ],
+          requested_mode: "auto",
+          actual_mode: "words",
+          ranking_version: "rrf-1",
+          coverage: { truncated: false, scanned: 1, ceiling: 2000 },
+          limitations: [],
+        });
       if (path.endsWith("/evidence/source-page"))
         return Response.json({
           artifact_name: "BOQ.pdf",

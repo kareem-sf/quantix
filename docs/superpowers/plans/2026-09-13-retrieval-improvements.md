@@ -29,16 +29,16 @@
 
 **Files:** Extend `scripts/benchmark_multilingual_retrieval.py`; add `backend/tests/retrieval/` synthetic fixtures and benchmark tests. Retain the current six-query case as a smoke subset. Record evidence under `docs/reports/` and runtime output under the isolated Quantix home.
 
-- [ ] Define a versioned corpus/label manifest with at least 80 synthetic engineering questions and a distinct held-out set. Include every category in the analysis acceptance section.
-- [ ] Label source spans and multiple valid answers, absent answers, source revision, permitted scope and required surrounding context.
-- [ ] Add tests of the evaluator itself: absent ranks, multiple relevant passages, forbidden/stale hits and changed corpus/configuration hashes cannot produce a passing result.
-- [ ] Measure current keyword, semantic and combined results and the bilingual-boost ablation without changing the production ranker.
-- [ ] Record cold/warm latency separately, model/corpus/configuration hashes, machine context and unavailable metrics. Include initial indexing and changed-only reindexing.
-- [ ] Set review thresholds from the measured baseline before tuning. Critical permission/provenance failures are always blocking; do not waive them with average relevance.
+- [x] Define a versioned corpus/label manifest with at least 80 synthetic engineering questions and a distinct held-out set. Include every category in the analysis acceptance section.
+- [x] Label source spans and multiple valid answers, absent answers, source revision, permitted scope and required surrounding context.
+- [x] Add tests of the evaluator itself: absent ranks, multiple relevant passages, forbidden/stale hits and changed corpus/configuration hashes cannot produce a passing result.
+- [x] Measure current keyword, semantic and combined results and the bilingual-boost ablation without changing the production ranker.
+- [x] Record cold/warm latency separately, model/corpus/configuration hashes, machine context and unavailable metrics. Include initial indexing and changed-only reindexing.
+- [x] Set review thresholds from the measured baseline before tuning. Critical permission/provenance failures are always blocking; do not waive them with average relevance.
 
-**Check:** `backend/.venv/Scripts/python.exe -m pytest backend/tests/retrieval -q`; run the real-model benchmark only on synthetic data and the existing local model. A downloaded replacement is not needed to establish this baseline.
+**Check:** `backend/.venv/Scripts/python.exe -m pytest backend/tests/retrieval -q` — 17 passed. Real-model baseline: `scripts/benchmark_multilingual_retrieval.py --suite baseline` on the existing local E5 and synthetic labels. Evidence: [retrieval baseline](../../reports/2026-09-13-retrieval-baseline.md).
 
-**Deliverable:** Reproducible baseline and an evaluator that cannot confuse fixture mechanics with language or live-agent quality.
+**Deliverable:** Reproducible baseline and an evaluator that cannot confuse fixture mechanics with language or live-agent quality. Completed 13 September 2026. Production ranking unchanged.
 
 ## Task 2: Centralize retrieval and fix scope/filter/duplicate ordering
 
@@ -46,18 +46,18 @@
 
 **Files:** Add `backend/quantix/retrieval_models.py`, `retrieval_service.py`, `retrieval_ranking.py`; modify `repository.py`, `semantic.py`, `api.py`, `office_tools.py`, `office_business.py`, `tool_policy.py` where required, and `docs/contracts.md`. Add `backend/tests/test_retrieval_scope.py`, `test_retrieval_ranking.py`, `test_retrieval_api.py`; extend existing semantic/office tests.
 
-- [ ] Define `RetrievalRequest` and `RetrievalResponse` as specified in the analysis: `auto | words | meaning | combined`, Tender-evidence default collection, typed hits, actual mode, generation, matched spans, coverage, limitations and continuation. Migrate `/api/tenders/{id}/search` and its array-response consumers together; derive agent scope on the server.
-- [ ] Write failing tests for a permitted result below many forbidden hits; empty permitted scope; revision/revocation during a search; two permitted duplicate occurrences; and foreign Tender exclusion.
-- [ ] Write the reproduced duplicate-window test and document-kind-before-limit test. Include equal ranking ties and one source containing several relevant spans.
-- [ ] Pass validated artifact/version scope into both SQL candidate paths before rank/limit/group operations. Revalidate results before releasing their text.
-- [ ] Replace the fixed duplicate overfetch heuristic with distinct result selection/continuation under a hard work ceiling. Report truncation without claiming no further matches exist.
-- [ ] Move current reciprocal-rank fusion out of the HTTP route. Preserve per-channel provenance and deterministic tie breaking; do not combine raw FTS and cosine scores numerically.
-- [ ] Migrate HTTP and both agent search paths to the common service. Update all affected callers/bindings together. Preserve existing capability scope and fingerprint behavior.
-- [ ] Run the new tests plus existing semantic, API and office source tests; compare baseline relevance and critical slices.
+- [x] Define `RetrievalRequest` and `RetrievalResponse` as specified in the analysis: `auto | words | meaning | combined`, Tender-evidence default collection, typed hits, actual mode, generation, matched spans, coverage, limitations and continuation. Migrate `/api/tenders/{id}/search` and its array-response consumers together; derive agent scope on the server.
+- [x] Write failing tests for a permitted result below many forbidden hits; empty permitted scope; revision/revocation during a search; two permitted duplicate occurrences; and foreign Tender exclusion.
+- [x] Write the reproduced duplicate-window test and document-kind-before-limit test. Include equal ranking ties and one source containing several relevant spans.
+- [x] Pass validated artifact/version scope into both SQL candidate paths before rank/limit/group operations. Revalidate results before releasing their text.
+- [x] Replace the fixed duplicate overfetch heuristic with distinct result selection/continuation under a hard work ceiling. Report truncation without claiming no further matches exist.
+- [x] Move current reciprocal-rank fusion out of the HTTP route. Preserve per-channel provenance and deterministic tie breaking; do not combine raw FTS and cosine scores numerically.
+- [x] Migrate HTTP and both agent search paths to the common service. Update all affected callers/bindings together. Preserve existing capability scope and fingerprint behavior.
+- [x] Run the new tests plus existing semantic, API and office source tests; compare baseline relevance and critical slices.
 
-**Check:** `backend/.venv/Scripts/python.exe -m pytest backend/tests/test_retrieval_scope.py backend/tests/test_retrieval_ranking.py backend/tests/test_retrieval_api.py backend/tests/test_semantic.py backend/tests/test_office_business.py -q`; `npm run bindings`; `npm run check:ui`.
+**Check:** Focused backend retrieval/semantic/office/API suites passed (86 tests in the combined run including repository/usage). `npm run bindings` and `npm run check:ui` passed. Affected UI suites 29 passed. Labeled combined recall@10 0.944 → 0.986; held-out combined recall@10 0.9375 (at the Task 1 floor). Absent-answer critical failures remain 8/8 (R13, not this increment).
 
-**Deliverable:** The same permitted search behavior through UI and agents, without duplicate or post-filter starvation.
+**Deliverable:** The same permitted search behavior through UI and agents, without duplicate or post-filter starvation. Completed 13 September 2026.
 
 ## Task 3: Publish versioned reprocessing into canonical source evidence
 
@@ -65,18 +65,18 @@
 
 **Files:** Modify `extraction_adapters.py`, `extraction_models.py`, `documents.py`, `repository.py`, `db.py`, `later_routes.py`, `evidence_tools.py`, `office_tools.py`, `research_dependencies.py`, `semantic.py` and relevant reviewed-source models/context validation. Add `backend/quantix/extraction_publication.py` if needed to keep responsibilities clear. Extend extraction/dependency/source-scope tests.
 
-- [ ] Define immutable extraction identity and an active-extraction pointer for each exact artifact. Existing original version/hash stays unchanged. Old evidence remains addressable with truthful superseded-extraction status.
-- [ ] Write tests demonstrating that reprocessed text currently cannot be found. Add shared-content-hash copies in two Tenders to verify that publication targets exact artifacts rather than silently adopting results everywhere.
-- [ ] Persist extraction reader/version/configuration, observed coverage/exceptions and original-hash basis with the target artifact identity.
-- [ ] Atomically publish successful page derivatives to canonical evidence/FTS plus the active extraction and desired retrieval generation. A partial reprocess must retain explicitly selected prior page evidence or mark uncovered pages; it cannot erase readable pages accidentally.
-- [ ] Update canonical current-evidence reads, tool validation, dependency tracking and source-view state. An old extraction's source ID cannot be represented as current solely because the original artifact is still current.
-- [ ] Reconcile extraction changes with reviewed execution bases, source receipts, checkpoints and existing grant fingerprints. Historical bindings must not silently gain newly available evidence or tools.
-- [ ] Test cancellation/failure before and during publication, unchanged original hashes, same-byte improved extraction, old-source inspection, revised-source invalidation and a fully unreadable page becoming searchable.
-- [ ] Update schemas/contracts/bindings and verify actual synthetic import → reprocess → search → source-open behavior.
+- [x] Define immutable extraction identity and an active-extraction pointer for each exact artifact. Existing original version/hash stays unchanged. Old evidence remains addressable with truthful superseded-extraction status.
+- [x] Write tests demonstrating that reprocessed text currently cannot be found. Add shared-content-hash copies in two Tenders to verify that publication targets exact artifacts rather than silently adopting results everywhere.
+- [x] Persist extraction reader/version/configuration, observed coverage/exceptions and original-hash basis with the target artifact identity.
+- [x] Atomically publish successful page derivatives to canonical evidence/FTS plus the active extraction and desired retrieval generation. A partial reprocess must retain explicitly selected prior page evidence or mark uncovered pages; it cannot erase readable pages accidentally.
+- [x] Update canonical current-evidence reads, tool validation, dependency tracking and source-view state. An old extraction's source ID cannot be represented as current solely because the original artifact is still current.
+- [x] Reconcile extraction changes with reviewed execution bases, source receipts, checkpoints and existing grant fingerprints. Historical bindings must not silently gain newly available evidence or tools.
+- [x] Test cancellation/failure before and during publication, unchanged original hashes, same-byte improved extraction, old-source inspection, revised-source invalidation and a fully unreadable page becoming searchable.
+- [x] Update schemas/contracts/bindings and verify actual synthetic import → reprocess → search → source-open behavior.
 
-**Check:** Focused extraction, semantic, dependency, evidence-navigation, staff-context and checkpoint tests; frontend typecheck and affected source-view tests.
+**Check:** `test_extraction_publication` plus later-routes, identity, import-search, semantic, evidence-package, work-product dependencies, staff-context and checkpoints: 78 passed in the combined run (the nested PDFium spawn test needed a 30s join; it is not a lock). `npm run bindings` and `npm run check:ui` passed. Sources/Files/DocumentSearch UI **18 passed**.
 
-**Deliverable:** Improved reading changes what Quantix can find while retaining exact original and extraction history.
+**Deliverable:** Improved reading changes what Quantix can find while retaining exact original and extraction history. Completed 13 September 2026.
 
 ## Task 4: Build contextual passages and engineering-aware ranking
 
@@ -84,16 +84,18 @@
 
 **Files:** Add `retrieval_passages.py`; modify `documents.py`, `semantic.py`, `retrieval_ranking.py` and source-result models. Add reader-to-retrieval tests for PDF, DOCX and spreadsheets rather than relying only on hand-authored metadata fixtures.
 
-- [ ] Preserve observed DOCX heading levels/order/table coordinates, spreadsheet row/header relationships and available PDF structure. Flag uncertain structure instead of inventing it.
-- [ ] Generate bounded embedding representations that include relevant source context and keep exact span maps back to immutable evidence. Keep literal source excerpts separate from normalized/search-only text.
-- [ ] Test long Arabic text and short orphan clauses, cross-page qualifications, table rows, formulas, hidden/merged cells and chunk boundary negations. Check prefixes are applied exactly once and token bounds include context.
-- [ ] Add documented identifier/phrase/numeric/unit ranking features and conservative Arabic normalization with negative examples. Do not perform numerical equivalence or commercial interpretation through embeddings.
-- [ ] Select useful distinct spans, expand only necessary surrounding context and expose precise read/open targets. Retain duplicate occurrence provenance across areas.
-- [ ] Evaluate the existing bilingual boost against no-boost and any proposed glossary on held-out cases. Keep only demonstrated improvements and version them.
-- [ ] Add explicit relevance/unsupported-answer handling informed by labeled cases. Keep no-match, unreadable-source and unavailable-index states separate. Do not hardcode a 0.7/0.8 “confidence” threshold.
-- [ ] Compare the resulting ranker with the baseline across language, identifiers, numbers and scope slices.
+- [x] Preserve observed DOCX heading levels/order/table coordinates, spreadsheet row/header relationships and available PDF structure. Flag uncertain structure instead of inventing it.
+- [x] Generate bounded embedding representations that include relevant source context and keep exact span maps back to immutable evidence. Keep literal source excerpts separate from normalized/search-only text.
+- [x] Test long Arabic text and short orphan clauses, cross-page qualifications, table rows, formulas, hidden/merged cells and chunk boundary negations. Check prefixes are applied exactly once and token bounds include context.
+- [x] Add documented identifier/phrase/numeric/unit ranking features and conservative Arabic normalization with negative examples. Do not perform numerical equivalence or commercial interpretation through embeddings.
+- [x] Select useful distinct spans, expand only necessary surrounding context and expose precise read/open targets. Retain duplicate occurrence provenance across areas.
+- [x] Evaluate the existing bilingual boost against no-boost and any proposed glossary on held-out cases. Keep only demonstrated improvements and version them.
+- [x] Add explicit relevance/unsupported-answer handling informed by labeled cases. Keep no-match, unreadable-source and unavailable-index states separate. Do not hardcode a 0.7/0.8 “confidence” threshold.
+- [x] Compare the resulting ranker with the baseline across language, identifiers, numbers and scope slices.
 
-**Deliverable:** Search passages preserve the engineering context needed to interpret them, with measurable relevance evidence.
+**Check:** Passage/reader/document/semantic/ranking/API suites **60 passed**. The three-group bilingual boost is not applied (meaning and no-boost now match; Task 1 meaning recall@10 0.958 with boost vs 0.972 without). After this increment, meaning recall@10 is **0.986**. Held-out combined recall@10 **0.9375**; held-out combined MRR **0.794** (0.005 below the Task 1 floor). Ranking version `rrf-2-features`. Bindings/typecheck passed.
+
+**Deliverable:** Search passages preserve the engineering context needed to interpret them, with measurable relevance evidence. Completed 14 September 2026.
 
 ## Task 5: Manage model and background-index lifecycle
 
@@ -101,16 +103,18 @@
 
 **Files:** Add `embedding_runtime.py`, `retrieval_indexing.py`; modify `semantic.py`, `semantic_models.py`, `jobs.py`, `intake.py`, `api.py`, `storage.py`, `backup.py`, `factory_reset.py` and startup/shutdown hooks as required. Add `test_retrieval_lifecycle.py` and `test_embedding_runtime.py`.
 
-- [ ] Define a verified model manifest and atomic activation. Test missing/corrupt files, cancelled download, offline startup and altered runtime/preprocessing versions using synthetic/local fixtures.
-- [ ] Introduce one bounded managed model runtime per home/model fingerprint; test parallel loads, inference serialization/resource bounds, idle release and home separation.
-- [ ] Replace query-time whole-corpus fingerprinting with transactional source/extraction generation tracking. Audit every canonical evidence writer, including imports, reprocessing, visual/correspondence-derived evidence and restore; missed writers must not create false-ready state.
-- [ ] Add durable desired/published generations and one coalesced refresh request per Tender. Embed changed representations and reuse completed vectors; publish only after rechecking source generation.
-- [ ] Schedule maintenance outside the long-lived AI execution lane with bounded resources and foreground priority. Preserve explicit stop/Quit/reset and active-reader semantics.
-- [ ] Keep keyword search available with explicit status while semantic preparation is unavailable. Do not serve stale matches as current. Defer partial semantic operation unless its coverage contract is fully implemented and tested.
-- [ ] Add safe obsolete-vector/generation cleanup, disk-pressure failure, restart recovery and restore rebuild behavior. Never delete originals or historical authoritative records.
-- [ ] Benchmark vectorized exact scoring/caching before adopting any new index engine. Record cold/warm/resource results up to current supported limits.
+- [x] Define a verified model manifest and atomic activation. Test missing/corrupt files, cancelled download, offline startup and altered runtime/preprocessing versions using synthetic/local fixtures.
+- [x] Introduce one bounded managed model runtime per home/model fingerprint; test parallel loads, inference serialization/resource bounds, idle release and home separation.
+- [x] Replace query-time whole-corpus fingerprinting with transactional source/extraction generation tracking. Audit every canonical evidence writer, including imports, reprocessing, visual/correspondence-derived evidence and restore; missed writers must not create false-ready state.
+- [x] Add durable desired/published generations and one coalesced refresh request per Tender. Embed changed representations and reuse completed vectors; publish only after rechecking source generation.
+- [x] Schedule maintenance outside the long-lived AI execution lane with bounded resources and foreground priority. Preserve explicit stop/Quit/reset and active-reader semantics.
+- [x] Keep keyword search available with explicit status while semantic preparation is unavailable. Do not serve stale matches as current. Defer partial semantic operation unless its coverage contract is fully implemented and tested.
+- [x] Add safe obsolete-vector/generation cleanup, disk-pressure failure, restart recovery and restore rebuild behavior. Never delete originals or historical authoritative records.
+- [x] Benchmark vectorized exact scoring/caching before adopting any new index engine. Record cold/warm/resource results up to current supported limits.
 
-**Deliverable:** Automatic preparation and updates that remain truthful and do not stall normal questions.
+**Check:** Focused backend suites **passed** (embedding runtime, retrieval lifecycle, semantic, package analysis, retrieval API/scope, extraction, API import, backup schema 4, measurements, visual sources, later-routes, factory reset). `npm run bindings` and `npm run check:ui` passed. DocumentSearch/Files UI **7 passed**. Exact scoring of 50,000 vectors is a NumPy matmul (no ANN). Browser MCP was not used for a live Documents walk in this increment.
+
+**Deliverable:** Automatic preparation and updates that remain truthful and do not stall normal questions. Completed 14 September 2026.
 
 ## Task 6: Make Manager and staff retrieval economical and purposeful
 

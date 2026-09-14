@@ -379,7 +379,7 @@ class StaffRoutingService:
     def _evidence_artifact(conn, tender_id: str, evidence_id: str):
         row = conn.execute(
             """
-            SELECT e.id AS evidence_id,a.id,a.version,a.content_hash,a.is_current
+            SELECT e.id AS evidence_id,e.is_current AS evidence_current,a.id,a.version,a.content_hash,a.is_current
             FROM evidence e JOIN artifacts a ON a.id=e.artifact_id
             WHERE a.tender_id=? AND e.id=?
             """,
@@ -389,6 +389,10 @@ class StaffRoutingService:
             raise ValueError("A staff work-order source does not belong to this Tender.")
         if not row["is_current"]:
             raise ValueError("A staff work-order source was superseded. Review current evidence.")
+        if row["evidence_current"] is not None and not row["evidence_current"]:
+            raise ValueError(
+                "A staff work-order source was superseded by a later extraction. Review current evidence."
+            )
         return row
 
     @staticmethod

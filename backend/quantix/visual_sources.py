@@ -13,6 +13,29 @@ from .db import dump, new_id
 from .documents import PDFIUM_LOCK
 
 
+# Tool results are capped at 1 MB of JSON; base64 adds a third, so images stay well below.
+MAX_IMAGE_BYTES = 600_000
+
+
+def fit_image(png: bytes) -> tuple[bytes, str]:
+    """Keep small renders as PNG; re-encode large ones as JPEG so they fit a tool result."""
+
+    if len(png) <= MAX_IMAGE_BYTES:
+        return png, "image/png"
+    from PIL import Image
+
+    with Image.open(io.BytesIO(png)) as image:
+        picture = image.convert("RGB")
+    for quality, scale in ((85, 1.0), (75, 1.0), (70, 0.8), (65, 0.65), (60, 0.5)):
+        frame = picture if scale == 1.0 else picture.resize(
+            (max(1, int(picture.width * scale)), max(1, int(picture.height * scale))))
+        output = io.BytesIO()
+        frame.save(output, format="JPEG", quality=quality, optimize=True)
+        if output.tell() <= MAX_IMAGE_BYTES:
+            return output.getvalue(), "image/jpeg"
+    return output.getvalue(), "image/jpeg"
+
+
 def render_region(path, page, region):
     if isinstance(page, bool) or not isinstance(page, int) or page < 1:
         raise ValueError("Choose a valid page number.")
@@ -61,6 +84,9 @@ async def _visual_source(context, artifact_id, page, region):
     repo, tender_id = context.repo, context.tender_id
     context.require_tool("view_document_page")
     context.ensure_scope_current()
+    from .office_tools import resolve_document_id
+
+    artifact_id = resolve_document_id(context, artifact_id)
     artifact = context.ensure_artifact_allowed(artifact_id)
     if artifact["kind"] != "pdf":
         raise ValueError(
@@ -68,6 +94,7 @@ async def _visual_source(context, artifact_id, page, region):
         )
     path = repo.object_path(tender_id, artifact_id)
     png = await asyncio.to_thread(render_region, path, page, region)
+    image, mime_type = await asyncio.to_thread(fit_image, png)
     # A source revision or binding revocation during rendering must not become
     # an attributable read for the old bytes.
     artifact = context.ensure_artifact_allowed(artifact_id)
@@ -154,5 +181,5 @@ async def _visual_source(context, artifact_id, page, region):
     )
     return [
         {"type": "text", "text": json.dumps(reference)},
-        {"type": "image", "mime_type": "image/png", "data": base64.b64encode(png).decode()},
+        {"type": "image", "mime_type": mime_type, "data": base64.b64encode(image).decode()},
     ]

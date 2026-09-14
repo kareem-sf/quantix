@@ -180,6 +180,7 @@ def test_chunks_are_bounded_and_keep_source_offsets_without_replacing_original_t
 ):
     module, repo, tid, fake = setup
     monkeypatch.setattr(module, "CHUNK_CHARS", 100)
+    monkeypatch.setattr("quantix.retrieval_passages.CHUNK_CHARS", 100)
     text = "Waterproof membrane. " * 30
     evidence = source(repo, tid, "long.pdf", text)
     service = module.SemanticService(repo)
@@ -237,6 +238,8 @@ def test_missing_stored_vectors_make_index_unavailable_instead_of_empty_results(
 
 def test_model_download_cancellation_stops_child_without_customer_text(setup, monkeypatch):
     module, repo, tid, fake = setup
+    from quantix import embedding_runtime
+
     monkeypatch.setattr(module, "model_available", lambda path: False)
     actual = subprocess.Popen
     processes = []
@@ -250,7 +253,7 @@ def test_model_download_cancellation_stops_child_without_customer_text(setup, mo
         processes.append(child)
         return child
 
-    monkeypatch.setattr(module.subprocess, "Popen", process)
+    monkeypatch.setattr(embedding_runtime.subprocess, "Popen", process)
     started = time.monotonic()
     with pytest.raises(InterruptedError):
         module._ensure_model(

@@ -174,7 +174,7 @@ class ProjectMapService:
         reviews, cache = [], {}
         with self.repo.db.connect() as conn:
             saved_reviews = [record(row) for row in conn.execute("SELECT * FROM project_reviews WHERE tender_id=? ORDER BY created_at DESC,id", (tender_id,))]
-            extracted = conn.execute("SELECT COUNT(*) FROM evidence e JOIN artifacts a ON a.id=e.artifact_id WHERE a.tender_id=? AND a.is_current=1 AND e.kind!='measurement' AND length(e.text)>0", (tender_id,)).fetchone()[0]
+            extracted = conn.execute("SELECT COUNT(*) FROM evidence e JOIN artifacts a ON a.id=e.artifact_id WHERE a.tender_id=? AND a.is_current=1 AND COALESCE(e.is_current,1)=1 AND e.kind!='measurement' AND length(e.text)>0", (tender_id,)).fetchone()[0]
         for row in saved_reviews:
             data, reasons = row["payload"], []
             artifact = by_id.get(data["artifact_id"])

@@ -229,7 +229,7 @@ def test_existing_workspaces_gain_the_name_source_column(tmp_path):
     repo = Repository(home)
     assert repo.get_tender("t")["name_source"] == "engineer"
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.CURRENT_SCHEMA_VERSION == 3
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.CURRENT_SCHEMA_VERSION == 4
 
 
 def test_identification_runs_pin_the_manager_profile(tmp_path):

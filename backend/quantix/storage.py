@@ -40,6 +40,10 @@ def cache_dir(home: Path | str | None = None) -> Path:
     return resolve_home(home) / "cache"
 
 
+def models_dir(home: Path | str | None = None) -> Path:
+    return resolve_home(home) / "models"
+
+
 def logs_dir(home: Path | str | None = None) -> Path:
     return resolve_home(home) / "logs"
 

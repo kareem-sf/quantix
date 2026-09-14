@@ -258,7 +258,7 @@ async def test_semantic_hit_reads_matching_offset_instead_of_source_start(setup)
         conn.execute("UPDATE evidence SET text=? WHERE id=?", (text, item["source_id"]))
 
     class SemanticDouble:
-        def search(self, *args):
+        def search(self, *args, **_kwargs):
             return [
                 {
                     "id": item["source_id"],

@@ -40,7 +40,7 @@ def _document_coverage(conn, artifact: dict) -> dict:
         }
     )
     ocr_pages = conn.execute(
-        "SELECT COUNT(*) FROM evidence WHERE artifact_id=? AND json_extract(metadata_json,'$.method')='ocr'",
+        "SELECT COUNT(*) FROM evidence WHERE artifact_id=? AND COALESCE(is_current,1)=1 AND json_extract(metadata_json,'$.method')='ocr'",
         (artifact["id"],),
     ).fetchone()[0]
     other = {}
@@ -87,7 +87,7 @@ def _has_exception(row: dict) -> bool:
 def _segments(conn, artifact_id: str) -> dict[str, dict]:
     segments: dict[str, dict] = {}
     for row in conn.execute(
-        "SELECT id,locator,page,sheet,cell_range,text FROM evidence WHERE artifact_id=? ORDER BY rowid",
+        "SELECT id,locator,page,sheet,cell_range,text FROM evidence WHERE artifact_id=? AND COALESCE(is_current,1)=1 ORDER BY rowid",
         (artifact_id,),
     ):
         key = row["locator"]

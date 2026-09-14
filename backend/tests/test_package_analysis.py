@@ -71,7 +71,8 @@ async def test_local_stages_complete_and_the_map_waits_for_ai(tmp_path, local_on
     run = repo.create_run(tender["id"], "analysis")
     result = await run_analysis(repo, tender["id"], run["id"], threading.Event(), ai_ready=lambda: "No AI chosen.")
     assert [key for key in result.stages] == ["register", "recognise", "index", "structure", "map"]
-    assert result.stages["index"]["state"] == "failed"  # isolated, reported, later stages still ran
+    assert result.stages["index"]["state"] == "completed"
+    assert "background" in result.stages["index"]["detail"]
     assert result.stages["structure"]["state"] == "completed"
     assert result.stages["map"]["state"] == "waiting"
     labels = [event["data"]["label"] for event in repo.run_events(run["id"]) if event["kind"] == "analysis_stage"]
@@ -172,3 +173,12 @@ async def test_scoped_staff_cannot_read_package_context_outside_its_sources(tmp_
     response = await definition.function.__wrapped__(ToolContext(context))
     assert json.loads(response)["available"] is False
     assert not any(value in response for value in ("Private", "Restricted", "private-id"))
+
+
+def test_overlong_orientation_text_is_trimmed_not_rejected():
+    brief = DocumentBrief.model_validate({
+        "document_id": "d1", "document_type": "addendum_or_clarification", "title": None,
+        "brief": "b" * 900, "key_locations": ["page 1 onward: " + "x" * 300], "key_topics": ["t"] * 12,
+    })
+    assert len(brief.brief) == 600 and len(brief.key_locations[0]) == 120 and len(brief.key_topics) == 8
+    assert brief.title is None
