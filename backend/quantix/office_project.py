@@ -64,19 +64,14 @@ def publish_project(output, context):
     from .project_map import ProjectMapService
     from .tender_requirements import RequirementService
 
-    nodes, requirements, measurements = [], [], []
+    nodes, requirements = [], []
     if output.project_map_nodes:
         service = ProjectMapService(context.repo)
         nodes = [service.propose(context.tender_id, node.model_dump(), origin="agent", run_id=context.run_id) for node in output.project_map_nodes]
     if output.submission_requirements:
         service = RequirementService(context.repo)
         requirements = [service.propose(context.tender_id, requirement.model_dump(mode="json"), origin="manager", run_id=context.run_id) for requirement in output.submission_requirements]
-    if output.drawing_measurements:
-        from .measurements import MeasurementService
-        service = MeasurementService(context.repo)
-        measurements = [service.propose_agent(context.tender_id, measurement.model_dump(), context.run_id) for measurement in output.drawing_measurements]
     return {
         "project_map_nodes": nodes, "submission_requirements": requirements,
-        "drawing_measurements": measurements,
         "programme_proposal": output.programme_proposal.model_dump(mode="json") if output.programme_proposal else None,
     }

@@ -231,7 +231,7 @@ def create_app(home: Path, token: str) -> FastAPI:
                 "backups",
                 "quotations",
                 "knowledge",
-                "measurements",
+                "takeoff",
                 "submissions",
                 "project_map",
                 "submission_requirements",
@@ -606,6 +606,9 @@ def create_app(home: Path, token: str) -> FastAPI:
     app.include_router(create_correspondence_router(repo))
     app.include_router(create_knowledge_router(repo))
     app.include_router(create_measurement_router(repo))
+    from .takeoff_routes import create_router as create_takeoff_router
+
+    app.include_router(create_takeoff_router(repo))
     app.include_router(create_map_router(repo))
     app.include_router(create_requirement_router(repo))
     app.include_router(create_ai_router(repo, runtimes, ai_setup))

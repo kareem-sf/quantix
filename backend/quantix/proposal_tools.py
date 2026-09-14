@@ -1,4 +1,4 @@
-"""Stage records for engineer review during a run; nothing is saved until the run finishes."""
+"""Stage records for engineer review during a run or assignment; nothing is saved until the work finishes."""
 
 from __future__ import annotations
 
@@ -15,9 +15,9 @@ from .office_types import OfficeOutput, OfficeProposals
 
 ProposalKind = Literal[
     "plan",
+    "takeoff",
     "boq_item_proposals",
     "quantity_proposals",
-    "drawing_measurements",
     "unit_rate_proposals",
     "price_proposals",
     "web_findings",
@@ -29,8 +29,21 @@ ProposalKind = Literal[
 ]
 
 SINGLE = {"plan", "programme_proposal"}
+# Staff stage records inside their own assignment; plans, commercial and web records stay with the Manager.
+STAFF_KINDS = {"takeoff", "boq_item_proposals", "quantity_proposals", "submission_requirements", "project_map_nodes"}
 
 RULES: dict[str, str] = {
+    "takeoff": (
+        "One line per BOQ item, or per item of work the BOQ does not include, with its location (building, "
+        "floor, grid or zone). Take quantities from printed dimensions and schedules first. Scale from the "
+        "drawing with calculate_drawing_measurement only where nothing is dimensioned, and count symbols by "
+        "viewing each region with view_document_page. Do the arithmetic with calculate_engineering and write it "
+        "in working with deductions, laps, waste and assumptions. Cite the drawing pages you viewed and any "
+        "schedule or specification you read. Set boq_item_id to the BOQ item you read with inspect_estimate and "
+        "give the quantity in that item's unit; Quantix compares the two. Leave boq_item_id empty for work shown "
+        "on the drawings that has no BOQ item: these are the missing items. For a BOQ item whose work you "
+        "cannot find on the drawings, give its boq_item_id with no quantity and say what you checked."
+    ),
     "plan": (
         "A work plan the engineer approves before it starts: up to 12 tasks, each with a role and the "
         "source IDs it rests on. After approval you carry it out with your team. Propose the plan and "
@@ -48,12 +61,6 @@ RULES: dict[str, str] = {
         "Calculated quantities such as volumes, grouped items or dimensional build-ups, each linked to a BOQ "
         "item you inspected in this run. State dimensions, units, arithmetic, scope, deductions and assumptions "
         "in the calculation, with read source IDs. They never change the supplied BOQ quantity."
-    ),
-    "drawing_measurements": (
-        "Takeoff measurements from drawings. Inspect every measured region with view_document_page, read the "
-        "printed scale or a dimension to calibrate, and calculate with calculate_drawing_measurement. Return "
-        "its geometry and the supporting source IDs. Never invent a scale or call a marked sample a complete "
-        "takeoff."
     ),
     "unit_rate_proposals": (
         "Proposed installed unit rates for BOQ items you read with inspect_estimate in this run, with their "
@@ -107,17 +114,23 @@ def _item_type(kind: str):
 
 
 def proposal_tools() -> list:
-    @tool(read_only=False, idempotent=True)
-    async def propose(ctx: ToolContext[OfficeContext], kind: ProposalKind, items: list[dict]) -> str:
-        """Stage records for the engineer to review: a plan, BOQ rows, quantities, drawing measurements, unit rates, market prices, web findings, quote drafts, submission requirements, project map items, a programme or draft documents. Call proposal_format first for the fields and rules of a kind. Each call replaces what you staged for that kind, so pass the complete list (one item for plan and programme_proposal; an empty list withdraws). Staged records are checked now and saved only when your run finishes. Nothing is approved."""
+    @tool(read_only=False)
+    async def propose(
+        ctx: ToolContext[OfficeContext], kind: ProposalKind, items: list[dict], replace: bool = False
+    ) -> str:
+        """Stage records for the engineer to review: a plan, takeoff lines, BOQ rows, quantities, unit rates, market prices, web findings, quote drafts, submission requirements, project map items, a programme or draft documents. Call proposal_format first for the fields and rules of a kind. Items are added to what you already staged for that kind; pass replace=true to replace that kind's list, or replace=true with no items to withdraw it. A plan or programme is always replaced. Everything staged is checked now and saved for review when your work finishes. Nothing is approved."""
         context = ctx.context
+        if context.is_staff and kind not in STAFF_KINDS:
+            raise ToolArgumentError(
+                f"Staff stage {', '.join(sorted(STAFF_KINDS))}. Report anything else to the Tender Manager in your findings."
+            )
         if kind in SINGLE and len(items) > 1:
             raise ToolArgumentError(f"Pass exactly one {kind} item.")
         staged = dict(context.proposals)
         if kind in SINGLE:
             staged[kind] = items[0] if items else None
         else:
-            staged[kind] = items
+            staged[kind] = list(items) if replace else [*staged.get(kind, []), *items]
         try:
             proposals = OfficeProposals.model_validate(staged)
         except ValidationError as error:
@@ -129,8 +142,9 @@ def proposal_tools() -> list:
         except (KeyError, ValueError) as error:
             raise ToolArgumentError(str(error.args[0] if error.args else error)) from None
         context.proposals = {key: value for key, value in staged.items() if value}
-        return json.dumps({"kind": kind, "staged": len(items),
-                           "detail": "Staged. It is saved for the engineer's review when the run finishes."})
+        current = staged[kind]
+        return json.dumps({"kind": kind, "staged_total": len(current) if isinstance(current, list) else int(current is not None),
+                           "detail": "Staged. It is saved for the engineer's review when your work finishes."})
 
     @tool(read_only=True, idempotent=True)
     async def proposal_format(ctx: ToolContext[OfficeContext], kind: ProposalKind) -> str:

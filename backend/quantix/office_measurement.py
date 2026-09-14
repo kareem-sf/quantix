@@ -6,7 +6,7 @@ import math
 from typing import Literal
 
 from .ai_tools import ToolContext
-from .measurement_models import AgentMeasurementProposal, MeasurementInput
+from .measurement_models import AgentMeasurement, MeasurementInput
 from .measurements import MeasurementService
 from .office_tools import OfficeContext, redact_text, scoped_tool
 
@@ -22,8 +22,8 @@ def _clean(value):
 
 
 def validate_agent_measurement(context, values):
-    """Root calls this before accepting/publishing an agent drawing proposal."""
-    proposal = AgentMeasurementProposal.model_validate(values)
+    """The measured and calibration points must lie in drawing regions viewed in this run."""
+    proposal = AgentMeasurement.model_validate(values)
     context.ensure_artifact_allowed(proposal.artifact_id)
     context.validate_sources(proposal.source_ids)
     viewed_regions = []
@@ -51,40 +51,30 @@ def validate_agent_measurement(context, values):
             continue
         viewed_regions.append(region)
     if not viewed_regions:
-        raise ValueError("Inspect the measured drawing page with view_document_page before proposing a measurement.")
+        raise ValueError("Inspect the measured drawing page with view_document_page before measuring it.")
     for px, py in [*proposal.points, *(proposal.calibration_points or [])]:
         if not any(x <= px <= x + width and y <= py <= y + height for x, y, width, height in viewed_regions):
-            raise ValueError("Inspect every measured and calibration point in the drawing before proposing its quantity.")
-    MeasurementService(context.repo).supporting_sources(context.tender_id, proposal)
+            raise ValueError("Inspect every measured and calibration point in the drawing before measuring it.")
     return proposal
 
 
 async def calculate_agent_measurement(context, values):
-    """Calculate with the original PDF dimensions; persist no measurement or review."""
+    """Calculate with the original PDF dimensions; nothing is stored."""
     proposal = validate_agent_measurement(context, values)
-    service = MeasurementService(context.repo)
     calculation = await asyncio.to_thread(
-        service.calculate,
+        MeasurementService(context.repo).calculate,
         context.tender_id,
         proposal.model_dump(include=set(MeasurementInput.model_fields)),
     )
-    context.validate_sources(proposal.source_ids)
-    supporting = service.supporting_sources(context.tender_id, proposal)
-    context.emit_event("drawing_measurement_calculated", "A drawing quantity was calculated for an agent proposal, without engineer approval.", {
+    context.emit_event("drawing_measurement_calculated", "A drawing quantity was calculated.", {
         "artifact_id": proposal.artifact_id, "page": proposal.page,
         "source_ids": proposal.source_ids, "mode": proposal.mode,
-        "origin": "agent", "status": "proposed",
     })
     return {
         **calculation,
         "scope_label": proposal.scope_label,
         "supporting_source_ids": proposal.source_ids,
-        "supporting_sources": supporting,
-        "origin": "agent",
-        "status": "proposed",
-        "reviewed_at": None,
-        "review_rationale": None,
-        "instruction": "This is an agent calculation from interpreted marks and stated calibration evidence. It is not an engineer-reviewed quantity or a complete drawing takeoff. Return the geometry and source IDs in drawing_measurements to propose it. The engineer must inspect the drawing, calibration and scope before linking and separately approving a BOQ quantity.",
+        "instruction": "A calculation from the marked points and the stated calibration, not a checked quantity. Put the quantity and this calculation in the takeoff line's working, citing the drawing page.",
     }
 
 
@@ -101,7 +91,7 @@ def measurement_tools():
         scope_label: str,
         source_ids: list[str],
     ) -> str:
-        """Calculate a proposed length, area or count after viewing the drawing regions and reading supporting dimension sources. Points are top-left page fractions. Count requires null calibration. This neither saves nor approves a measurement."""
+        """Scale a length, area or count from a drawing when no dimension is printed. View the regions first with view_document_page; points are top-left page fractions and calibration is a printed dimension or scale bar. Count requires null calibration. Nothing is saved."""
         result = await calculate_agent_measurement(ctx.context, {
             "artifact_id": artifact_id, "page": page, "mode": mode, "points": points,
             "calibration_points": calibration_points, "calibration_metres": calibration_metres,

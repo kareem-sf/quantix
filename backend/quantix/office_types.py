@@ -9,10 +9,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from .correspondence_models import DraftInput
 from .estimate_models import DraftDocumentProposal, SourceBoqProposal, UnitRateProposalInput
 from .map_models import NodeInput
-from .measurement_models import AgentMeasurementProposal
 from .quantity_models import AgentQuantityProposal
 from .requirement_models import RequirementProposal
 from .submission_models import ConstructionProgramme
+from .takeoff_models import TakeoffLineProposal
 
 
 class Proposal(BaseModel):
@@ -77,7 +77,7 @@ class OfficeProposals(Proposal):
     project_map_nodes: list[NodeInput] = Field(default_factory=list, max_length=30)
     submission_requirements: list[RequirementProposal] = Field(default_factory=list, max_length=30)
     programme_proposal: ConstructionProgramme | None = None
-    drawing_measurements: list[AgentMeasurementProposal] = Field(default_factory=list, max_length=30)
+    takeoff: list[TakeoffLineProposal] = Field(default_factory=list, max_length=200)
     draft_documents: list[DraftDocumentProposal] = Field(default_factory=list, max_length=8)
     quantity_proposals: list[AgentQuantityProposal] = Field(default_factory=list, max_length=30)
     boq_item_proposals: list[SourceBoqProposal] = Field(default_factory=list, max_length=50)

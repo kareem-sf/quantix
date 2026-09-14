@@ -1192,50 +1192,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tenders/{tender_id}/measurements/calculate": {
+    "/api/tenders/{tender_id}/takeoff": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
-        /** Calculate */
-        post: operations["calculate_api_tenders__tender_id__measurements_calculate_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/measurements": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Records */
-        get: operations["records_api_tenders__tender_id__measurements_get"];
-        put?: never;
-        /** Create */
-        post: operations["create_api_tenders__tender_id__measurements_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/measurements/{measurement_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Record */
-        get: operations["record_api_tenders__tender_id__measurements__measurement_id__get"];
+        /** Lines */
+        get: operations["lines_api_tenders__tender_id__takeoff_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1244,7 +1209,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tenders/{tender_id}/measurements/{measurement_id}/link": {
+    "/api/tenders/{tender_id}/takeoff/{line_id}/review": {
         parameters: {
             query?: never;
             header?: never;
@@ -1253,8 +1218,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Link */
-        post: operations["link_api_tenders__tender_id__measurements__measurement_id__link_post"];
+        /** Review */
+        post: operations["review_api_tenders__tender_id__takeoff__line_id__review_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2284,6 +2249,10 @@ export interface components {
             findings?: components["schemas"]["FindingProposal"][];
             /** Source Ids */
             source_ids?: string[];
+            /** Saved Records */
+            saved_records?: {
+                [key: string]: number;
+            };
         };
         /** Attachment */
         Attachment: {
@@ -3470,125 +3439,6 @@ export interface components {
             /** Evidence Hash */
             evidence_hash: string;
         };
-        /** MeasurementCalculation */
-        MeasurementCalculation: {
-            source: components["schemas"]["MeasurementPage"];
-            /**
-             * Mode
-             * @enum {string}
-             */
-            mode: "length" | "area" | "count";
-            /** Points */
-            points: [
-                number,
-                number
-            ][];
-            /** Calibration Points */
-            calibration_points: [
-                number,
-                number
-            ][] | null;
-            /** Calibration Metres */
-            calibration_metres: string | null;
-            /** Quantity */
-            quantity: string;
-            /**
-             * Unit
-             * @enum {string}
-             */
-            unit: "m" | "m2" | "nr";
-            /** Calculation */
-            calculation: string;
-            /** Calculation Version */
-            calculation_version: string;
-            /**
-             * Coordinate System
-             * @constant
-             */
-            coordinate_system: "normalized_top_left";
-            /** Precision Note */
-            precision_note: string;
-        };
-        /** MeasurementCreate */
-        MeasurementCreate: {
-            /**
-             * Engineer Confirmed
-             * @constant
-             */
-            engineer_confirmed: true;
-            /** Rationale */
-            rationale: string;
-            /** Artifact Id */
-            artifact_id: string;
-            /** Page */
-            page: number;
-            /**
-             * Mode
-             * @enum {string}
-             */
-            mode: "length" | "area" | "count";
-            /** Points */
-            points: [
-                number,
-                number
-            ][];
-            /** Calibration Points */
-            calibration_points?: [
-                number,
-                number
-            ][] | null;
-            /** Calibration Metres */
-            calibration_metres?: string | null;
-            /** Scope Label */
-            scope_label: string;
-        };
-        /** MeasurementInput */
-        MeasurementInput: {
-            /** Artifact Id */
-            artifact_id: string;
-            /** Page */
-            page: number;
-            /**
-             * Mode
-             * @enum {string}
-             */
-            mode: "length" | "area" | "count";
-            /** Points */
-            points: [
-                number,
-                number
-            ][];
-            /** Calibration Points */
-            calibration_points?: [
-                number,
-                number
-            ][] | null;
-            /** Calibration Metres */
-            calibration_metres?: string | null;
-        };
-        /** MeasurementLink */
-        MeasurementLink: {
-            /**
-             * Engineer Confirmed
-             * @constant
-             */
-            engineer_confirmed: true;
-            /** Rationale */
-            rationale: string;
-            /** Item Id */
-            item_id: string;
-        };
-        /** MeasurementLinkRecord */
-        MeasurementLinkRecord: {
-            /** Item Id */
-            item_id: string;
-            /** Proposal Id */
-            proposal_id: string;
-            /** Rationale */
-            rationale: string;
-            /** Created At */
-            created_at: string;
-        };
         /** MeasurementPage */
         MeasurementPage: {
             /** Artifact Id */
@@ -3612,106 +3462,6 @@ export interface components {
             ];
             /** Is Current */
             is_current: boolean;
-        };
-        /** MeasurementRecord */
-        MeasurementRecord: {
-            source: components["schemas"]["MeasurementPage"];
-            /**
-             * Mode
-             * @enum {string}
-             */
-            mode: "length" | "area" | "count";
-            /** Points */
-            points: [
-                number,
-                number
-            ][];
-            /** Calibration Points */
-            calibration_points: [
-                number,
-                number
-            ][] | null;
-            /** Calibration Metres */
-            calibration_metres: string | null;
-            /** Quantity */
-            quantity: string;
-            /**
-             * Unit
-             * @enum {string}
-             */
-            unit: "m" | "m2" | "nr";
-            /** Calculation */
-            calculation: string;
-            /** Calculation Version */
-            calculation_version: string;
-            /**
-             * Coordinate System
-             * @constant
-             */
-            coordinate_system: "normalized_top_left";
-            /** Precision Note */
-            precision_note: string;
-            /** Id */
-            id: string;
-            /** Tender Id */
-            tender_id: string;
-            /** Source Id */
-            source_id: string;
-            /** Scope Label */
-            scope_label: string;
-            /**
-             * Status
-             * @constant
-             */
-            status: "proposed";
-            /**
-             * Origin
-             * @enum {string}
-             */
-            origin: "engineer" | "agent";
-            /** Reviewed At */
-            reviewed_at: string | null;
-            /** Review Rationale */
-            review_rationale: string | null;
-            /** Run Id */
-            run_id?: string | null;
-            /** Supporting Source Ids */
-            supporting_source_ids?: string[];
-            /** Supporting Sources */
-            supporting_sources?: components["schemas"]["MeasurementSupportingSource"][];
-            /** Is Current */
-            is_current: boolean;
-            /** Created At */
-            created_at: string;
-            /** Links */
-            links: components["schemas"]["MeasurementLinkRecord"][];
-            /** Source Available */
-            source_available: boolean;
-            /** Stale Reasons */
-            stale_reasons: string[];
-        };
-        /** MeasurementSupportingSource */
-        MeasurementSupportingSource: {
-            /** Source Id */
-            source_id: string;
-            /** Artifact Id */
-            artifact_id: string;
-            /** Artifact Name */
-            artifact_name: string;
-            /** Relative Path */
-            relative_path: string;
-            /** Locator */
-            locator: string;
-            /** Page */
-            page: number | null;
-            /** Version */
-            version: number;
-            /** Content Hash */
-            content_hash: string;
-            /** Evidence Hash */
-            evidence_hash: string;
-            /** Kind */
-            kind: string;
         };
         /** Message */
         Message: {
@@ -5758,6 +5508,85 @@ export interface components {
             included_only_allowed: boolean;
             /** Detail */
             detail: string;
+        };
+        /** TakeoffBoqItem */
+        TakeoffBoqItem: {
+            /** Description */
+            description: string;
+            /** Unit */
+            unit: string;
+            /** Quantity */
+            quantity: string | null;
+        };
+        /** TakeoffLine */
+        TakeoffLine: {
+            /** Id */
+            id: string;
+            /** Tender Id */
+            tender_id: string;
+            /** Run Id */
+            run_id: string;
+            /** Assignment Id */
+            assignment_id?: string | null;
+            /** Author */
+            author: string;
+            /** Description */
+            description: string;
+            /** Location */
+            location: string;
+            /** Unit */
+            unit: string;
+            /** Quantity */
+            quantity: string | null;
+            /** Method */
+            method: ("dimensions" | "schedule" | "scaled" | "counted") | null;
+            /** Working */
+            working: string;
+            /** Source Ids */
+            source_ids: string[];
+            /** Boq Item Id */
+            boq_item_id: string | null;
+            boq: components["schemas"]["TakeoffBoqItem"] | null;
+            /**
+             * Comparison
+             * @enum {string}
+             */
+            comparison: "matches" | "differs" | "unit_differs" | "no_boq_quantity" | "not_in_boq" | "not_on_drawings";
+            /** Difference */
+            difference?: string | null;
+            /** Difference Percent */
+            difference_percent?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "proposed" | "accepted" | "rejected";
+            /**
+             * Review Note
+             * @default
+             */
+            review_note: string;
+            /** Reviewed At */
+            reviewed_at?: string | null;
+            /** Is Current */
+            is_current: boolean;
+            /** Created At */
+            created_at: string;
+            /** Updated At */
+            updated_at: string;
+        };
+        /** TakeoffReview */
+        TakeoffReview: {
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "accepted" | "rejected";
+            /**
+             * Note
+             * @default
+             */
+            note: string;
         };
         /** Task */
         Task: {
@@ -8782,48 +8611,9 @@ export interface operations {
             };
         };
     };
-    calculate_api_tenders__tender_id__measurements_calculate_post: {
+    lines_api_tenders__tender_id__takeoff_get: {
         parameters: {
             query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MeasurementInput"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MeasurementCalculation"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    records_api_tenders__tender_id__measurements_get: {
-        parameters: {
-            query?: {
-                artifact_id?: string | null;
-                offset?: number;
-                limit?: number;
-            };
             header?: never;
             path: {
                 tender_id: string;
@@ -8838,7 +8628,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MeasurementRecord"][];
+                    "application/json": components["schemas"]["TakeoffLine"][];
                 };
             };
             /** @description Validation Error */
@@ -8852,18 +8642,19 @@ export interface operations {
             };
         };
     };
-    create_api_tenders__tender_id__measurements_post: {
+    review_api_tenders__tender_id__takeoff__line_id__review_post: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 tender_id: string;
+                line_id: string;
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["MeasurementCreate"];
+                "application/json": components["schemas"]["TakeoffReview"];
             };
         };
         responses: {
@@ -8873,75 +8664,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MeasurementRecord"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    record_api_tenders__tender_id__measurements__measurement_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                measurement_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MeasurementRecord"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    link_api_tenders__tender_id__measurements__measurement_id__link_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                measurement_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MeasurementLink"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["QuantityProposal"];
+                    "application/json": components["schemas"]["TakeoffLine"];
                 };
             };
             /** @description Validation Error */

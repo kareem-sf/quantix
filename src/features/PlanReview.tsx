@@ -178,7 +178,11 @@ function PlanTask({
           {task.description}
         </p>
         {onSource && task.source_ids.length ? (
-          <Citations ids={task.source_ids} tenderId={tenderId} onOpen={onSource} />
+          <Citations
+            ids={task.source_ids}
+            tenderId={tenderId}
+            onOpen={onSource}
+          />
         ) : null}
       </div>
     </details>

@@ -13,7 +13,7 @@ _MATERIAL_FIELDS = (
     "unit_rate_proposals",
     "quote_drafts",
     "project_map_nodes",
-    "drawing_measurements",
+    "takeoff",
     "programme_proposal",
     "draft_documents",
     "requested_drafts",

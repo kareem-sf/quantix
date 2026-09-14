@@ -265,7 +265,7 @@ def evidence_tools():
 
     @scoped_tool
     async def trace_change_impact(ctx: ToolContext[OfficeContext], artifact_id: str) -> str:
-        """List saved work that still rests on earlier versions of a revised document: findings, tasks, BOQ rows, quantity and rate proposals, measurements, submission requirements, project map items, generated documents, working notes, work products and the working brief. It changes nothing."""
+        """List saved work that still rests on earlier versions of a revised document: findings, tasks, BOQ rows, quantity and rate proposals, takeoff lines, submission requirements, project map items, generated documents, working notes, work products and the working brief. It changes nothing."""
         office = ctx.context
         current = office.ensure_artifact_allowed(artifact_id)
         tender_id = office.tender_id
@@ -361,13 +361,13 @@ def evidence_tools():
                             "rate_proposals",
                             {"id": row["id"], "item_id": row["item_id"], "status": row["status"]},
                         )
-            if _table_exists(conn, "measurements"):
+            if _table_exists(conn, "takeoff_lines"):
                 for row in conn.execute(
-                    "SELECT id,source_id,artifact_id FROM measurements WHERE tender_id=?",
+                    "SELECT id,status,data_json FROM takeoff_lines WHERE tender_id=?",
                     (tender_id,),
                 ):
-                    if row["source_id"] in old_ids or row["artifact_id"] in earlier_ids:
-                        add("measurements", {"id": row["id"]})
+                    if _mentions(row["data_json"], match_ids):
+                        add("takeoff_lines", {"id": row["id"], "status": row["status"]})
             for table, kind, title_keys in (
                 ("submission_requirements", "submission_requirements", ("title",)),
                 ("project_nodes", "project_map_items", ("name", "title")),

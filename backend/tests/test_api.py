@@ -89,7 +89,7 @@ def test_knowledge_routes_are_registered_behind_local_auth(client):
     assert client.get("/api/knowledge", headers={"Authorization": ""}).status_code == 401
 
 
-@pytest.mark.parametrize("capability", ["measurements", "submissions"])
+@pytest.mark.parametrize("capability", ["takeoff", "submissions"])
 def test_reviewed_work_routes_are_registered_behind_local_auth(client, capability):
     assert capability in client.get("/api/health").json()["capabilities"]
     tender = client.post("/api/tenders", json={"name": "Reviewed work"}).json()

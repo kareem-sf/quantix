@@ -10,8 +10,8 @@ from .db import record
 from .estimates import EstimateService
 from .office_tools import OfficeContext, redact_text, safe_text, scoped_tool
 
-RecordType = Literal["findings", "decisions", "tasks", "runs", "messages"]
-RECORD_TABLES = {name: name for name in ("findings", "decisions", "tasks", "runs", "messages")}
+RecordType = Literal["findings", "decisions", "tasks", "runs", "messages", "takeoff"]
+RECORD_TABLES = {name: name for name in ("findings", "decisions", "tasks", "runs", "messages")} | {"takeoff": "takeoff_lines"}
 
 
 def recipient_addresses(text):
@@ -131,10 +131,23 @@ def business_tools():
     async def inspect_tender_records(
         ctx: ToolContext[OfficeContext], record_type: RecordType, offset: int, limit: int
     ) -> str:
-        """List findings, decisions, tasks, runs or messages. Use read_tender_record for complete records; summaries are not source evidence."""
+        """List findings, decisions, tasks, runs, messages or saved takeoff lines. Use read_tender_record for complete records; summaries are not source evidence."""
         page(offset, limit)
         table = RECORD_TABLES[record_type]
         ctx.context.repo.get_tender(ctx.context.tender_id)
+        if record_type == "takeoff":
+            from .takeoff import TakeoffService
+
+            lines = TakeoffService(ctx.context.repo).list(ctx.context.tender_id)
+            fields = ("id", "description", "location", "unit", "quantity", "boq_item_id", "boq", "comparison",
+                      "difference", "difference_percent", "status", "is_current", "author")
+            payload = {
+                "record_type": record_type,
+                "total": len(lines),
+                "records": [line.model_dump(include=set(fields)) for line in lines[offset:offset + limit]],
+                "next_offset": offset + limit if offset + limit < len(lines) else None,
+            }
+            return json.dumps(_clean(payload), ensure_ascii=False)
         with ctx.context.repo.db.connect() as conn:
             rows = [
                 record(row)

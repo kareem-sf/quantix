@@ -37,6 +37,14 @@ const statusTone: Record<Assignment["status"], string> = {
   cancelled: "bg-muted-foreground/60",
 };
 
+const recordText: Record<string, string> = {
+  takeoff: "takeoff lines",
+  boq_item_proposals: "BOQ rows",
+  quantity_proposals: "quantities",
+  submission_requirements: "submission requirements",
+  project_map_nodes: "project map items",
+};
+
 /** The staff the Tender Manager hired for this tender and the work it gave them. */
 export function Team({
   tenderId,
@@ -61,7 +69,10 @@ export function Team({
     : assignments;
 
   return (
-    <section aria-label="Tender team" className="flex flex-col gap-5 @container">
+    <section
+      aria-label="Tender team"
+      className="flex flex-col gap-5 @container"
+    >
       <CurrentWork tenderId={tenderId} onSource={onSource} />
       {managerRunId ? (
         <SteerManager tenderId={tenderId} runId={managerRunId} />
@@ -83,10 +94,7 @@ export function Team({
         </div>
       ) : null}
       {staff.length ? (
-        <ul
-          className="grid gap-2 @md:grid-cols-2"
-          aria-label="Staff"
-        >
+        <ul className="grid gap-2 @md:grid-cols-2" aria-label="Staff">
           {staff.map((member) => (
             <li key={member.id}>
               <StaffCard
@@ -194,7 +202,10 @@ function StaffCard({
         onClick={onSelect}
       >
         <StaffPortrait
-          portrait={{ style: NOTIONISTS_RECIPE.styleId, seed: member.portrait_seed }}
+          portrait={{
+            style: NOTIONISTS_RECIPE.styleId,
+            seed: member.portrait_seed,
+          }}
           name={member.name}
           size={40}
           decorative
@@ -203,7 +214,10 @@ function StaffCard({
           <span className="block truncate font-medium" dir="auto">
             {member.name}
           </span>
-          <span className="block truncate text-xs text-muted-foreground" dir="auto">
+          <span
+            className="block truncate text-xs text-muted-foreground"
+            dir="auto"
+          >
             {member.role}
           </span>
           <span className="mt-1 block text-xs text-muted-foreground">
@@ -240,7 +254,9 @@ function StaffCard({
               size="xs"
               className="self-start"
               disabled={retiring || open > 0}
-              title={open ? "Wait until their open work is finished." : undefined}
+              title={
+                open ? "Wait until their open work is finished." : undefined
+              }
               onClick={() => void retire()}
             >
               Retire
@@ -314,7 +330,10 @@ function AssignmentCard({
             {result.findings?.length ? (
               <ul className="flex flex-col gap-2" aria-label="Findings">
                 {result.findings.map((finding, index) => (
-                  <li key={`${finding.title}:${index}`} className="flex flex-col gap-1">
+                  <li
+                    key={`${finding.title}:${index}`}
+                    className="flex flex-col gap-1"
+                  >
                     <span className="flex flex-wrap items-center gap-1.5">
                       <Badge variant="outline" className="font-normal">
                         {finding.kind}
@@ -344,6 +363,16 @@ function AssignmentCard({
                 onOpen={onSource}
               />
             ) : null}
+            {Object.keys(result.saved_records ?? {}).length ? (
+              <p className="text-xs text-muted-foreground">
+                Saved for your review:{" "}
+                {Object.entries(result.saved_records ?? {})
+                  .map(
+                    ([kind, total]) => `${total} ${recordText[kind] ?? kind}`,
+                  )
+                  .join(", ")}
+              </p>
+            ) : null}
           </div>
         ) : null}
         <p className="text-xs text-muted-foreground">
@@ -369,7 +398,13 @@ function Field({ label, children }: { label: string; children: string }) {
   );
 }
 
-function SteerManager({ tenderId, runId }: { tenderId: string; runId: string }) {
+function SteerManager({
+  tenderId,
+  runId,
+}: {
+  tenderId: string;
+  runId: string;
+}) {
   const api = useApi();
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);

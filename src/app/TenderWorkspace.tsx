@@ -7,6 +7,7 @@ import { Estimate } from "../features/Estimate";
 import { Files } from "../features/Files";
 import { Outputs } from "../features/Outputs";
 import { Quotes } from "../features/Quotes";
+import { Takeoff } from "../features/Takeoff";
 import { SourceDrawer, type SourceSelection } from "../features/Sources";
 import { Work } from "../features/Work";
 import { TenderOfficeWorkspace } from "../features/office/TenderOfficeWorkspace";
@@ -274,7 +275,9 @@ function SectionPage({
 
   if (section === "estimate") {
     const view =
-      context.view === "proposals" || context.view === "quotes"
+      context.view === "proposals" ||
+      context.view === "quotes" ||
+      context.view === "takeoff"
         ? context.view
         : "boq";
     const views = [
@@ -282,6 +285,11 @@ function SectionPage({
         id: "boq",
         label: "BOQ",
         available: capabilities.includes("estimates"),
+      },
+      {
+        id: "takeoff",
+        label: "Takeoff",
+        available: capabilities.includes("takeoff"),
       },
       {
         id: "proposals",
@@ -319,6 +327,8 @@ function SectionPage({
         <Page legacy={false}>
           {!active.available ? (
             <Unavailable what={active.label} />
+          ) : view === "takeoff" ? (
+            <Takeoff tenderId={tenderId} onSource={onSource} />
           ) : view === "quotes" ? (
             <Quotes
               tenderId={tenderId}

@@ -323,7 +323,7 @@ function ProposalReview({
         <summary>Exact item and source basis when proposed</summary>
         <p className="field-help">
           This saved basis includes the original item values, approved
-          measurements and linked source versions. Approval is checked against
+          quantities and linked source versions. Approval is checked against
           it again by the service.
         </p>
         <pre>{JSON.stringify(proposal.basis, null, 2)}</pre>

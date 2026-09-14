@@ -4,7 +4,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ApiContext, createApi, type Schema } from "../api";
 import { Team } from "./Team";
 
-const staff = (id: string, name: string, role: string): Schema<"StaffMember"> => ({
+const staff = (
+  id: string,
+  name: string,
+  role: string,
+): Schema<"StaffMember"> => ({
   id,
   tender_id: "one",
   name,
@@ -50,7 +54,14 @@ function renderTeam(managerRunId?: string) {
       const path = new URL(String(address)).pathname;
       if (options?.method === "POST") {
         posts.push({ path, body: JSON.parse(String(options.body ?? "null")) });
-        return Response.json({ id: "instruction", root_id: "run-1", kind: "constraint", state: "admitted", replayed: false, created_at: "" });
+        return Response.json({
+          id: "instruction",
+          root_id: "run-1",
+          kind: "constraint",
+          state: "admitted",
+          replayed: false,
+          created_at: "",
+        });
       }
       if (path.endsWith("/work-brief")) return Response.json({ brief: null });
       if (path.endsWith("/evidence/source-1"))
@@ -101,7 +112,9 @@ function renderTeam(managerRunId?: string) {
   );
   render(
     <QueryClientProvider
-      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      client={
+        new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      }
     >
       <ApiContext.Provider value={api}>
         <Team tenderId="one" managerRunId={managerRunId} onSource={vi.fn()} />
@@ -121,7 +134,9 @@ it("shows every staff member, their work, questions and cited results", async ()
   expect(within(work).getByText("Is night work allowed?")).toBeVisible();
   await user.click(within(work).getByText("Check the slab"));
   expect(screen.getByText("Ground slab is C30/37, 250 mm.")).toBeVisible();
-  expect(await screen.findByRole("button", { name: /Concrete spec.pdf/ })).toBeVisible();
+  expect(
+    await screen.findByRole("button", { name: /Concrete spec.pdf/ }),
+  ).toBeVisible();
   expect(screen.getByText("model-a · 2 requests · 1,000 tokens")).toBeVisible();
 });
 
@@ -130,7 +145,9 @@ it("filters the work to one staff member", async () => {
   renderTeam();
   await user.click(await screen.findByRole("button", { name: /Samir Haddad/ }));
   const work = screen.getByRole("list", { name: "Assignments" });
-  expect(within(work).queryByText("Draft the programme")).not.toBeInTheDocument();
+  expect(
+    within(work).queryByText("Draft the programme"),
+  ).not.toBeInTheDocument();
   expect(screen.getByText("Work for Samir Haddad")).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Show all" }));
   expect(within(work).getByText("Draft the programme")).toBeVisible();

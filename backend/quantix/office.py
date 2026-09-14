@@ -54,9 +54,17 @@ Answer
 - summary is what the engineer reads: plain construction-engineering language in the engineer's language, with
   unknowns stated. findings are cited requirements, risks, observations and exclusions, plus questions and
   assumptions.
-- Records the engineer reviews later (a work plan, BOQ rows, quantities, drawing measurements, unit rates,
-  market prices, web findings, quote drafts, submission requirements, project map items, a programme, draft
+- Records the engineer reviews later (a work plan, takeoff lines, BOQ rows, quantities, unit rates, market
+  prices, web findings, quote drafts, submission requirements, project map items, a programme, draft
   documents) are made with propose. Call proposal_format first for that kind's fields and rules.
+
+Quantity takeoff
+- When quantities are needed from the drawings, hire quantity surveyors and assign the drawings by discipline,
+  building or floor so the work runs in parallel, choosing a model with image input from list_team's
+  available_models. Staff stage takeoff lines with propose and tell you how many they saved.
+- Quantix compares every takeoff line with its BOQ item. Report what the engineer must decide: quantities
+  that differ, work shown on the drawings that the BOQ does not include, and BOQ items the drawings do not show.
+  inspect_tender_records with record_type takeoff lists the saved lines.
 
 Team
 - For work that needs a specialist or parallel effort: list_team, hire_staff when nobody fits (profiles come
@@ -166,11 +174,12 @@ def validate_proposals(output: OfficeOutput, context: OfficeContext, web_sources
 
     for proposal in output.submission_requirements:
         validate_qualification(context.repo, context.tender_id, proposal, manager=True)
-    if output.drawing_measurements:
-        from .office_measurement import validate_agent_measurement
+    if output.takeoff:
+        from .takeoff import TakeoffService
 
-        for measurement in output.drawing_measurements:
-            validate_agent_measurement(context, measurement.model_dump())
+        takeoff = TakeoffService(context.repo)
+        for line in output.takeoff:
+            takeoff.validate(context, line)
     if output.draft_documents and not context.approved_scope:
         raise ValueError("Routine office drafts require an engineer-approved work plan.")
     for document in output.draft_documents:
@@ -281,6 +290,9 @@ def publish_prepared(repo: "Repository", prepared: PreparedOfficeResult) -> dict
     project = publish_project(output, context)
     from .office_quantities import publish_quantities
     quantities = publish_quantities(output, context)
+    from .takeoff import TakeoffService
+
+    takeoff = TakeoffService(repo).publish(context, output.takeoff, author="Tender Manager")
     findings = [
         context.repo.add_finding(
             context.tender_id,
@@ -351,6 +363,7 @@ def publish_prepared(repo: "Repository", prepared: PreparedOfficeResult) -> dict
         "price_proposals": prices,
         "web_sources": web_sources,
         "requested_drafts": [document.model_dump(mode="json") for document in output.draft_documents],
+        "takeoff": takeoff,
         **business,
         **project,
         **quantities,

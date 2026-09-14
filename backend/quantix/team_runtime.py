@@ -27,6 +27,12 @@ How to work:
 - Show arithmetic for every quantity or calculation, and re-read each number from its source.
 - Stop when the expected result is met, or when you cannot continue without the Manager.
 
+Records for review:
+- Takeoff lines, BOQ rows, quantities, submission requirements and project map items are staged with propose;
+  proposal_format gives each kind's fields and rules. They are saved for the engineer's review when you finish.
+- For a takeoff, cover every drawing in your brief and stage the lines as you go.
+- Ask any question before staging records: an assignment that stops for a question saves nothing.
+
 Finish with exactly one of:
 - kind "completed": a summary of the result for the Manager, findings with their source IDs, and all
   source IDs you relied on.
@@ -38,8 +44,29 @@ You cannot approve, send, delete or change engineer decisions; your work stays a
 
 
 def staff_tools() -> list:
-    """Staff use the same evidence, calculation and record tools as the Manager, without team tools."""
-    return source_tools()
+    """Staff use the Manager's evidence, calculation and record tools, without team tools."""
+    from .proposal_tools import proposal_tools
+
+    return [*source_tools(), *proposal_tools()]
+
+
+def save_staff_records(repo, context: OfficeContext, author: str) -> dict[str, int]:
+    """Check and save what a colleague staged, in one transaction, when the assignment completes."""
+    if not context.proposals:
+        return {}
+    from .office import validate_proposals
+    from .office_project import publish_project
+    from .office_quantities import publish_quantities
+    from .office_types import OfficeOutput
+    from .takeoff import TakeoffService
+
+    output = OfficeOutput(summary=f"Records staged by {author}", **context.proposals)
+    with repo.atomic():
+        validate_proposals(output, context, {})
+        publish_quantities(output, context)
+        publish_project(output, context)
+        TakeoffService(repo).publish(context, output.takeoff, author=author)
+    return {kind: len(value) for kind, value in context.proposals.items() if isinstance(value, list)}
 
 
 def _packet(repo, assignment: Assignment, staff) -> str:
@@ -126,8 +153,15 @@ async def run_assignment(repo, tender_id: str, assignment_id: str) -> Assignment
         repo.event(assignment.run_id, "staff_question", f"{staff.name} has a question about: {assignment.title}",
                    {"assignment_id": assignment.id, "staff_id": staff.id})
         return saved
+    try:
+        saved_records = save_staff_records(repo, context, staff.name)
+    except (KeyError, ValueError) as error:
+        failed = team.fail(current, f"The staged records could not be saved: {error}")
+        repo.event(assignment.run_id, "staff_failed", f"{staff.name} could not save records for: {assignment.title}",
+                   {"assignment_id": assignment.id, "staff_id": staff.id})
+        return failed
     saved = team.complete(current, AssignmentResult(summary=output.summary, findings=output.findings,
-                                                    source_ids=output.source_ids), usage)
+                                                    source_ids=output.source_ids, saved_records=saved_records), usage)
     repo.event(assignment.run_id, "staff_completed", f"{staff.name} finished: {assignment.title}",
                {"assignment_id": assignment.id, "staff_id": staff.id})
     return saved
@@ -172,6 +206,7 @@ def outcome_view(repo, assignment: Assignment) -> dict:
         view["summary"] = safe_text(assignment.result.summary, 3000)
         view["findings"] = [finding.model_dump() for finding in assignment.result.findings[:20]]
         view["source_ids_cited_by_staff"] = assignment.result.source_ids[:50]
+        view["records_saved_for_review"] = assignment.result.saved_records
     else:
         view["detail"] = assignment.detail
     return view

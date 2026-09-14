@@ -47,7 +47,9 @@ function renderReview(status: string) {
   );
   render(
     <QueryClientProvider
-      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      client={
+        new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      }
     >
       <ApiContext.Provider value={api}>
         <PlanReview tenderId="one" planId="plan" onApproved={onApproved} />
@@ -60,7 +62,9 @@ function renderReview(status: string) {
 it("approves a proposed plan with the engineer's note", async () => {
   const user = userEvent.setup();
   const { posts, onApproved } = renderReview("proposed");
-  expect(await screen.findByRole("heading", { name: "Initial review" })).toBeVisible();
+  expect(
+    await screen.findByRole("heading", { name: "Initial review" }),
+  ).toBeVisible();
   expect(screen.getByText("Check coverage")).toBeVisible();
   await user.type(
     screen.getByLabelText("Note for the Manager (optional)"),
@@ -78,7 +82,9 @@ it("approves a proposed plan with the engineer's note", async () => {
 
 it("does not offer approval once the plan is no longer proposed", async () => {
   renderReview("approved");
-  expect(await screen.findByRole("heading", { name: "Initial review" })).toBeVisible();
+  expect(
+    await screen.findByRole("heading", { name: "Initial review" }),
+  ).toBeVisible();
   expect(
     screen.queryByRole("button", { name: "Approve and start" }),
   ).not.toBeInTheDocument();

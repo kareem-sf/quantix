@@ -606,9 +606,6 @@ class EstimateService:
                 raise ValueError("Only a proposed quantity can be approved.")
             if proposal["data"].get("origin") == "agent" and proposal["data"].get("basis_fingerprint") != self.quantity_item_fingerprint(tender_id, proposal["item_id"]):
                 raise ValueError("The BOQ source or quantity interpretation changed after this proposal. Ask for a new quantity proposal from the current item.")
-            from .measurements import MeasurementService
-
-            MeasurementService(self.repo).validate_quantity_proposal(tender_id, proposal_id)
             if not _current_sources(conn, proposal["data"]["source_ids"]):
                 raise ValueError(
                     "Measurement evidence has changed. Create a new proposal from current sources."
@@ -636,13 +633,7 @@ class EstimateService:
             return False
         if proposal["data"].get("origin") == "agent" and proposal["data"].get("basis_fingerprint") != self.quantity_item_fingerprint(tender_id, proposal["item_id"]):
             return False
-        from .measurements import MeasurementService
-
-        try:
-            MeasurementService(self.repo).validate_quantity_proposal(tender_id, proposal["id"])
-            return True
-        except (ValueError, KeyError):
-            return False
+        return True
 
     def _view(self, tender_id):
         tender = self.repo.get_tender(tender_id)

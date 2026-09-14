@@ -37,6 +37,8 @@ class AssignmentResult(TeamModel):
     summary: str
     findings: list[FindingProposal] = Field(default_factory=list)
     source_ids: list[str] = Field(default_factory=list)
+    # How many records of each kind this assignment saved for the engineer's review.
+    saved_records: dict[str, int] = Field(default_factory=dict)
 
 
 AssignmentStatus = Literal["queued", "running", "waiting", "completed", "failed", "cancelled"]

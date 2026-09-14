@@ -56,7 +56,7 @@ async def test_propose_checks_fields_and_evidence_when_called(workspace):
 
 
 @pytest.mark.asyncio
-async def test_each_call_replaces_the_kind_and_an_empty_list_withdraws_it(workspace):
+async def test_a_plan_is_replaced_and_list_kinds_append_until_replaced(workspace):
     context, source_id = workspace
     context.seen_sources.add(source_id)
     propose = _tool("propose")
@@ -68,3 +68,22 @@ async def test_each_call_replaces_the_kind_and_an_empty_list_withdraws_it(worksp
         await propose.invoke(context, {"kind": "plan", "items": [_plan(source_id), _plan(source_id)]})
     await propose.invoke(context, {"kind": "plan", "items": []})
     assert compose(ManagerAnswer(summary="Withdrawn."), context).plan is None
+
+    def line(description):
+        return {"description": description, "unit": "m3", "quantity": "12.5", "method": "dimensions",
+                "working": "10 x 5 x 0.25", "source_ids": [source_id]}
+
+    await propose.invoke(context, {"kind": "takeoff", "items": [line("Slab")]})
+    result = json.loads(await propose.invoke(context, {"kind": "takeoff", "items": [line("Footings")]}))
+    assert result["staged_total"] == 2
+    await propose.invoke(context, {"kind": "takeoff", "items": [line("Walls")], "replace": True})
+    assert [item.description for item in compose(ManagerAnswer(summary="x"), context).takeoff] == ["Walls"]
+
+
+@pytest.mark.asyncio
+async def test_staff_stage_takeoff_but_not_plans(workspace):
+    context, source_id = workspace
+    staff = OfficeContext(context.repo, context.tender_id, context.run_id, actor_id="staff-1", assignment_id="a-1")
+    staff.seen_sources.add(source_id)
+    with pytest.raises(ToolArgumentError, match="Staff stage"):
+        await _tool("propose").invoke(staff, {"kind": "plan", "items": [_plan(source_id)]})
