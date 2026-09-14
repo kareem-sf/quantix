@@ -1393,41 +1393,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/mail/settings": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Mail Settings */
-        get: operations["mail_settings_api_mail_settings_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /** Update Settings */
-        patch: operations["update_settings_api_mail_settings_patch"];
-        trace?: never;
-    };
-    "/api/mail/sync": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Sync */
-        post: operations["sync_api_mail_sync_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/tenders/{tender_id}/quotes": {
         parameters: {
             query?: never;
@@ -1491,40 +1456,6 @@ export interface paths {
         get: operations["eml_api_tenders__tender_id__quotes__quote_id__eml_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/quotes/{quote_id}/approve": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Approve */
-        post: operations["approve_api_tenders__tender_id__quotes__quote_id__approve_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/quotes/{quote_id}/send": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Send */
-        post: operations["send_api_tenders__tender_id__quotes__quote_id__send_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2316,57 +2247,6 @@ export interface paths {
         };
         /** Detail */
         get: operations["detail_api_tenders__tender_id__runs__run_id__activity__event_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/benchmark-adoption": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Decisions */
-        get: operations["decisions_api_benchmark_adoption_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/benchmark-adoption/review": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Review */
-        post: operations["review_api_benchmark_adoption_review_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/benchmark-adoption/reports/{report_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Verified Report */
-        get: operations["verified_report_api_benchmark_adoption_reports__report_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3215,40 +3095,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tenders/{tender_id}/watches": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Create Watch */
-        post: operations["create_watch_api_tenders__tender_id__watches_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/watches/{watch_id}/activate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Activate Watch */
-        post: operations["activate_watch_api_tenders__tender_id__watches__watch_id__activate_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/tenders/{tender_id}/calculations": {
         parameters: {
             query?: never;
@@ -3380,40 +3226,6 @@ export interface paths {
         put?: never;
         /** Reprocess Extraction */
         post: operations["reprocess_extraction_api_tenders__tender_id__extractions_reprocess_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/transcriptions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Transcribe */
-        post: operations["transcribe_api_tenders__tender_id__transcriptions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tenders/{tender_id}/transcriptions/json": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Transcribe Json */
-        post: operations["transcribe_json_api_tenders__tender_id__transcriptions_json_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3819,117 +3631,6 @@ export interface components {
              */
             purpose: "manual" | "before_restore";
         };
-        /** BenchmarkAdoptionDecision */
-        BenchmarkAdoptionDecision: {
-            /** Configuration Hash */
-            configuration_hash: string;
-            /** Report Id */
-            report_id: string;
-            /** Report Hash */
-            report_hash: string;
-            /** Baseline Report Id */
-            baseline_report_id?: string | null;
-            /** Baseline Report Hash */
-            baseline_report_hash?: string | null;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "critical_block" | "review_required" | "accepted";
-            /** Connection Id */
-            connection_id: string;
-            /** Model Id */
-            model_id: string;
-            /** Manager Profile Version */
-            manager_profile_version: number;
-            /** Reasons */
-            reasons: string[];
-            /** Updated At */
-            updated_at: string;
-            /** Review Rationale */
-            review_rationale?: string | null;
-        };
-        /** BenchmarkAdoptionReview */
-        BenchmarkAdoptionReview: {
-            /** Configuration Hash */
-            configuration_hash: string;
-            /** Report Id */
-            report_id: string;
-            /** Report Hash */
-            report_hash: string;
-            /** Baseline Report Id */
-            baseline_report_id: string;
-            /** Baseline Report Hash */
-            baseline_report_hash: string;
-            /**
-             * Engineer Confirmed
-             * @constant
-             */
-            engineer_confirmed: true;
-            /** Rationale */
-            rationale: string;
-        };
-        /** BenchmarkReport */
-        BenchmarkReport: {
-            /** Id */
-            id: string;
-            /** Dataset Version */
-            dataset_version: string;
-            /** Dataset Hash */
-            dataset_hash: string;
-            /**
-             * Evaluator Version
-             * @default 1
-             */
-            evaluator_version: string;
-            /**
-             * Mode
-             * @enum {string}
-             */
-            mode: "dataset_validation" | "deterministic_checks" | "synthetic_executor" | "synthetic_model" | "live";
-            /** Created At */
-            created_at: string;
-            /** Repetitions */
-            repetitions: number;
-            /** Cases */
-            cases?: components["schemas"]["CaseResult"][];
-            /** Validated Cases */
-            validated_cases: number;
-            /** Deterministic Checks */
-            deterministic_checks?: {
-                [key: string]: unknown;
-            }[];
-            /**
-             * Overall Completed
-             * @default false
-             */
-            overall_completed: boolean;
-            /**
-             * Detail
-             * @default
-             */
-            detail: string;
-        };
-        /** Body_transcribe_api_tenders__tender_id__transcriptions_post */
-        Body_transcribe_api_tenders__tender_id__transcriptions_post: {
-            /**
-             * Transcript
-             * @default
-             */
-            transcript: string;
-            /**
-             * Auto Send
-             * @default false
-             */
-            auto_send: boolean;
-            /**
-             * Retain
-             * @default false
-             */
-            retain: boolean;
-            /** Audio */
-            audio?: string | null;
-        };
         /**
          * BriefPoint
          * @description A point already settled for this work, with the Tender sources behind it.
@@ -4157,24 +3858,6 @@ export interface components {
             requirements?: string[];
             /** Evidence */
             evidence?: string[];
-        };
-        /** CaseResult */
-        CaseResult: {
-            /** Case Id */
-            case_id: string;
-            /**
-             * Category
-             * @enum {string}
-             */
-            category: "boq" | "specification_conflict" | "drawing_revision" | "market_observation" | "supplier_comparison" | "integrated_work";
-            /** Repetition */
-            repetition: number;
-            /** Critical */
-            critical: boolean;
-            /** Case Hash */
-            case_hash: string;
-            observed: components["schemas"]["ObservedRun"];
-            scores: components["schemas"]["Scores"];
         };
         /** ClientBoqInput */
         ClientBoqInput: {
@@ -4983,15 +4666,6 @@ export interface components {
             /** Updated At */
             updated_at: string;
         };
-        /** FindingAnswer */
-        FindingAnswer: {
-            /** Code */
-            code: string;
-            /** Description */
-            description: string;
-            /** Evidence */
-            evidence?: string[];
-        };
         /** FindingProposal */
         FindingProposal: {
             /** Title */
@@ -5215,19 +4889,6 @@ export interface components {
         ImportRequest: {
             /** Source Path */
             source_path: string;
-        };
-        /** IndependentCheck */
-        IndependentCheck: {
-            /** Creator Actor Id */
-            creator_actor_id: string;
-            /** Reviewer Actor Id */
-            reviewer_actor_id: string;
-            /** Reviewer Assignment Id */
-            reviewer_assignment_id: string;
-            /** Reviewer Result Id */
-            reviewer_result_id: string;
-            /** Evidence */
-            evidence: string[];
         };
         /** InspectBackupRequest */
         InspectBackupRequest: {
@@ -5556,114 +5217,6 @@ export interface components {
              * @default false
              */
             root_active: boolean;
-        };
-        /** MailSettings */
-        MailSettings: {
-            /**
-             * Smtp Host
-             * @default
-             */
-            smtp_host: string;
-            /**
-             * Smtp Port
-             * @default 465
-             */
-            smtp_port: number;
-            /**
-             * Smtp Security
-             * @default ssl
-             * @enum {string}
-             */
-            smtp_security: "ssl" | "starttls";
-            /**
-             * Smtp Username
-             * @default
-             */
-            smtp_username: string;
-            /**
-             * From Address
-             * @default
-             */
-            from_address: string;
-            /**
-             * Imap Host
-             * @default
-             */
-            imap_host: string;
-            /**
-             * Imap Port
-             * @default 993
-             */
-            imap_port: number;
-            /**
-             * Imap Username
-             * @default
-             */
-            imap_username: string;
-            /**
-             * Imap Mailbox
-             * @default INBOX
-             */
-            imap_mailbox: string;
-            /** Smtp Ready */
-            smtp_ready: boolean;
-            /** Imap Ready */
-            imap_ready: boolean;
-            /** Detail */
-            detail: string;
-        };
-        /** MailSettingsPatch */
-        MailSettingsPatch: {
-            /**
-             * Smtp Host
-             * @default
-             */
-            smtp_host: string;
-            /**
-             * Smtp Port
-             * @default 465
-             */
-            smtp_port: number;
-            /**
-             * Smtp Security
-             * @default ssl
-             * @enum {string}
-             */
-            smtp_security: "ssl" | "starttls";
-            /**
-             * Smtp Username
-             * @default
-             */
-            smtp_username: string;
-            /**
-             * From Address
-             * @default
-             */
-            from_address: string;
-            /**
-             * Imap Host
-             * @default
-             */
-            imap_host: string;
-            /**
-             * Imap Port
-             * @default 993
-             */
-            imap_port: number;
-            /**
-             * Imap Username
-             * @default
-             */
-            imap_username: string;
-            /**
-             * Imap Mailbox
-             * @default INBOX
-             */
-            imap_mailbox: string;
-            /** Smtp Password */
-            smtp_password?: string | null;
-            /** Imap Password */
-            imap_password?: string | null;
         };
         /**
          * ManagerProfile
@@ -6578,109 +6131,6 @@ export interface components {
              * @default 0
              */
             total: number;
-        };
-        /** NumberAnswer */
-        NumberAnswer: {
-            /** Value */
-            value: string;
-            /** Unit */
-            unit: string;
-            /** Evidence */
-            evidence?: string[];
-            /** Calculation Id */
-            calculation_id?: string | null;
-        };
-        /**
-         * ObservedRun
-         * @description Constructed by the driver from saved records, never by provider output.
-         */
-        ObservedRun: {
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "completed" | "failed" | "cancelled" | "blocked";
-            /** Numbers */
-            numbers?: {
-                [key: string]: components["schemas"]["NumberAnswer"];
-            };
-            /** Findings */
-            findings?: components["schemas"]["FindingAnswer"][];
-            /** Read Evidence */
-            read_evidence?: string[];
-            /** Events */
-            events?: string[];
-            /** Artifact Ids */
-            artifact_ids?: string[];
-            /** Calculation Ids */
-            calculation_ids?: string[];
-            /** Checked Calculation Ids */
-            checked_calculation_ids?: string[];
-            /** Calculation Values */
-            calculation_values?: string[];
-            /** Calculation Outputs */
-            calculation_outputs?: {
-                [key: string]: string[];
-            };
-            /** Calculation Evidence */
-            calculation_evidence?: {
-                [key: string]: string[];
-            };
-            /** Independent Checks */
-            independent_checks?: {
-                [key: string]: components["schemas"]["IndependentCheck"];
-            };
-            /**
-             * Calculations Verified
-             * @default false
-             */
-            calculations_verified: boolean;
-            /**
-             * Completed Assignments
-             * @default 0
-             */
-            completed_assignments: number;
-            /** Tender Id */
-            tender_id?: string | null;
-            /** Root Run Id */
-            root_run_id?: string | null;
-            /** Connection Id */
-            connection_id?: string | null;
-            /** Model Id */
-            model_id?: string | null;
-            /** Engine */
-            engine?: string | null;
-            /** Manager Profile Version */
-            manager_profile_version?: number | null;
-            /** Configuration Hash */
-            configuration_hash?: string | null;
-            /**
-             * Latency Seconds
-             * @default 0
-             */
-            latency_seconds: number;
-            /** Requests */
-            requests?: number | null;
-            /** Input Tokens */
-            input_tokens?: number | null;
-            /** Output Tokens */
-            output_tokens?: number | null;
-            /** Estimated Cost Usd */
-            estimated_cost_usd?: string | null;
-            /** Provider Reported Cost Usd */
-            provider_reported_cost_usd?: string | null;
-            /** Provider Cost Is Partial */
-            provider_cost_is_partial?: boolean | null;
-            /**
-             * Usage Complete
-             * @default false
-             */
-            usage_complete: boolean;
-            /**
-             * Detail
-             * @default
-             */
-            detail: string;
         };
         /**
          * OfficeArtifactReference
@@ -7745,23 +7195,10 @@ export interface components {
         /** QuotePreview */
         QuotePreview: {
             quote: components["schemas"]["QuoteRecord"];
-            /** Sender */
-            sender: string | null;
             /** Attachments */
             attachments: components["schemas"]["Attachment"][];
-            /** Fingerprint */
-            fingerprint: string;
-            /** Smtp Host */
-            smtp_host: string;
-            /** Smtp Ready */
-            smtp_ready: boolean;
             /** Warnings */
             warnings: string[];
-            /**
-             * Restore Reconciliation Required
-             * @default false
-             */
-            restore_reconciliation_required: boolean;
         };
         /** QuoteRecord */
         QuoteRecord: {
@@ -7787,22 +7224,10 @@ export interface components {
             status: string;
             /** Attachments */
             attachments: components["schemas"]["Attachment"][];
-            /** Approved Fingerprint */
-            approved_fingerprint: string | null;
-            /** Delivery Detail */
-            delivery_detail: string;
-            /** Refused Recipients */
-            refused_recipients: components["schemas"]["RecipientRefusal"][];
             /** Created At */
             created_at: string;
             /** Updated At */
             updated_at: string;
-            /** Submission Host */
-            submission_host?: string | null;
-            /** Delivery History Status */
-            delivery_history_status?: string | null;
-            /** Delivery History Fingerprint */
-            delivery_history_fingerprint?: string | null;
         };
         /** RateApproval */
         RateApproval: {
@@ -7896,13 +7321,6 @@ export interface components {
             /** Idempotency Key */
             idempotency_key: string;
         };
-        /** RecipientRefusal */
-        RecipientRefusal: {
-            /** Address */
-            address: string;
-            /** Code */
-            code: number;
-        };
         /** RenameTender */
         RenameTender: {
             /** Name */
@@ -7916,36 +7334,20 @@ export interface components {
             tender_id: string;
             /** Quote Id */
             quote_id: string;
-            /**
-             * Origin
-             * @enum {string}
-             */
-            origin: "manual" | "imap";
             /** Sender */
             sender: string;
             /** Received At */
             received_at: string;
-            /** Date Header */
-            date_header?: string | null;
-            /**
-             * Date Basis
-             * @enum {string}
-             */
-            date_basis: "engineer_entered" | "retrieved_at";
             /** Subject */
             subject: string;
             /** Text */
             text: string;
             /** Headers */
             headers: string;
-            /** Message Id */
-            message_id: string | null;
             /** Source Ids */
             source_ids: string[];
             /** Supporting Source Ids */
             supporting_source_ids: string[];
-            /** Warnings */
-            warnings: string[];
             /** Created At */
             created_at: string;
         };
@@ -8985,21 +8387,6 @@ export interface components {
              */
             active_runs: number;
         };
-        /** Scores */
-        Scores: {
-            /** Task Completed */
-            task_completed: boolean;
-            /** Evidence Precision */
-            evidence_precision: number;
-            /** Evidence Recall */
-            evidence_recall: number;
-            /** Numerical Accuracy */
-            numerical_accuracy: number;
-            /** Findings Recall */
-            findings_recall: number;
-            /** Violations */
-            violations: string[];
-        };
         /** SemanticStatus */
         SemanticStatus: {
             /**
@@ -9049,20 +8436,6 @@ export interface components {
             recovery_action?: string | null;
             /** Last Error */
             last_error?: string | null;
-        };
-        /** SendDecision */
-        SendDecision: {
-            /** Fingerprint */
-            fingerprint: string;
-            /**
-             * Engineer Confirmed
-             * @constant
-             */
-            engineer_confirmed: true;
-            /** Rationale */
-            rationale: string;
-            /** Restore Reconciliation */
-            restore_reconciliation?: string | null;
         };
         /** Settings */
         Settings: {
@@ -10014,27 +9387,6 @@ export interface components {
             /** Detail */
             detail: string;
         };
-        /** SyncRequest */
-        SyncRequest: {
-            /**
-             * Max Messages
-             * @default 30
-             */
-            max_messages: number;
-        };
-        /** SyncResult */
-        SyncResult: {
-            /** Checked */
-            checked: number;
-            /** Matched */
-            matched: number;
-            /** Skipped */
-            skipped: number;
-            /** More Available */
-            more_available: boolean;
-            /** Warnings */
-            warnings: string[];
-        };
         /** Task */
         Task: {
             /** Id */
@@ -10272,31 +9624,6 @@ export interface components {
             /** Read Only */
             read_only: boolean;
         };
-        /** TranscriptionRequest */
-        TranscriptionRequest: {
-            /**
-             * Transcript
-             * @default
-             */
-            transcript: string;
-            /**
-             * Auto Send
-             * @default false
-             */
-            auto_send: boolean;
-            /**
-             * Retain
-             * @default false
-             */
-            retain: boolean;
-            /**
-             * Language
-             * @default en
-             */
-            language: string;
-            /** Capability Id */
-            capability_id?: string | null;
-        };
         /** TransferRequest */
         TransferRequest: {
             /** Result Id */
@@ -10361,79 +9688,6 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
-        };
-        /** WatchActivation */
-        WatchActivation: {
-            /** Fingerprint */
-            fingerprint: string;
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /** WatchDraft */
-        WatchDraft: {
-            /** Scope */
-            scope: string;
-            /** Trigger */
-            trigger: string;
-            /**
-             * Schedule
-             * @default 0 * * * *
-             */
-            schedule: string;
-            /**
-             * Timezone
-             * @default UTC
-             */
-            timezone: string;
-            /**
-             * Stop Condition
-             * @default manual
-             */
-            stop_condition: string;
-            /** Budget */
-            budget: number;
-            /**
-             * Notification Policy
-             * @default meaningful_change
-             */
-            notification_policy: string;
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /** WatchSpec */
-        WatchSpec: {
-            /** Id */
-            id: string;
-            /** Scope */
-            scope: string;
-            /** Trigger */
-            trigger: string;
-            /** Schedule */
-            schedule: string;
-            /** Timezone */
-            timezone: string;
-            /** Last Successful Check */
-            last_successful_check?: string | null;
-            /** Next Due */
-            next_due?: string | null;
-            /** Stop Condition */
-            stop_condition: string;
-            /** Budget */
-            budget: number;
-            /** Notification Policy */
-            notification_policy: string;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "draft" | "active" | "paused" | "stopped" | "exhausted";
-            /**
-             * Missed Checks
-             * @default 0
-             */
-            missed_checks: number;
-            /** Fingerprint */
-            fingerprint: string;
         };
         /** WebFinding */
         WebFinding: {
@@ -13803,92 +13057,6 @@ export interface operations {
             };
         };
     };
-    mail_settings_api_mail_settings_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MailSettings"];
-                };
-            };
-        };
-    };
-    update_settings_api_mail_settings_patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MailSettingsPatch"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MailSettings"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    sync_api_mail_sync_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SyncRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SyncResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     quotes_api_tenders__tender_id__quotes_get: {
         parameters: {
             query?: never;
@@ -14041,78 +13209,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    approve_api_tenders__tender_id__quotes__quote_id__approve_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                quote_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SendDecision"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["QuoteRecord"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    send_api_tenders__tender_id__quotes__quote_id__send_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                quote_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SendDecision"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["QuoteRecord"];
-                };
             };
             /** @description Validation Error */
             422: {
@@ -15975,92 +15071,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunActivityDetail"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    decisions_api_benchmark_adoption_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BenchmarkAdoptionDecision"][];
-                };
-            };
-        };
-    };
-    review_api_benchmark_adoption_review_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BenchmarkAdoptionReview"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BenchmarkAdoptionDecision"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    verified_report_api_benchmark_adoption_reports__report_id__get: {
-        parameters: {
-            query: {
-                expected_hash: string;
-            };
-            header?: never;
-            path: {
-                report_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BenchmarkReport"];
                 };
             };
             /** @description Validation Error */
@@ -17945,77 +16955,6 @@ export interface operations {
             };
         };
     };
-    create_watch_api_tenders__tender_id__watches_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WatchDraft"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WatchSpec"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    activate_watch_api_tenders__tender_id__watches__watch_id__activate_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-                watch_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WatchActivation"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WatchSpec"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     calculate_api_tenders__tender_id__calculations_post: {
         parameters: {
             query?: never;
@@ -18313,76 +17252,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReprocessResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    transcribe_api_tenders__tender_id__transcriptions_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "multipart/form-data": components["schemas"]["Body_transcribe_api_tenders__tender_id__transcriptions_post"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    transcribe_json_api_tenders__tender_id__transcriptions_json_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tender_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TranscriptionRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

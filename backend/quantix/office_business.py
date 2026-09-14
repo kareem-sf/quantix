@@ -398,7 +398,7 @@ def business_tools():
     async def inspect_quote_requests(
         ctx: ToolContext[OfficeContext], offset: int, limit: int
     ) -> str:
-        """Read this Tender's existing quotation requests and latest local delivery history. This cannot create, approve or send messages."""
+        """Read this Tender's saved quotation request drafts. Quantix never sends them; the engineer sends each request from their own mail program."""
         ctx.context.require_tool("inspect_quote_requests")
         ctx.context.ensure_scope_current()
         page(offset, limit)
@@ -425,8 +425,6 @@ def business_tools():
                             "cc",
                             "subject",
                             "status",
-                            "delivery_history_status",
-                            "delivery_detail",
                             "message_id",
                             "source_ids",
                         )
@@ -469,13 +467,9 @@ def business_tools():
                         key: row.get(key)
                         for key in (
                             "id",
-                            "origin",
                             "sender",
                             "received_at",
-                            "date_header",
-                            "date_basis",
                             "subject",
-                            "warnings",
                         )
                     },
                     "sources": [

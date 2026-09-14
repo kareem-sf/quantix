@@ -210,7 +210,6 @@ function TenderView({
         onRecord={openRecord}
         onView={showView}
         onNavigate={go}
-        onSettingsSection={openSettingsSection}
       />
     );
 
@@ -243,7 +242,6 @@ function SectionPage({
   onRecord,
   onView,
   onNavigate,
-  onSettingsSection,
 }: {
   section: Exclude<TenderSection, "manager">;
   context: TenderContext;
@@ -256,7 +254,6 @@ function SectionPage({
   onRecord: (view: string, recordId: string) => void;
   onView: (view: string) => void;
   onNavigate: (target: string) => void;
-  onSettingsSection: (section: string) => void;
 }) {
   const { tenderId } = context;
 
@@ -356,7 +353,6 @@ function SectionPage({
               onSource={onSource}
               selectedId={context.recordId ?? null}
               onSelect={selectRecord}
-              onSettings={() => onSettingsSection("mail")}
             />
           ) : (
             <Estimate

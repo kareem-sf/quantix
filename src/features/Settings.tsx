@@ -27,7 +27,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Backups } from "./Backups";
-import { MailSettings } from "./MailSettings";
 import { Knowledge } from "./Knowledge";
 import { AIConnections } from "./AIConnections";
 import { Diagnostics } from "./Diagnostics";
@@ -141,7 +140,6 @@ function SettingsLayout({
             {active === "code" ? <SandboxSettings /> : null}
             {active === "knowledge" ? <Knowledge /> : null}
             {active === "library" ? <CompanyLibrary /> : null}
-            {active === "mail" ? <MailSettings /> : null}
             {active === "backups" ? (
               <Backups onAttention={setBackupAttention} />
             ) : null}

@@ -5,7 +5,6 @@ import {
   Info,
   KeyRound,
   Library,
-  Mail,
   RotateCcw,
   SlidersHorizontal,
   Stethoscope,
@@ -21,7 +20,6 @@ export type SettingsSectionId =
   | "code"
   | "knowledge"
   | "library"
-  | "mail"
   | "backups"
   | "diagnostics"
   | "reset"
@@ -101,14 +99,6 @@ export const settingsSections: SettingsSectionDefinition[] = [
     icon: Library,
     group: "knowledge",
     capability: "company_library",
-  },
-  {
-    id: "mail",
-    label: "Mail",
-    description: "Supplier mail account",
-    icon: Mail,
-    group: "connections",
-    capability: "quotations",
   },
   {
     id: "backups",

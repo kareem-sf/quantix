@@ -21,12 +21,10 @@ from .office_reviews import (
     ReviewResolution,
     ReviewSession,
 )
-from .office_watchers import OfficeWatcherService
 from .staff_models import OfficeConflict
 from .tender_calendar import TenderCalendarService
 from .tender_profile import TenderProfileService
 from .tender_profile_models import CalendarEvent, CalendarEventDraft, ProfilePatch, TenderProfile
-from .watcher_models import WatchActivation, WatchDraft, WatchSpec
 from .work_brief import WorkBriefService
 from .work_brief_models import WorkBriefState
 from .work_product_models import (
@@ -53,7 +51,6 @@ def create_router(repo) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["Later office"])
     products = WorkProductService(repo)
     briefs = WorkBriefService(repo)
-    watches = OfficeWatcherService(repo)
     profiles = TenderProfileService(repo)
     calendar = TenderCalendarService(repo)
     calculations = CalculationService(repo)
@@ -134,14 +131,6 @@ def create_router(repo) -> APIRouter:
                 tender_id, product_id, version, offset=offset, limit=limit
             )
         )
-
-    @router.post("/tenders/{tender_id}/watches", response_model=WatchSpec)
-    def create_watch(tender_id: str, command: WatchDraft):
-        return _call(lambda: watches.create(engineer_identity(tender_id), command))
-
-    @router.post("/tenders/{tender_id}/watches/{watch_id}/activate", response_model=WatchSpec)
-    def activate_watch(tender_id: str, watch_id: str, command: WatchActivation):
-        return _call(lambda: watches.activate(engineer_identity(tender_id), watch_id, command))
 
     @router.post("/tenders/{tender_id}/calculations", response_model=CalculationRecord)
     def calculate(tender_id: str, command: CalculationRequest):

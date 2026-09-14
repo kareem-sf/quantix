@@ -25,7 +25,6 @@ import { ReviewRoom } from "./office/ReviewRoom";
 import { WorkDecisions } from "./WorkDecisions";
 import { ProjectMap } from "./ProjectMap";
 import { TenderBrief } from "./TenderBrief";
-import { Watchers } from "./Watchers";
 import { draftStorageKey, useFormDraft, type DraftScope } from "./useFormDraft";
 
 export function PlanView({
@@ -457,7 +456,7 @@ export function Work({
         <summary className="flex cursor-pointer flex-col">
           <strong className="text-sm font-medium">More options</strong>
           <span className="text-xs text-muted-foreground">
-            Tender brief, scope map and watchers
+            Tender brief and scope map
           </span>
         </summary>
         {aiUsageOpen ? (
@@ -470,7 +469,6 @@ export function Work({
               artifacts={artifacts.data ?? []}
               onSource={onSource}
             />
-            <Watchers tenderId={tenderId} />
           </div>
         ) : null}
       </details>

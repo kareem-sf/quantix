@@ -1,7 +1,6 @@
 import { useCallback, useState, type FormEvent } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
-  errorText,
   tenderPath,
   useApi,
   useRefresh,
@@ -13,27 +12,15 @@ import {
   Loading,
   Modal,
   Status,
-  statusLabel,
 } from "../components/common";
 import { Citations, type SourceSelection } from "./Sources";
 import { FieldError } from "../components/FieldError";
 import { createDraftScope, useFormDraft } from "./useFormDraft";
-import { MailReplyCheck } from "./MailReplyCheck";
 import { searchHits } from "./DocumentSearch";
 
 type SourceAction = (source: SourceSelection) => void;
-const blockedStates = new Set([
-  "sending",
-  "attempting",
-  "sent",
-  "partially_sent",
-  "uncertain",
-]);
 const quotePath = (tenderId: string, quoteId: string) =>
   `${tenderPath(tenderId)}/quotes/${encodeURIComponent(quoteId)}`;
-const isBlocked = (quote: Schema<"QuoteRecord">) =>
-  blockedStates.has(quote.status) ||
-  blockedStates.has(quote.delivery_history_status ?? "");
 const splitAddresses = (value: string) => [
   ...new Set(
     value
@@ -48,7 +35,6 @@ type QuotesProps = {
   onSource?: SourceAction;
   selectedId?: string | null;
   onSelect?: (id: string | null) => void;
-  onSettings?: (quoteId?: string) => void;
 };
 export function Quotes(props: QuotesProps) {
   return <QuoteWorkspace key={props.tenderId} {...props} />;
@@ -58,7 +44,6 @@ function QuoteWorkspace({
   onSource,
   selectedId,
   onSelect,
-  onSettings,
 }: QuotesProps) {
   const quotes = useResource<Schema<"QuoteRecord">[]>(
     `${tenderPath(tenderId)}/quotes`,
@@ -83,14 +68,9 @@ function QuoteWorkspace({
         </button>
       </div>
       <p className="muted">
-        Prepare requests, review the exact message and attachments, and record
-        supplier replies.
+        Prepare requests, check the exact message and attachments, send them
+        from your own mail program, and record supplier replies.
       </p>
-      <MailReplyCheck
-        onSettings={
-          onSettings ? () => onSettings(selected ?? undefined) : undefined
-        }
-      />
       <ErrorNotice error={quotes.error} />
       {quotes.isPending ? <Loading>Loading quotation requests…</Loading> : null}
       {quotes.data?.length === 0 ? (
@@ -110,15 +90,8 @@ function QuoteWorkspace({
               <span>
                 <strong>{quote.subject}</strong>
                 <span className="muted">To: {quote.to.join(", ")}</span>
-                {quote.delivery_history_status &&
-                quote.delivery_history_status !== quote.status ? (
-                  <span className="muted">
-                    Local delivery history:{" "}
-                    {statusLabel(quote.delivery_history_status)}
-                  </span>
-                ) : null}
               </span>
-              <Status value={quote.delivery_history_status ?? quote.status} />
+              <Status value={quote.status} />
             </button>
           </li>
         ))}
@@ -262,7 +235,7 @@ function DraftEditor({
     >
       <form className="quote-editor" onSubmit={save}>
         <p className="muted">
-          Saving a draft sends no mail. Editing clears its earlier approval.
+          Quantix never sends mail. Download the request and send it yourself.
         </p>
         <fieldset disabled={pending}>
           <label>
@@ -531,7 +504,7 @@ function QuoteDetail({
   if (!preview.data) return <ErrorNotice error={preview.error} />;
   return (
     <QuoteReview
-      key={preview.data.fingerprint}
+      key={preview.data.quote.updated_at}
       preview={preview.data}
       tenderId={tenderId}
       onSource={onSource}
@@ -554,145 +527,27 @@ function QuoteReview({
   onEdit: (quote: Schema<"QuoteRecord">) => void;
   onClose: () => void;
 }) {
-  const api = useApi(),
-    refresh = useRefresh(),
-    client = useQueryClient();
+  const api = useApi();
   const quote = preview.quote,
-    base = quotePath(tenderId, quote.id),
-    blocked = isBlocked(quote);
-  const decisionDraft = useFormDraft(
-    createDraftScope("quotes", tenderId, `decision-${quote.id}`, 1),
-    { rationale: "", reconciliation: "" },
-    ["rationale", "reconciliation"],
-  );
-  const { rationale, reconciliation } = decisionDraft.value;
-  const setRationale = (value: string) =>
-      decisionDraft.setField("rationale", value),
-    setReconciliation = (value: string) =>
-      decisionDraft.setField("reconciliation", value);
-  const [confirmed, setConfirmed] = useState(false),
-    [restoreRefused, setRestoreRefused] = useState(false);
-  const needsReconciliation =
-    preview.restore_reconciliation_required || restoreRefused;
-  const [pending, setPending] = useState(false),
-    [downloading, setDownloading] = useState(false);
-  const [error, setError] = useState<unknown>(null),
-    [notice, setNotice] = useState("");
-  const [sendFailed, setSendFailed] = useState(false);
-  const allowed =
-    !blocked && ["draft", "approved", "failed"].includes(quote.status);
-  const decisionReady =
-    confirmed &&
-    !!rationale.trim() &&
-    (!needsReconciliation || !!reconciliation.trim());
-  async function decide(send: boolean) {
-    if (
-      pending ||
-      !decisionReady ||
-      !allowed ||
-      (send && (!preview.smtp_ready || sendFailed))
-    )
-      return;
-    setPending(true);
-    setError(null);
-    setNotice("");
-    const acceptedRevision = decisionDraft.revision;
-    const decision: Schema<"SendDecision"> = {
-      fingerprint: preview.fingerprint,
-      engineer_confirmed: true,
-      rationale: rationale.trim(),
-      ...(reconciliation.trim()
-        ? { restore_reconciliation: reconciliation.trim() }
-        : {}),
-    };
-    try {
-      await api.post<Schema<"QuoteRecord">>(`${base}/approve`, decision);
-      if (send) {
-        await api.post<Schema<"QuoteRecord">>(`${base}/send`, decision);
-        setNotice(
-          "Submission result recorded. Review the delivery status above.",
-        );
-      } else setNotice("Approval recorded. No mail was sent by this action.");
-      decisionDraft.markAccepted(acceptedRevision);
-      setConfirmed(false);
-      await refresh();
-    } catch (failure) {
-      setError(failure);
-      setConfirmed(false);
-      if (send) setSendFailed(true);
-      if (
-        /predates a workspace restore|reconciliation/i.test(errorText(failure))
-      ) {
-        setRestoreRefused(true);
-        setSendFailed(false);
-      }
-      await refresh();
-    } finally {
-      setPending(false);
-    }
-  }
+    base = quotePath(tenderId, quote.id);
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState<unknown>(null);
   return (
     <div className="quote-review">
       <div className="section-heading">
         <h3>Review quotation request</h3>
-        <button className="text-button" disabled={pending} onClick={onClose}>
+        <button className="text-button" onClick={onClose}>
           Close request
         </button>
       </div>
       <dl className="quote-envelope">
-        <dt>From</dt>
-        <dd>{preview.sender ?? "Sender email is not configured"}</dd>
         <dt>To</dt>
         <dd>{quote.to.join(", ")}</dd>
         <dt>Cc</dt>
         <dd>{quote.cc?.join(", ") || "None"}</dd>
         <dt>Subject</dt>
         <dd>{quote.subject}</dd>
-        <dt>Mail server</dt>
-        <dd>{preview.smtp_host || "Not configured"}</dd>
-        <dt>Saved state</dt>
-        <dd>
-          <Status value={quote.status} />
-        </dd>
       </dl>
-      {quote.delivery_history_status ? (
-        <div className="quote-warning">
-          <p>
-            Local delivery history: {statusLabel(quote.delivery_history_status)}
-          </p>
-          {quote.delivery_history_fingerprint &&
-          quote.delivery_history_fingerprint !== preview.fingerprint ? (
-            <p>
-              This saved wording differs from the recorded submission. The
-              restored record does not establish what was sent.
-            </p>
-          ) : null}
-          <p>
-            Keep this delivery history separate from an older restored draft
-            state.
-          </p>
-        </div>
-      ) : null}
-      {quote.delivery_detail ? (
-        <p className="quote-warning">{quote.delivery_detail}</p>
-      ) : null}
-      {blocked ? (
-        <p className="quote-warning">
-          This request has a previous or uncertain submission. Sending and
-          editing are blocked. Check the sent mailbox or supplier before
-          preparing any new correspondence.
-        </p>
-      ) : null}
-      {quote.refused_recipients.length ? (
-        <div className="quote-warning">
-          <strong>Refused recipients</strong>
-          {quote.refused_recipients.map((recipient) => (
-            <p key={recipient.address}>
-              {recipient.address} · SMTP code {recipient.code}
-            </p>
-          ))}
-        </div>
-      ) : null}
       {preview.warnings.map((warning, index) => (
         <p className="quote-warning" key={index}>
           {warning}
@@ -712,7 +567,6 @@ function QuoteReview({
                   ? "Current source"
                   : "Older source revision"}
               </p>
-              <code>SHA-256: {attachment.content_hash}</code>
               {onSource ? (
                 <button
                   className="text-button"
@@ -736,29 +590,13 @@ function QuoteReview({
           onOpen={onSource}
         />
       ) : null}
-      <details className="quote-fingerprint">
-        <summary>Message identity and reviewed content</summary>
-        <code>Message-ID: {quote.message_id}</code>
-        <code>Review fingerprint: {preview.fingerprint}</code>
-        {quote.delivery_history_fingerprint ? (
-          <code>
-            Delivery history fingerprint: {quote.delivery_history_fingerprint}
-          </code>
-        ) : null}
-      </details>
       <div className="inline-actions">
-        {allowed ? (
-          <button
-            className="button"
-            disabled={pending}
-            onClick={() => onEdit(quote)}
-          >
-            Edit draft
-          </button>
-        ) : null}
+        <button className="button" onClick={() => onEdit(quote)}>
+          Edit draft
+        </button>
         <button
-          className="button"
-          disabled={downloading || pending}
+          className="button primary"
+          disabled={downloading}
           onClick={async () => {
             setDownloading(true);
             setError(null);
@@ -779,121 +617,13 @@ function QuoteReview({
             }
           }}
         >
-          {downloading ? "Preparing EML…" : "Download EML"}
+          {downloading ? "Preparing email…" : "Download email"}
         </button>
       </div>
       <p className="field-help">
-        An EML download does not submit mail or record delivery. Mail sent
-        outside Quantix must be checked separately before sending here.
+        Open the downloaded email in your mail program and send it from there.
       </p>
-      {allowed ? (
-        <fieldset disabled={pending}>
-          <legend>Engineer approval</legend>
-          <p className="muted">
-            Approve this exact message for later use, or approve and submit it
-            to the listed recipients now. SMTP acceptance does not confirm inbox
-            delivery.
-          </p>
-          {!preview.smtp_ready ? (
-            <p className="warning-text">
-              Configure SMTP in Settings to send. You can still approve or
-              download the request.
-            </p>
-          ) : null}
-          <label>
-            Approval note
-            <textarea
-              rows={3}
-              maxLength={4000}
-              value={rationale}
-              onChange={(event) => setRationale(event.target.value)}
-            />
-          </label>
-          <details
-            className="quote-reconciliation"
-            open={needsReconciliation || undefined}
-          >
-            <summary>Delivery check after a workspace restore</summary>
-            <p className="field-help">
-              If this draft predates a restore, check the sent mailbox or
-              supplier and record that this request was not already submitted. A
-              reconciliation note cannot override a recorded submission.
-            </p>
-            <label>
-              Restore delivery reconciliation
-              <textarea
-                rows={3}
-                maxLength={4000}
-                required={needsReconciliation}
-                value={reconciliation}
-                onChange={(event) => setReconciliation(event.target.value)}
-              />
-            </label>
-          </details>
-          <label className="correspondence-check">
-            <input
-              type="checkbox"
-              checked={confirmed}
-              onChange={(event) => setConfirmed(event.target.checked)}
-            />
-            I have reviewed the recipients, sender, message and attachment
-            versions shown above.
-          </label>
-          {sendFailed ? (
-            <div className="quote-warning">
-              <p>
-                The send request failed. Delivery has not been established by
-                this screen. Check the saved status and mailbox before taking
-                further action.
-              </p>
-              <button
-                type="button"
-                className="text-button"
-                onClick={async () => {
-                  setPending(true);
-                  setConfirmed(false);
-                  try {
-                    const current = await api.get<Schema<"QuotePreview">>(
-                      `${base}/preview`,
-                    );
-                    client.setQueryData([`${base}/preview`], current);
-                    setSendFailed(false);
-                    setError(null);
-                  } catch (failure) {
-                    setError(failure);
-                  } finally {
-                    setPending(false);
-                  }
-                }}
-              >
-                Refresh delivery status for a new review
-              </button>
-            </div>
-          ) : null}
-          <div className="form-actions">
-            <button
-              className="button"
-              disabled={!decisionReady}
-              onClick={() => void decide(false)}
-            >
-              Approve only
-            </button>
-            <button
-              className="button primary"
-              disabled={!decisionReady || !preview.smtp_ready || sendFailed}
-              onClick={() => void decide(true)}
-            >
-              {pending ? "Recording decision…" : "Approve and send"}
-            </button>
-          </div>
-        </fieldset>
-      ) : null}
       <ErrorNotice error={error} />
-      {notice ? (
-        <p role="status" className="success-text">
-          {notice}
-        </p>
-      ) : null}
       <QuoteReplies
         tenderId={tenderId}
         quoteId={quote.id}
@@ -927,41 +657,22 @@ function QuoteReplies({
       </div>
       <p className="field-help">
         Replies are evidence for review. They do not approve a rate, quantity or
-        commercial condition. Automatic matching identifies the thread, not the
-        sender’s authority.
+        commercial condition.
       </p>
       <ErrorNotice error={replies.error} />
       {replies.isPending ? <Loading>Loading replies…</Loading> : null}
       {replies.data?.length === 0 ? (
         <p className="field-help">
-          No replies registered. Check configured mail in Settings or record a
-          reply here.
+          No replies registered. Record a supplier reply here when it arrives.
         </p>
       ) : null}
       {replies.data?.map((reply) => (
         <article className="quote-reply" key={reply.id}>
           <h4>{reply.subject || "Supplier reply"}</h4>
           <p className="muted">
-            {reply.sender} ·{" "}
-            {reply.origin === "manual"
-              ? "Recorded by engineer"
-              : "Read from mailbox"}
+            {reply.sender} · Received {reply.received_at}
           </p>
-          <p className="muted">
-            {reply.date_basis === "retrieved_at"
-              ? "Retrieved"
-              : "Received (engineer entered)"}
-            : {reply.received_at}
-          </p>
-          {reply.date_header ? (
-            <p className="muted">Original Date header: {reply.date_header}</p>
-          ) : null}
           <pre className="quote-body">{reply.text}</pre>
-          {reply.warnings.map((warning, index) => (
-            <p key={index} className="warning-text">
-              {warning}
-            </p>
-          ))}
           {onSource ? (
             <Citations
               ids={reply.source_ids}

@@ -49,35 +49,6 @@ def drive_t017(env, inputs: dict) -> dict:
     }
 
 
-def drive_t019(env, inputs: dict) -> dict:
-    from quantix.office_watchers import OfficeWatcherService
-    from quantix.watcher_models import WatchActivation, WatchDraft
-
-    tender = _tender(env, "Watch Tender")
-    ctx = engineer_identity(tender["id"])
-    service = OfficeWatcherService(env.repo)
-    spec = service.create(
-        ctx,
-        WatchDraft(
-            scope="market",
-            trigger="market_observation",
-            budget=10,
-            idempotency_key="t019-watch",
-        ),
-    )
-    service.activate(ctx, spec.id, WatchActivation(fingerprint=spec.fingerprint, idempotency_key="t019-on"))
-    same = ["steel mesh 8mm 12.50 EGP/kg"] * int(inputs.get("same_observations") or 3)
-    ran = service.run_due(spec.id, same)
-    service.record_sleep(spec.id, int(inputs.get("missed_checks") or 2))
-    latest = service.get(spec.id)
-    return {
-        "scenario": inputs.get("scenario"),
-        "notifications": ran.notifications,
-        "missed_checks": latest.missed_checks,
-        "commercial_sends": ran.commercial_sends,
-    }
-
-
 def drive_t020(env, inputs: dict) -> dict:
     from quantix.tender_calendar import TenderCalendarService
     from quantix.tender_profile import TenderProfileService

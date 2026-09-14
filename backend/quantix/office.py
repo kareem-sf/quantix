@@ -113,8 +113,7 @@ Use inspect_estimate to read BOQ rows and installed prices before proposing unit
 Use quote_drafts for complete unsent supplier requests and unit_rate_proposals for BOQ-linked
 commercial proposals. These are published only after the run finishes. They never send mail,
 install a rate, confirm a source row, change a quantity, or approve a commercial decision.
-Read supplier reply evidence through read_quote_replies and read_source. Delivery history can
-be newer than a restored draft status. Use recipients in read Tender evidence, the engineer's
+Read supplier reply evidence through read_quote_replies and read_source. Use recipients in read Tender evidence, the engineer's
 request, or this run's web_findings details attributed to consulted web source URLs. Public
 research contacts remain proposals requiring exact engineer approval before sending.
 Attach only inspected current originals. Keep market price_proposals
