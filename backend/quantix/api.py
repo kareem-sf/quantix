@@ -668,9 +668,6 @@ def create_app(home: Path, token: str) -> FastAPI:
     from .later_routes import create_router as create_later_router
 
     app.include_router(create_later_router(repo))
-    from .transcription_routes import create_transcription_router
-
-    app.include_router(create_transcription_router(repo))
 
     # The event body is parsed manually after its size cap, so FastAPI cannot
     # infer the request model from the handler signature. Keep the generated

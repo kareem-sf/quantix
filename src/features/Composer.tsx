@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowUp, Mic, Paperclip } from "lucide-react";
+import { ArrowUp, Paperclip } from "lucide-react";
 import type { Schema } from "../api";
 import { ErrorNotice } from "../components/common";
 import { useResolvedTheme } from "../theme";
@@ -10,18 +10,9 @@ import {
   InputGroupButton,
   InputGroupTextarea,
 } from "@/components/ui/input-group";
-import {
-  Popover,
-  PopoverContent,
-  PopoverDescription,
-  PopoverHeader,
-  PopoverTitle,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { useLoop } from "@/hooks/use-loop";
 import { cn } from "@/lib/utils";
 import { composerChip } from "./ModelPicker";
-import { VoiceInput } from "./VoiceInput";
 import { readDraft, saveDraft } from "./drafts";
 import {
   createDraftScope,
@@ -267,35 +258,6 @@ function ComposerDraft({
               >
                 <Paperclip />
               </InputGroupButton>
-              <Popover>
-                <PopoverTrigger
-                  render={
-                    <InputGroupButton
-                      size="icon-xs"
-                      className={cn(composerChip, "size-7")}
-                      aria-label="Voice input"
-                      title="Voice input"
-                    />
-                  }
-                >
-                  <Mic />
-                </PopoverTrigger>
-                <PopoverContent side="top" align="start" className="w-80">
-                  <PopoverHeader>
-                    <PopoverTitle>Voice input</PopoverTitle>
-                    <PopoverDescription>
-                      Speak an instruction into the unsent draft.
-                    </PopoverDescription>
-                  </PopoverHeader>
-                  <VoiceInput
-                    tenderId={tenderId}
-                    onTranscript={(text) => {
-                      if (!text) return;
-                      setDraft((current) => (current ? current : text));
-                    }}
-                  />
-                </PopoverContent>
-              </Popover>
               {modelPicker}
               <InputGroupButton
                 type="submit"

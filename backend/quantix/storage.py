@@ -56,10 +56,6 @@ def scratch_dir(home: Path | str | None = None) -> Path:
     return resolve_home(home) / "scratch"
 
 
-def transcription_dir(home: Path | str | None = None) -> Path:
-    return runtime_tmp_dir(home) / "transcription"
-
-
 def connection_file(home: Path | str | None = None) -> Path:
     return runtime_dir(home) / "connection.json"
 
@@ -76,7 +72,6 @@ def ensure_runtime_dirs(home: Path | str | None = None) -> Path:
     cache_dir(root).mkdir(parents=True, exist_ok=True)
     logs_dir(root).mkdir(parents=True, exist_ok=True)
     scratch_dir(root).mkdir(parents=True, exist_ok=True)
-    transcription_dir(root).mkdir(parents=True, exist_ok=True)
     return root
 
 

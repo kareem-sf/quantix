@@ -227,18 +227,6 @@ def drive_t035(env, inputs: dict) -> dict:
     return result | {"scenario": inputs.get("scenario")}
 
 
-def drive_t073(env, inputs: dict) -> dict:
-    from quantix.transcription import TranscriptionService
-
-    return TranscriptionService(env.repo).transcribe(
-        str(inputs.get("transcript") or "Approve the bid"),
-        bool(inputs.get("auto_send")),
-        audio=b"RIFF....WAVEfmt",
-        retain=False,
-        tender_id=_tender(env, "Voice")["id"],
-    ) | {"scenario": inputs.get("scenario")}
-
-
 DRIVERS = {
     f"T{name.removeprefix('drive_t')}": driver
     for name, driver in sorted(globals().items())
