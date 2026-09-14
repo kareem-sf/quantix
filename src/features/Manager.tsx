@@ -420,8 +420,6 @@ export function Manager({
                                 "finding",
                                 "decisions",
                                 "output",
-                                "office-result",
-                                "staff-result",
                                 "work-product",
                                 "calculation",
                               ].includes(record.view)

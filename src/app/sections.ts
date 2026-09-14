@@ -32,7 +32,7 @@ const workViews = new Set([
   "activity",
   "ai",
 ]);
-const managerViews = new Set(["result", "staff-result", "office-result", "output"]);
+const managerViews = new Set(["output"]);
 const estimateViews = new Set(["boq", "proposals", "quotes"]);
 const submissionViews = new Set(["requirements", "documents", "package"]);
 

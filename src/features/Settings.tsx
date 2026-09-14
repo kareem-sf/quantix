@@ -32,8 +32,6 @@ import { AIConnections } from "./AIConnections";
 import { Diagnostics } from "./Diagnostics";
 import { FactoryReset } from "./FactoryReset";
 import { ManagerPersonality } from "./ManagerPersonality";
-import { AgentLibrary } from "./AgentLibrary";
-import { SandboxSettings } from "./SandboxSettings";
 import { CompanyLibrary } from "./CompanyLibrary";
 import { About } from "./About";
 import { createDraftScope, useFormDraft } from "./useFormDraft";
@@ -136,8 +134,6 @@ function SettingsLayout({
               />
             ) : null}
             {active === "manager" ? <ManagerPersonality /> : null}
-            {active === "agents" ? <AgentLibrary /> : null}
-            {active === "code" ? <SandboxSettings /> : null}
             {active === "knowledge" ? <Knowledge /> : null}
             {active === "library" ? <CompanyLibrary /> : null}
             {active === "backups" ? (

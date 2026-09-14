@@ -10,6 +10,9 @@ type Props = {
   modelId?: string;
   reasoningLevels?: string[];
   disabled?: boolean;
+  /** Provider-hosted web search lives on the route, not in generation settings. */
+  webSearch?: boolean;
+  onWebSearch?: (enabled: boolean) => void;
 };
 
 export function GenerationControls({
@@ -19,6 +22,8 @@ export function GenerationControls({
   modelId,
   reasoningLevels = [],
   disabled = false,
+  webSearch,
+  onWebSearch,
 }: Props) {
   const api = useContext(ApiContext);
   const [result, setResult] = useState<{
@@ -32,7 +37,6 @@ export function GenerationControls({
   const current = result?.key === key ? result : undefined;
   const update = (changes: Partial<GenerationSettings>) =>
     onChange({ ...value, ...changes });
-  const native = value.native_tools ?? [];
 
   async function checkSettings() {
     if (!api || !connectionId || !modelId) return;
@@ -154,20 +158,6 @@ export function GenerationControls({
             </select>
           </label>
           <label className="grid gap-1 text-sm">
-            Native fetch calls per request
-            <input
-              type="number"
-              min={1}
-              max={20}
-              step={1}
-              value={value.max_native_tool_calls ?? 3}
-              onChange={(event) => {
-                if (Number.isFinite(event.target.valueAsNumber))
-                  update({ max_native_tool_calls: event.target.valueAsNumber });
-              }}
-            />
-          </label>
-          <label className="grid gap-1 text-sm">
             Search calls per request
             <input
               type="number"
@@ -182,32 +172,16 @@ export function GenerationControls({
             />
           </label>
         </div>
-        {(
-          [
-            ["web_search", "Provider web search"],
-            ["web_fetch", "Provider page reading"],
-            ["code_execution", "Provider code execution"],
-          ] as const
-        ).map(([name, label]) => (
-          <label className="flex items-center gap-2 text-sm" key={name}>
+        {onWebSearch ? (
+          <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
-              checked={native.includes(name)}
-              onChange={(event) =>
-                update({
-                  native_tools: event.target.checked
-                    ? [...native, name]
-                    : native.filter((item) => item !== name),
-                })
-              }
+              checked={webSearch ?? false}
+              onChange={(event) => onWebSearch(event.target.checked)}
             />
-            {label}
+            Provider web search
           </label>
-        ))}
-        <p className="text-sm text-muted-foreground">
-          Provider code execution needs a supported model, a documented session
-          rate, and reviewed spending and any source-file uploads for this work plan.
-        </p>
+        ) : null}
         {connectionId && modelId ? (
           <button
             type="button"

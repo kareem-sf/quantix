@@ -220,13 +220,11 @@ def create_app(home: Path, token: str) -> FastAPI:
             model=public.model,
             home=public.home,
             workspace_revision=2,
-            office_revision=2,
             reset_pending=False,
             capabilities=(["factory_reset"] if reset.supported else [])
             + [
                 "run_activity",
                 "manager_profile",
-                "dynamic_office",
                 "estimates",
                 "outputs",
                 "meaning_search",
@@ -621,9 +619,6 @@ def create_app(home: Path, token: str) -> FastAPI:
     from .run_activity_routes import create_router as create_activity_router
 
     app.include_router(create_activity_router(repo, should_stop=lambda: reset.pending))
-    from .native_execution_routes import create_router as create_native_execution_router
-
-    app.include_router(create_native_execution_router(repo))
     app.include_router(create_submission_router(repo))
     from .later_routes import create_router as create_later_router
 

@@ -88,7 +88,6 @@ export function DevTools() {
               viewport: `${viewport.width}×${viewport.height}`,
               version: health.data?.version,
               workspace: health.data?.workspace_revision,
-              office: health.data?.office_revision,
               capabilities: health.data?.capabilities?.length ?? 0,
               online: navigator.onLine,
             }}

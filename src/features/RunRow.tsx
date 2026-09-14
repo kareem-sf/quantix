@@ -5,8 +5,6 @@ import { ErrorNotice, Status } from "../components/common";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
-import { NativeActivityInspector } from "./NativeActivityInspector";
-import { LocalCodeInspector } from "./LocalCodeInspector";
 import { LiveRunStream } from "./LiveRunStream";
 
 /** One piece of Tender work: its state, reported progress and recovery. */
@@ -122,20 +120,12 @@ export function RunRow({
       </div>
       <ErrorNotice error={error} />
       {expanded ? (
-        <>
-          <LiveRunStream
-            tenderId={run.tender_id}
-            runId={run.id}
-            status={run.status}
-            startedAt={run.created_at}
-          />
-          <NativeActivityInspector tenderId={run.tender_id} runId={run.id} />
-          <LocalCodeInspector
-            tenderId={run.tender_id}
-            runId={run.id}
-            onStopped={refresh}
-          />
-        </>
+        <LiveRunStream
+          tenderId={run.tender_id}
+          runId={run.id}
+          status={run.status}
+          startedAt={run.created_at}
+        />
       ) : null}
     </article>
   );
@@ -148,7 +138,6 @@ const runLabels: Record<string, string> = {
   analysis: "Analyzing tender package",
   index: "Indexing tender evidence",
   identify: "Identifying the project",
-  task: "Specialist work",
 };
 
 function runLabel(kind: string) {

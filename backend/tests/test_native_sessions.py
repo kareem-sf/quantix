@@ -61,23 +61,3 @@ def test_worker_event_cannot_forge_staff_identity_or_control_fields(tmp_path):
     project_client_event(current, "assistant_text_delta", {"text": "Actual supplied text", "actor_id": "forged", "api_key": "hidden"})
     saved = repo.run_events(current.run_id)[0]["data"]
     assert saved == {"text": "Actual supplied text", "origin": "client", "actor_id": "actual-staff", "assignment_id": "actual-assignment"}
-
-
-def test_native_metadata_api_is_scoped_and_excludes_account_internals(tmp_path):
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    from quantix.native_execution_routes import create_router
-    repo, tender, account, service = workspace(tmp_path)
-    current = context(repo, tender)
-    binding = service.prepare(current, account, {"model_id": "exact"}, operation="conversation")
-    service.finish(current, binding.id, provider_session_id="native-id", state="completed")
-    app = FastAPI()
-    app.include_router(create_router(repo))
-    with TestClient(app) as client:
-        response = client.get(f'/api/tenders/{tender["id"]}/native-sessions')
-        assert response.status_code == 200 and response.json()[0]["provider_session_id"] == "native-id"
-        assert "credentials" not in response.text and "account_home" not in response.text
-        capabilities = client.get(f'/api/ai/connections/{account["id"]}/native-capabilities').json()
-        assert next(item for item in capabilities if item["id"] == "native_files_shell")["supported"] is False
-        assert next(item for item in capabilities if item["id"] == "output_token_limit")["supported"] is False

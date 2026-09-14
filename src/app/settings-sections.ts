@@ -8,7 +8,6 @@ import {
   RotateCcw,
   SlidersHorizontal,
   Stethoscope,
-  Workflow,
   type LucideIcon,
 } from "lucide-react";
 
@@ -16,8 +15,6 @@ export type SettingsSectionId =
   | "accounts"
   | "preferences"
   | "manager"
-  | "agents"
-  | "code"
   | "knowledge"
   | "library"
   | "backups"
@@ -46,22 +43,6 @@ export const settingsGroups: { id: SettingsGroupId; label: string }[] = [
 ];
 
 export const settingsSections: SettingsSectionDefinition[] = [
-  {
-    id: "agents",
-    label: "Agent library",
-    description: "Reusable professional profiles and instructions",
-    icon: Bot,
-    group: "office",
-    capability: "agent_library",
-  },
-  {
-    id: "code",
-    label: "Calculations and code",
-    description: "Isolated local execution and runtime setup",
-    icon: Workflow,
-    group: "office",
-    capability: "code_runtime_setup",
-  },
   {
     id: "accounts",
     label: "AI accounts",

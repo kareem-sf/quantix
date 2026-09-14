@@ -9,13 +9,11 @@ export function WorkProductView({
   rows,
   tenderId,
   onSource,
-  onPublicCitation,
 }: {
   product: Product;
   rows: RowPage;
   tenderId: string;
   onSource: (sourceId: string) => void;
-  onPublicCitation: (citationId: string) => void;
 }) {
   const pageRows = rows.items ?? [];
   const chart = safeChart(product, pageRows);
@@ -49,30 +47,17 @@ export function WorkProductView({
         <section className="flex flex-col gap-2" aria-label="Product sources">
           <h4 className="text-xs font-medium">Sources</h4>
           <div className="flex flex-wrap gap-2">
-            {(product.source_refs ?? []).map((reference, index) => {
-              const citation = reference.startsWith("public_citation:")
-                ? reference.slice("public_citation:".length)
-                : null;
-              return (
-                <button
-                  type="button"
-                  className="text-button"
-                  key={reference}
-                  aria-label={
-                    citation
-                      ? `Open public citation ${citation}`
-                      : `Open source ${reference}`
-                  }
-                  onClick={() =>
-                    citation ? onPublicCitation(citation) : onSource(reference)
-                  }
-                >
-                  {citation
-                    ? `Public source ${index + 1}`
-                    : `Source ${index + 1}`}
-                </button>
-              );
-            })}
+            {(product.source_refs ?? []).map((reference, index) => (
+              <button
+                type="button"
+                className="text-button"
+                key={reference}
+                aria-label={`Open source ${reference}`}
+                onClick={() => onSource(reference)}
+              >
+                Source {index + 1}
+              </button>
+            ))}
           </div>
         </section>
       ) : null}

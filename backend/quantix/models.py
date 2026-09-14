@@ -246,7 +246,6 @@ class Health(ApiModel):
     version: str
     ai_setup_revision: int = 7
     workspace_revision: int = 1
-    office_revision: int = 0
     reset_pending: bool = False
     provider_ready: bool
     model: str

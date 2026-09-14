@@ -9,8 +9,6 @@ import { Outputs } from "../features/Outputs";
 import { Quotes } from "../features/Quotes";
 import { SourceDrawer, type SourceSelection } from "../features/Sources";
 import { Work } from "../features/Work";
-import { LiveOffice } from "../features/office/LiveOffice";
-import { CurrentWork } from "../features/office/CurrentWork";
 import { TenderOfficeWorkspace } from "../features/office/TenderOfficeWorkspace";
 import {
   parseRouteContext,
@@ -155,7 +153,6 @@ function TenderView({
           overview={overview.data}
           artifacts={artifacts.data ?? []}
           settings={settings}
-          officeRevision={health.office_revision}
           sourceSelection={sourceSelection}
           recordView={context.view}
           recordId={context.recordId}
@@ -168,31 +165,6 @@ function TenderView({
           onRecord={openRecord}
           onRepair={(target) => go(target)}
           onCustomizeManager={() => openSettingsSection("manager")}
-          renderLiveOffice={
-            capabilities.includes("dynamic_office")
-              ? ({
-                  tenderId: officeTender,
-                  onClose,
-                  onSource,
-                  onOpenResult,
-                  onOpenOutput,
-                }) => (
-                  <div className="flex min-h-0 min-w-0 flex-col gap-4">
-                    <CurrentWork tenderId={officeTender} onSource={onSource} />
-                    <LiveOffice
-                      tenderId={officeTender}
-                      embedded
-                      onSource={onSource}
-                      onOpenResult={onOpenResult}
-                      onOpenOutput={onOpenOutput}
-                      onCustomizeManager={() => openSettingsSection("manager")}
-                      onOpenManager={onClose}
-                      onClose={onClose}
-                    />
-                  </div>
-                )
-              : undefined
-          }
         />
       </div>
     );

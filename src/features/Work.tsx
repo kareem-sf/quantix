@@ -21,7 +21,6 @@ import { Citations, type SourceSelection } from "./Sources";
 import { AIUsage } from "./AIUsage";
 import { TenderAI } from "./TenderAI";
 import { PlanReview } from "./PlanReview";
-import { ReviewRoom } from "./office/ReviewRoom";
 import { WorkDecisions } from "./WorkDecisions";
 import { ProjectMap } from "./ProjectMap";
 import { TenderBrief } from "./TenderBrief";
@@ -49,14 +48,12 @@ export function PlanView({
   }
   if (reviewing)
     return (
-      <div className="legacy-screen">
-        <PlanReview
-          tenderId={tenderId}
-          planId={plan.id}
-          onBack={() => setReviewing(false)}
-          onSource={onSource}
-        />
-      </div>
+      <PlanReview
+        tenderId={tenderId}
+        planId={plan.id}
+        onBack={() => setReviewing(false)}
+        onSource={onSource}
+      />
     );
   return (
     <section
@@ -421,17 +418,6 @@ export function Work({
               : undefined
           }
         />
-      ) : null}
-      {active === "decisions" ? (
-        <div className="legacy-screen">
-          <ReviewRoom
-            tenderId={tenderId}
-            onDecide={() => {
-              setSection("decisions");
-              onView?.("decisions");
-            }}
-          />
-        </div>
       ) : null}
       {active === "ai" ? (
         <section

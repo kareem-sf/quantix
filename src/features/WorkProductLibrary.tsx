@@ -15,7 +15,6 @@ export function WorkProductLibrary({
   tenderRevision = 0,
   workRevision = "",
   onSource,
-  onPublicCitation,
   focusedProductId,
   onBack,
 }: {
@@ -23,7 +22,6 @@ export function WorkProductLibrary({
   tenderRevision?: number;
   workRevision?: string;
   onSource: (sourceId: string) => void;
-  onPublicCitation: (citationId: string) => void;
   focusedProductId?: string;
   onBack?: () => void;
 }) {
@@ -35,7 +33,6 @@ export function WorkProductLibrary({
         productId={focusedProductId}
         refreshKey={`${tenderRevision}:${workRevision}`}
         onSource={onSource}
-        onPublicCitation={onPublicCitation}
         onBack={onBack}
       />
     );
@@ -45,7 +42,6 @@ export function WorkProductLibrary({
       tenderRevision={tenderRevision}
       workRevision={workRevision}
       onSource={onSource}
-      onPublicCitation={onPublicCitation}
     />
   );
 }
@@ -55,14 +51,12 @@ function FocusedWorkProduct({
   productId,
   refreshKey,
   onSource,
-  onPublicCitation,
   onBack,
 }: {
   tenderId: string;
   productId: string;
   refreshKey: string;
   onSource: (sourceId: string) => void;
-  onPublicCitation: (citationId: string) => void;
   onBack?: () => void;
 }) {
   const base = `${tenderPath(tenderId)}/work-products`;
@@ -75,7 +69,6 @@ function FocusedWorkProduct({
       <WorkProductList
         tenderId={tenderId}
         onSource={onSource}
-        onPublicCitation={onPublicCitation}
       />
     );
   if (current.isPending) return <Loading>Opening saved draft…</Loading>;
@@ -97,7 +90,6 @@ function FocusedWorkProduct({
       base={base}
       initial={current.data.items[0]}
       onSource={onSource}
-      onPublicCitation={onPublicCitation}
       onBack={onBack ?? (() => setShowList(true))}
     />
   );
@@ -108,13 +100,11 @@ function WorkProductList({
   tenderRevision = 0,
   workRevision = "",
   onSource,
-  onPublicCitation,
 }: {
   tenderId: string;
   tenderRevision?: number;
   workRevision?: string;
   onSource: (sourceId: string) => void;
-  onPublicCitation: (citationId: string) => void;
 }) {
   const base = `${tenderPath(tenderId)}/work-products`;
   const refreshKey = `${tenderRevision}:${workRevision}`;
@@ -130,7 +120,6 @@ function WorkProductList({
         initial={selected}
         onBack={() => setSelected(null)}
         onSource={onSource}
-        onPublicCitation={onPublicCitation}
       />
     );
   return (
@@ -237,7 +226,6 @@ function WorkProductDetail({
   initial,
   onBack,
   onSource,
-  onPublicCitation,
 }: {
   tenderId: string;
   tenderRevision: number | string;
@@ -245,7 +233,6 @@ function WorkProductDetail({
   initial: Summary;
   onBack: () => void;
   onSource: (sourceId: string) => void;
-  onPublicCitation: (citationId: string) => void;
 }) {
   const [version, setVersion] = useState(initial.version);
   const productBase = `${base}/${encodeURIComponent(initial.product_id)}`;
@@ -325,7 +312,6 @@ function WorkProductDetail({
           product={detail.data}
           rows={{ items: rows.items, total: rows.total, missing: rows.missing }}
           onSource={onSource}
-          onPublicCitation={onPublicCitation}
         />
       ) : null}
       {rows.items.length < rows.total ? (

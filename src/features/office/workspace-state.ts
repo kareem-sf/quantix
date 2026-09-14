@@ -10,7 +10,7 @@ export function sourceSelectionKey(selection: SourceSelection) {
   ]);
 }
 
-export type WorkspaceView = "documents" | "office" | "reviews" | "activity" | "research";
+export type WorkspaceView = "documents" | "team" | "reviews" | "activity";
 export type WorkspaceMode = "split" | "hidden" | "expanded";
 type State = {
   view: WorkspaceView | "home";

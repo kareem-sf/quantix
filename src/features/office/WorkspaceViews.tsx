@@ -35,14 +35,14 @@ export function WorkspaceContext({
   artifacts,
   onImport,
   onDocuments,
-  onOffice,
+  onTeam,
   onSource,
 }: {
   overview: Schema<"Overview">;
   artifacts: Schema<"Artifact">[];
   onImport: () => void;
   onDocuments: () => void;
-  onOffice: () => void;
+  onTeam: () => void;
   onSource: (source: SourceSelection) => void;
 }) {
   const sources = artifacts.filter((file) => file.is_current);
@@ -64,9 +64,9 @@ export function WorkspaceContext({
       <Button
         variant="ghost"
         className="h-8 justify-between px-0 font-normal"
-        onClick={onOffice}
+        onClick={onTeam}
       >
-        Open the office
+        Open the team
         <ChevronRight />
       </Button>
       <Separator />
@@ -258,31 +258,24 @@ export function WorkspaceReviews({
   planId,
   focusedFinding,
   onSource,
-  onRepair,
   onPlan,
   onConversation,
-  onPublicCitation,
 }: {
   overview: Schema<"Overview">;
   planId?: string;
   focusedFinding?: string;
   onSource: (source: SourceSelection) => void;
-  onRepair?: (target: string) => void;
   onPlan: (id: string) => void;
   onConversation: () => void;
-  onPublicCitation: (citationId: string) => void;
 }) {
   if (planId)
     return (
-      <div className="legacy-screen">
-        <PlanReview
-          tenderId={overview.tender.id}
-          planId={planId}
-          onSource={onSource}
-          onRepair={onRepair}
-          onBack={onConversation}
-        />
-      </div>
+      <PlanReview
+        tenderId={overview.tender.id}
+        planId={planId}
+        onSource={onSource}
+        onBack={onConversation}
+      />
     );
   return (
     <section className="flex flex-col gap-5" aria-label="Workspace reviews">
@@ -326,7 +319,6 @@ export function WorkspaceReviews({
           .sort()
           .join("|")}
         onSource={(sourceId) => onSource({ sourceId })}
-        onPublicCitation={onPublicCitation}
       />
     </section>
   );

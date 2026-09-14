@@ -33,16 +33,16 @@ function TestWorkspace() {
   );
 }
 
-it("opens research alongside documents and retains its draft when switching tabs", async () => {
+it("opens the team alongside documents and retains its draft when switching tabs", async () => {
   const user = userEvent.setup();
   render(<TestWorkspace />);
-  await user.click(screen.getByRole("button", { name: /Research/ }));
-  const draft = screen.getByRole("textbox", { name: "research draft" });
+  await user.click(screen.getByRole("button", { name: /^Team/ }));
+  const draft = screen.getByRole("textbox", { name: "team draft" });
   await user.type(draft, " retained");
   await user.click(screen.getByRole("button", { name: "Workspace home" }));
   await user.click(screen.getByRole("button", { name: /Documents/ }));
-  await user.click(screen.getByRole("tab", { name: /Research/ }));
-  expect(screen.getByRole("textbox", { name: "research draft" })).toBe(draft);
+  await user.click(screen.getByRole("tab", { name: /Team/ }));
+  expect(screen.getByRole("textbox", { name: "team draft" })).toBe(draft);
   expect(draft).toHaveValue("Keep work retained");
 });
 
@@ -70,7 +70,7 @@ it("keeps visited tab state, closes a tab, and returns to the launcher", async (
   const draft = screen.getByRole("textbox", { name: "documents draft" });
   await user.type(draft, " edited");
   await user.click(screen.getByRole("button", { name: "Workspace home" }));
-  await user.click(screen.getByRole("button", { name: /^Office/ }));
+  await user.click(screen.getByRole("button", { name: /^Team/ }));
   await user.click(screen.getByRole("tab", { name: "Documents" }));
   expect(screen.getByRole("textbox", { name: "documents draft" })).toBe(draft);
   expect(draft).toHaveValue("Keep work edited");
@@ -78,7 +78,7 @@ it("keeps visited tab state, closes a tab, and returns to the launcher", async (
   expect(
     screen.queryByRole("tab", { name: "Documents" }),
   ).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "Close Office tab" }));
+  await user.click(screen.getByRole("button", { name: "Close Team tab" }));
   expect(
     screen.getByRole("button", { name: /^Documents/ }),
   ).toBeInTheDocument();

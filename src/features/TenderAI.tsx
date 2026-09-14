@@ -142,10 +142,9 @@ function RouteEditor({ label, value, connections, onChange, emptyLabel = "No rou
         reasoningLevels={model?.capabilities?.reasoning ?? []}
         value={{ temperature: value.temperature ?? null, top_p: value.top_p ?? null,
           reasoning: value.reasoning ?? null, max_output_tokens: value.max_output_tokens,
-          output_mode: value.output_mode ?? "auto",
-          native_tools: [...new Set([...(value.native_tools ?? []), ...(value.web_search ? ["web_search" as const] : [])])],
-          max_search_calls: value.max_search_calls, max_native_tool_calls: value.max_native_tool_calls ?? 3 }}
-        onChange={(settings) => onChange({ ...value, ...settings, web_search: settings.native_tools?.includes("web_search") ?? false })} />
+          output_mode: value.output_mode ?? "auto", max_search_calls: value.max_search_calls }}
+        webSearch={value.web_search} onWebSearch={(enabled) => onChange({ ...value, web_search: enabled })}
+        onChange={(settings) => onChange({ ...value, ...settings })} />
       {models.data?.length === 0 ? <p className="field-help">Discover or add models for this connection in Settings.</p> : null}
     </> : null}
   </fieldset>;

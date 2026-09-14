@@ -6,7 +6,7 @@ import json
 import re
 
 from .db import dump, new_id, now
-from .native_execution_models import NativeClientCapability, NativeSessionBinding
+from .native_execution_models import NativeSessionBinding
 from .run_activity import ActivityRecorder
 
 _SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,200}")
@@ -14,22 +14,6 @@ _SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,200}")
 
 def _fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
-
-
-def client_capabilities(protocol):
-    if protocol not in {"codex", "grok_build"}:
-        raise ValueError("Choose a supported original client.")
-    docs = "https://learn.chatgpt.com/docs/codex-sdk" if protocol == "codex" else "https://docs.x.ai/build/cli/headless-scripting"
-    return [NativeClientCapability(id=identifier, origin=origin, supported=supported, detail=detail, source=docs)
-        for identifier, origin, supported, detail in (
-            ("managed_session", "client", True, "The original client's exact session can continue only under the same profile, account, model, runtime and source scope."),
-            ("output_token_limit", "client", protocol == "grok_build", "Grok applies the configured output limit." if protocol == "grok_build" else "The pinned Codex client exposes no hard output-token limit. Its route allowance is not a provider-enforced ceiling; use a direct API for that requirement."),
-            ("native_files_shell", "client", False, "Host file and shell tools are disabled; platform isolation has not been qualified for arbitrary native actions."),
-            ("native_search", "client", False, "A verifiable native search allowance and source receipt are not connected. Use the reviewed Quantix public-reading tools."),
-            ("native_subagents", "client", False, "Native child agents lack root spending admission. Use reviewed Quantix assignments."),
-            ("scoped_tools", "quantix", True, "The shared Quantix MCP bridge enforces exact tools, source permissions and publication validation."),
-            ("sandboxed_code", "quantix", True, "Reviewed code work uses the separately prepared Quantix isolated code runtime; runtime readiness remains required."),
-        )]
 
 
 class NativeExecutionService:
@@ -133,12 +117,6 @@ class NativeExecutionService:
             conn.execute("UPDATE native_client_session_turns SET state=?,binding_json=?,updated_at=? WHERE session_id=? AND run_id=? AND state IN ('prepared','running')",
                 (state, dump(updated.model_dump()), now(), binding_id, context.run_id))
             return updated
-
-    def list(self, tender_id):
-        self.repo.get_tender(tender_id)
-        with self.repo.db.connect() as conn:
-            return [NativeSessionBinding.model_validate_json(row[0]) for row in conn.execute(
-                "SELECT data_json FROM native_client_sessions WHERE tender_id=? ORDER BY updated_at DESC LIMIT 100", (tender_id,))]
 
 
 def project_client_event(context, kind, data, *, request_operation=None):

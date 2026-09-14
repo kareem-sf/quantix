@@ -20,12 +20,3 @@ class NativeSessionBinding(BaseModel):
     settings_fingerprint: str
     provider_session_id: str | None = None
     state: Literal["prepared", "running", "completed", "interrupted", "failed", "incompatible"] = "prepared"
-
-
-class NativeClientCapability(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    id: str
-    origin: Literal["client", "quantix"]
-    supported: bool
-    detail: str
-    source: str
