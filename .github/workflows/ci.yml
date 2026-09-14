@@ -41,6 +41,8 @@ jobs:
         run: |
           python -m venv backend/.venv
           backend/.venv/Scripts/python.exe -m pip install -c backend/requirements-dev.lock.txt -e "./backend[dev]"
+          # The Codex worker's SDK is a separately pinned AI component (backend/ai-components/locks/client-codex.in).
+          backend/.venv/Scripts/python.exe -m pip install openai-codex==0.147.0 openai-codex-cli-bin==0.147.0
       - name: Lint
         run: backend/.venv/Scripts/python.exe -m ruff check backend
       - name: Formatting
