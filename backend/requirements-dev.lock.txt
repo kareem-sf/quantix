@@ -2,7 +2,7 @@
 # Provider software is separately pinned under ai-components/locks.
 annotated-doc==0.0.5
 annotated-types==0.8.0
-anthropic==1.5.0
+anthropic==1.6.0
 anyio==4.15.1
 attrs==26.1.0
 certifi==2026.7.22
@@ -15,17 +15,17 @@ et-xmlfile==2.0.0
 execnet==2.1.2
 fastapi==0.141.1
 fastembed==0.8.0
-filelock==3.32.6
+filelock==3.32.7
 flatbuffers==25.12.19
 fsspec==2026.7.0
-genai-prices==0.1.6
+genai-prices==0.1.7
 google-genai==2.23.0
 h11==0.16.0
 hf-xet==1.6.0
 httpcore==1.0.9
-httpcore2==2.12.0
+httpcore2==2.13.0
 httpx==0.28.1
-httpx2==2.12.0
+httpx2==2.13.0
 huggingface-hub==1.31.0
 idna==3.19
 iniconfig==2.3.0
@@ -43,7 +43,7 @@ mmh3==5.3.0
 more-itertools==11.1.0
 numpy==2.5.3
 onnxruntime==1.30.0
-openai==3.13.0
+openai==3.14.1
 openpyxl==3.1.5
 opentelemetry-api==1.44.0
 packaging==26.3
@@ -54,13 +54,13 @@ protobuf==7.36.1
 py-rust-stemmers==0.1.8
 pycparser==3.0
 pydantic==2.13.5
-pydantic-ai-slim==2.42.0
+pydantic-ai-slim==2.43.0
 pydantic-monty==0.0.23
 Pint==0.26.1
 flexcache==0.3
 flexparser==0.4
-pydantic-graph==2.42.0
-pydantic-core==2.46.5
+pydantic-graph==2.43.0
+pydantic-core==2.49.0
 pygments==2.21.0
 pyjwt==2.14.0
 pypdfium2==5.13.0
@@ -83,6 +83,6 @@ tqdm==4.70.1
 truststore==0.10.4
 typing-extensions==4.16.0
 typing-inspection==0.4.4
-urllib3==2.7.0
-uvicorn==0.52.4
+urllib3==2.8.0
+uvicorn==0.53.0
 win32-setctime==1.2.0
