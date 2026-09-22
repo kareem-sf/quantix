@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+/* The approved minimal look: white, hairlines, one typeface, one warm accent that means "needs you". */
+@theme {
+  --font-sans: "Geist Variable", system-ui, sans-serif;
+  --color-ink: #18181b;
+  --color-ink-2: #52525b;
+  --color-ink-3: #71717a;
+  --color-ink-4: #a1a1aa;
+  --color-line: #ececee;
+  --color-line-strong: #e4e4e7;
+  --color-subtle: #f4f4f5;
+  --color-rail: #fafaf9;
+  --color-selected: #f0f0ee;
+  --color-attention: #c2410c;
+  --color-approved: #15803d;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-white font-sans text-[13px] text-ink antialiased;
+    font-variant-numeric: tabular-nums;
+  }
+  button {
+    cursor: pointer;
+  }
+}

@@ -11,4 +11,19 @@
   Decision, Office, Documents, Takeoff, Estimate, Subcontract, Submission, Settings and New tender. The mockups
   are on the private design canvas "Quantix Office Directions".
 
-Next: lock the design, then build the service, UI and desktop skeleton.
+The design was approved.
+
+## 23 September 2026: skeleton
+
+- **Service:** FastAPI, SQLAlchemy and Alembic under `~/.quantix`, with a per-launch access token. `/health`, and
+  creating, listing and opening tenders. Datetimes are stored as UTC.
+- **Interface:** Vite, React and Tailwind with the approved tokens, Geist bundled locally, and API types generated
+  from the service. The sidebar lists tenders; New tender and Overview work.
+- **Desktop:** a thin Tauri 2 window. The Vite dev server starts the service and forwards `/api` with the token.
+- **Checks:** 8 service tests, 7 UI tests, typecheck, Ruff and Clippy pass. CI also fails when the API types drift
+  from the service. A browser run created a synthetic tender through the real service; that test data was then
+  removed.
+- **Toolchain:** TypeScript stays on 5.9, because `openapi-typescript` needs the compiler API that TypeScript 7 does
+  not have yet.
+
+Next: AI connections.

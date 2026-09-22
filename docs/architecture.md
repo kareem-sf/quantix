@@ -8,7 +8,7 @@ compatibility layers.
 
 ```
 ui/        React + Vite + TypeScript, Tailwind + shadcn/ui, TanStack Query; API types generated from OpenAPI
-desktop/   Tauri 2 shell: starts the service, owns the window and native file dialogs. No domain logic.
+desktop/   Tauri 2 shell: owns the window and native file dialogs. No domain logic.
 service/   Python 3.12, FastAPI, SQLAlchemy 2 + Alembic
   quantix/
     core/        settings, database, ids, event stream (SSE), the data home ~/.quantix
@@ -32,7 +32,10 @@ Each domain module owns its models, its service functions and the agent tools th
 
 ## Boundaries
 
-- The UI talks only to the HTTP API on loopback, using a per-launch bearer token. It never sees credentials.
+- The UI talks only to the HTTP API on loopback. Each launch of the service gets a fresh bearer token. In
+  development the Vite server starts the service on a free port and forwards `/api` to it with the token, so the
+  browser preview and the desktop window use the same path and the UI never holds the token or any credential.
+  Release packaging, which embeds the service in the desktop app, comes later.
 - Every record belongs to a tender, and every tender belongs to an owner, so accounts can be added later.
 - Long work runs in a durable job ledger, not as fire-and-forget tasks. After a restart, interrupted work resumes
   or is shown as stopped.

@@ -17,3 +17,4 @@ desktop/target/
 *.sqlite
 *.db
 tender-packages/
+desktop/gen/
