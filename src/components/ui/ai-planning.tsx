@@ -1,12 +1,7 @@
 import { useState, type ReactNode } from "react";
-import {
-  BrainCircuit,
-  Check,
-  ChevronDown,
-  CircleAlert,
-  Loader2,
-} from "lucide-react";
+import { BrainCircuit, Check, ChevronDown, CircleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { AiOrb, orbStateFor } from "@/components/ui/thinking-orb";
 
 export type PlanStepStatus = "pending" | "active" | "success" | "error";
 
@@ -36,7 +31,7 @@ export interface AgentPlanningProps {
 const statusRing: Record<PlanStepStatus, string> = {
   success:
     "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400",
-  active: "bg-primary text-primary-foreground",
+  active: "bg-transparent text-foreground",
   error: "bg-destructive/10 text-destructive dark:bg-destructive/20",
   pending: "bg-muted text-muted-foreground",
 };
@@ -60,7 +55,8 @@ export function AgentPlanning({
 }: AgentPlanningProps) {
   const [open, setOpen] = useState(defaultExpanded);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const hasActive = steps.some((step) => step.status === "active");
+  const activeStep = steps.find((step) => step.status === "active");
+  const hasActive = !!activeStep;
   const hasError = steps.some((step) => step.status === "error");
   const allDone =
     steps.length > 0 && steps.every((step) => step.status === "success");
@@ -84,7 +80,7 @@ export function AgentPlanning({
       >
         <span className="flex size-5 items-center justify-center" aria-hidden>
           {hasActive ? (
-            <Loader2 className="size-4 animate-spin text-foreground/70" />
+            <AiOrb state={orbStateFor(activeStep?.title)} />
           ) : hasError ? (
             <CircleAlert className="size-4 text-destructive" />
           ) : allDone ? (
@@ -150,7 +146,7 @@ export function AgentPlanning({
                       {step.status === "success" ? (
                         <Check className="size-3.5" />
                       ) : step.status === "active" ? (
-                        <Loader2 className="size-3.5 animate-spin" />
+                        <AiOrb state={orbStateFor(step.title)} />
                       ) : step.status === "error" ? (
                         <CircleAlert className="size-3.5" />
                       ) : (

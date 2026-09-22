@@ -9,9 +9,9 @@ import { Progress } from "@/components/ui/progress";
 
 const STAGES = [
   ["register", "Registering documents"],
-  ["recognise", "Recognising scanned pages"],
-  ["index", "Indexing tender evidence"],
-  ["structure", "Extracting BOQ, schedules and tables"],
+  ["recognise", "Reading scanned pages"],
+  ["index", "Preparing documents for search"],
+  ["structure", "Reading the BOQ, schedules and tables"],
   ["map", "Mapping the tender package"],
 ] as const;
 

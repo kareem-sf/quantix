@@ -221,12 +221,24 @@ def select_tender_ai(repo, setup, tender_id: str, request: SimpleTenderAIInput):
                 if connection["protocol"] == "grok_build"
                 else "Reviewed the displayed spending allowance."
             )
+        # The chosen account replaces the Tender's AI. Earlier accounts stay
+        # allowed only while a route still uses them; otherwise the Manager
+        # could still hand staff work to an account the engineer moved away from.
+        kept = [
+            candidate["connection_id"]
+            for candidate in [
+                specialist,
+                *current["role_routes"].values(),
+                *current["fallback_routes"],
+            ]
+            if candidate
+        ]
+        allowed = list(dict.fromkeys([request.account_id, *kept]))
+        extras = {key: value for key, value in extras.items() if key in allowed}
         return policy.update(
             tender_id,
             {
-                "allowed_connection_ids": list(
-                    dict.fromkeys([*current["allowed_connection_ids"], request.account_id])
-                ),
+                "allowed_connection_ids": allowed,
                 "manager": route,
                 "specialist": specialist,
                 "role_routes": current["role_routes"],

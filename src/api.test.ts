@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createApi } from "./api";
+import { ApiError, createApi, shouldRetry } from "./api";
 
 describe("local API transport", () => {
   it("preserves intentional cancellation when the browser rejects an aborted read as TypeError", async () => {
@@ -189,5 +189,18 @@ describe("local API transport", () => {
     expect(
       (await api.blob("/tenders/one/artifacts/doc/preview?page=3")).type,
     ).toBe("image/png");
+  });
+});
+
+describe("retrying failed reads", () => {
+  it("does not retry a missing or refused record", () => {
+    expect(shouldRetry(0, new ApiError("Not found", 404))).toBe(false);
+    expect(shouldRetry(0, new ApiError("Conflict", 409))).toBe(false);
+  });
+  it("retries busy, server and connection failures a few times", () => {
+    expect(shouldRetry(0, new ApiError("Busy", 429))).toBe(true);
+    expect(shouldRetry(0, new ApiError("Server", 500))).toBe(true);
+    expect(shouldRetry(0, new TypeError("Failed to fetch"))).toBe(true);
+    expect(shouldRetry(3, new ApiError("Server", 500))).toBe(false);
   });
 });

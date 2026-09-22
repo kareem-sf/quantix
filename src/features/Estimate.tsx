@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Check, Mail, Plus, RefreshCw, Ruler, X } from "lucide-react";
 import {
   tenderPath,
   useApi,
@@ -7,13 +8,9 @@ import {
   useResource,
   type Schema,
 } from "../api";
-import { Empty, ErrorNotice, Loading, Status } from "../components/common";
+import { Empty, ErrorNotice, Loading, Modal } from "../components/common";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  NativeSelect,
-  NativeSelectOption,
-} from "@/components/ui/native-select";
 import {
   Table,
   TableBody,
@@ -23,34 +20,88 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { Citations, type SourceSelection } from "./Sources";
+import { type SourceSelection } from "./Sources";
 import { EstimateEditor } from "./EstimateEditor";
 import { createDraftScope, useFormDraft } from "./useFormDraft";
-import { RateProposals } from "./RateProposals";
+import { proposedRate, RateProposals } from "./RateProposals";
 import { SourceBoqForm } from "./SourceBoqForm";
 import { RetiredSourceRows, type RetiredSourceRow } from "./RetiredSourceRows";
+import { Quotes } from "./Quotes";
+import { TakeoffRow, useTakeoffRequest } from "./Takeoff";
+import { AskManagerButton } from "./chat/AskManagerButton";
+import {
+  buildRows,
+  COMPARISON,
+  formatNumber,
+  STATUS,
+  takeoffNeedsDecision,
+  type EstimateRow,
+  type RowStatus,
+} from "./estimate/model";
+import { locatorLabel } from "@/lib/locator";
 
 const PAGE_SIZE = 40;
 
+type Line = Schema<"TakeoffLine">;
+type Filter = "all" | RowStatus;
+
+const FILTERS: { id: Filter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "waiting", label: STATUS.waiting.label },
+  { id: "check", label: STATUS.check.label },
+  { id: "unpriced", label: STATUS.unpriced.label },
+  { id: "priced", label: STATUS.priced.label },
+];
+
+export type EstimateView = "boq" | "takeoff" | "proposals" | "quotes";
+
+/**
+ * The estimate as one BOQ table. Each row carries its quantity (with the
+ * drawing takeoff), its rate (with any proposed rate) and one plain status.
+ * Work found on the drawings but missing from the BOQ is listed underneath,
+ * and supplier quotes open in a side panel.
+ */
 export function Estimate({
   tenderId,
   defaultCurrency,
   onSource,
-  view: focusedView = "boq",
+  view = "boq",
   selectedId,
   onSelect,
+  onView,
+  takeoffAvailable = true,
+  quotesAvailable = true,
+  onOpenManager,
 }: {
   tenderId: string;
   defaultCurrency: string;
   onSource: (source: SourceSelection) => void;
-  view?: "boq" | "proposals";
+  view?: EstimateView;
+  /** A BOQ row, or a rate proposal or quote when `view` names one. */
   selectedId?: string | null;
-  onSelect?: (id: string | null) => void;
+  onSelect?: (id: string | null, view?: EstimateView) => void;
+  onView?: (view: EstimateView) => void;
+  takeoffAvailable?: boolean;
+  quotesAvailable?: boolean;
+  /** Takes the engineer to the chat after handing the Manager a job. */
+  onOpenManager?: () => void;
 }) {
   const api = useApi(),
     refresh = useRefresh(),
     base = tenderPath(tenderId);
   const estimate = useResource<Schema<"EstimateView">>(`${base}/estimate`);
+  const takeoffRequest = useTakeoffRequest(tenderId);
+  const takeoff = useQuery({
+    queryKey: [`${base}/takeoff`],
+    queryFn: ({ signal }) => api.get<Line[]>(`${base}/takeoff`, signal),
+    enabled: takeoffAvailable,
+    // New lines appear while the team works on a requested takeoff.
+    refetchInterval: takeoffRequest.asked ? 4000 : false,
+    retry: 1,
+  });
+  const rateProposals = useResource<Schema<"RateProposalRecord">[]>(
+    `${base}/estimate/rate-proposals`,
+  );
   const [refreshing, setRefreshing] = useState(false);
   const [creating, setCreating] = useState(false);
   const [replacement, setReplacement] = useState<
@@ -60,443 +111,590 @@ export function Estimate({
     null,
   );
   const [localSelected, setLocalSelected] = useState<string | null>(null);
-  const selected = selectedId === undefined ? localSelected : selectedId;
-  const setSelected = (id: string | null) => {
-    setLocalSelected(id);
-    onSelect?.(id);
-  };
+  const [localQuotes, setLocalQuotes] = useState(false);
   const filters = useFormDraft(
-    createDraftScope("estimate", tenderId, "view", 1),
-    { query: "", filter: "all", page: 0 },
+    createDraftScope("estimate", tenderId, "table", 1),
+    {
+      query: "",
+      filter: (view === "takeoff" || view === "proposals"
+        ? "waiting"
+        : "all") as Filter,
+      page: 0,
+    },
     ["query", "filter", "page"],
   );
   const { query, filter, page } = filters.value;
-  const setQuery = (value: string) => filters.setField("query", value);
-  const setFilter = (value: string) => filters.setField("filter", value);
-  const setPage = (value: number | ((current: number) => number)) =>
-    filters.setField(
-      "page",
-      typeof value === "function" ? value(filters.value.page) : value,
-    );
+  const setPage = (value: number) => filters.setField("page", value);
   const [refreshError, setRefreshError] = useState<unknown>(null);
-  const closeEditor = () => setSelected(null);
+
   if (estimate.isPending) return <Loading>Loading estimate…</Loading>;
   if (!estimate.data) return <ErrorNotice error={estimate.error} />;
-  const view = estimate.data;
-  const visible = view.items.filter(
-    (item) =>
-      item.description.toLowerCase().includes(query.toLowerCase()) &&
-      (filter === "all" ||
-        (filter === "unconfirmed" && !item.confirmed) ||
-        (filter === "unpriced" && item.unit_rate === null) ||
-        (filter === "measured" &&
-          item.quantity_basis === "approved_measurement")),
+  const data = estimate.data;
+  const { rows, unmatched } = buildRows(
+    data.items,
+    takeoff.data,
+    rateProposals.data,
   );
-  const selectedItem =
-    view.items.find((item) => item.id === selected) ??
-    (createdItem?.id === selected ? createdItem : undefined);
+
+  // A link to a rate proposal opens the row it prices.
+  const proposalItem =
+    view === "proposals"
+      ? (Array.isArray(rateProposals.data) ? rateProposals.data : []).find(
+          (proposal) => proposal.id === selectedId,
+        )?.item_id
+      : undefined;
+  const selected =
+    selectedId === undefined
+      ? localSelected
+      : view === "quotes"
+        ? null
+        : (proposalItem ?? selectedId);
+  const selectRow = (id: string | null) => {
+    setLocalSelected(id);
+    onSelect?.(id, "boq");
+  };
+  const quotesOpen = onView ? view === "quotes" : localQuotes;
+  const openQuotes = (open: boolean) =>
+    onView ? onView(open ? "quotes" : "boq") : setLocalQuotes(open);
+
+  const selectedRow =
+    rows.find((row) => row.item.id === selected) ??
+    (createdItem?.id === selected && createdItem
+      ? buildRows([createdItem], takeoff.data, rateProposals.data).rows[0]
+      : undefined);
+  const count = (id: Filter) =>
+    id === "all" ? rows.length : rows.filter((row) => row.status === id).length;
+  // A remembered filter whose rows are all gone has no chip left; show every row.
+  const shown: Filter =
+    filter !== "all" && count(filter) === 0 ? "all" : filter;
+  const needle = query.trim().toLowerCase();
+  const visible = rows.filter(
+    (row) =>
+      (shown === "all" || row.status === shown) &&
+      (!needle ||
+        row.item.description.toLowerCase().includes(needle) ||
+        (row.item.row_reference ?? "").toLowerCase().includes(needle)),
+  );
+  const priced = data.items.length - data.unpriced_count;
+
   return (
-    <div className="flex flex-col gap-5">
-      {focusedView === "boq" ? (
-        <>
-          <header className="flex flex-wrap items-start justify-between gap-3">
-            <div className="flex max-w-2xl flex-col gap-1">
-              <h2 className="text-lg font-semibold tracking-tight">Estimate</h2>
-              <p className="text-sm text-muted-foreground">
-                Supplied quantities, checked rates and recorded assumptions.
-              </p>
-            </div>
+    <div className="flex flex-col gap-4">
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <h2 className="text-lg font-semibold tracking-tight">Estimate</h2>
+          {data.items.length ? (
+            <p
+              className="text-sm text-muted-foreground"
+              aria-label="Pricing state"
+            >
+              {[
+                ...data.totals.map(
+                  (total) =>
+                    `${total.currency} ${formatNumber(total.total_ex_vat ?? total.priced_subtotal_ex_vat)} excluding VAT`,
+                ),
+                data.complete
+                  ? "pricing complete"
+                  : `${priced} of ${data.items.length} rows priced`,
+              ].join(" · ")}
+            </p>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {quotesAvailable ? (
             <Button
               type="button"
-              variant="outline"
-              disabled={refreshing}
-              onClick={async () => {
-                setRefreshing(true);
-                setRefreshError(null);
-                try {
-                  await api.post<Schema<"EstimateView">>(
-                    `${base}/estimate/refresh`,
-                  );
-                  await refresh();
-                } catch (error) {
-                  setRefreshError(error);
-                } finally {
-                  setRefreshing(false);
-                }
-              }}
+              variant="ghost"
+              size="sm"
+              onClick={() => openQuotes(true)}
             >
-              <RefreshCw
-                data-icon="inline-start"
-                className={cn(refreshing && "animate-spin")}
-              />
-              {refreshing ? "Refreshing…" : "Refresh source rows"}
+              <Mail data-icon="inline-start" />
+              Supplier quotes
             </Button>
-          </header>
-          <ErrorNotice error={estimate.error || refreshError} />
+          ) : null}
+          {takeoffAvailable ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={takeoffRequest.asking}
+              onClick={() => void takeoffRequest.ask()}
+            >
+              <Ruler data-icon="inline-start" />
+              Take off from drawings
+            </Button>
+          ) : null}
           <Button
-            className="self-start"
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={refreshing}
+            onClick={async () => {
+              setRefreshing(true);
+              setRefreshError(null);
+              try {
+                await api.post<Schema<"EstimateView">>(
+                  `${base}/estimate/refresh`,
+                );
+                await refresh();
+              } catch (error) {
+                setRefreshError(error);
+              } finally {
+                setRefreshing(false);
+              }
+            }}
+          >
+            <RefreshCw
+              data-icon="inline-start"
+              className={cn(refreshing && "animate-spin")}
+            />
+            {refreshing ? "Refreshing…" : "Refresh from documents"}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
             onClick={() => {
               setReplacement(undefined);
               setCreating(true);
             }}
           >
-            Add BOQ row from source
+            <Plus data-icon="inline-start" />
+            Add BOQ row
           </Button>
-          {creating ? (
-            <SourceBoqForm
-              key={replacement?.id ?? "new"}
-              replacement={replacement}
-              tenderId={tenderId}
-              onSource={onSource}
-              onClose={() => setCreating(false)}
-              onCreated={(item) => {
-                setCreatedItem(item);
-                setCreating(false);
-                setSelected(item.id);
+        </div>
+      </header>
+
+      {takeoffRequest.asked ? (
+        <p className="text-sm text-muted-foreground" role="status">
+          Sent to the Tender Manager. Drawing quantities appear in the table as
+          the team saves them.
+        </p>
+      ) : null}
+      <ErrorNotice
+        error={estimate.error || refreshError || takeoffRequest.error}
+      />
+      {data.refresh_required ? (
+        <p className="text-sm text-(--warning-ink)">
+          The documents changed. Refresh from documents before pricing.
+        </p>
+      ) : null}
+      {!data.complete && data.blocking_reasons.length ? (
+        <details className="text-sm text-muted-foreground">
+          <summary className="w-fit cursor-pointer hover:text-foreground">
+            What is still missing
+          </summary>
+          <ul className="ms-4 mt-1 flex list-disc flex-col gap-1">
+            {data.blocking_reasons.map((reason) => (
+              <li key={reason}>{reason}</li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+
+      {creating ? (
+        <SourceBoqForm
+          key={replacement?.id ?? "new"}
+          replacement={replacement}
+          tenderId={tenderId}
+          onSource={onSource}
+          onClose={() => setCreating(false)}
+          onCreated={(item) => {
+            setCreatedItem(item);
+            setCreating(false);
+            selectRow(item.id);
+          }}
+        />
+      ) : null}
+      <RetiredSourceRows
+        tenderId={tenderId}
+        rows={data.retired_source_rows ?? []}
+        onSource={onSource}
+        onReplace={(row) => {
+          setReplacement(row);
+          setCreating(true);
+        }}
+      />
+
+      {rows.length ? (
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              className="h-8 max-w-72 min-w-48 flex-1"
+              aria-label="Search the BOQ"
+              placeholder="Search items…"
+              value={query}
+              onChange={(event) => {
+                filters.setField("query", event.target.value);
+                setPage(0);
               }}
             />
-          ) : null}
-
-          <section
-            className={cn(
-              "flex flex-col gap-2 rounded-xl border p-4",
-              view.complete ? "bg-emerald-500/5" : "bg-amber-500/5",
-            )}
-            aria-label="Pricing state"
-          >
-            <div className="flex flex-wrap items-center gap-2">
-              <span
-                aria-hidden="true"
-                className={cn(
-                  "size-2 rounded-full",
-                  view.complete ? "bg-emerald-500" : "bg-amber-500",
-                )}
-              />
-              <strong className="text-sm font-medium">
-                {view.complete ? "Pricing complete" : "Estimate needs review"}
-              </strong>
+            <div
+              role="group"
+              aria-label="Show rows"
+              className="flex flex-wrap items-center gap-1"
+            >
+              {FILTERS.filter(
+                (item) => item.id === "all" || count(item.id) > 0,
+              ).map((item) => {
+                const active = shown === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => {
+                      filters.setField("filter", item.id);
+                      setPage(0);
+                    }}
+                    className={cn(
+                      "flex h-6.5 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium transition-colors",
+                      active
+                        ? "bg-card text-foreground shadow-xs ring-1 ring-border"
+                        : "text-muted-foreground hover:bg-muted",
+                    )}
+                  >
+                    {item.label}
+                    <span className="text-[10.5px] tabular-nums text-muted-foreground">
+                      {count(item.id)}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
-            <p className="text-sm text-muted-foreground">
-              {view.coverage_note}
-            </p>
-            {view.refresh_required ? (
-              <p className="text-sm text-muted-foreground">
-                Source documents have changed. Refresh the BOQ rows before
-                continuing.
-              </p>
-            ) : null}
-            {view.blocking_reasons.length ? (
-              <ul className="ms-4 flex list-disc flex-col gap-1 text-sm text-muted-foreground">
-                {view.blocking_reasons.map((reason) => (
-                  <li key={reason}>{reason}</li>
-                ))}
-              </ul>
-            ) : null}
-          </section>
+          </div>
 
-          <RetiredSourceRows
-            tenderId={tenderId}
-            rows={view.retired_source_rows ?? []}
-            onSource={onSource}
-            onReplace={(row) => {
-              setReplacement(row);
-              setCreating(true);
-            }}
-          />
-          {view.totals.length ? (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {view.totals.map((total) => (
-                <section
-                  key={total.currency}
-                  className="flex flex-col gap-2 rounded-xl border bg-card p-4"
+          <div className="overflow-x-auto rounded-xl border bg-card">
+            <Table aria-label="BOQ">
+              <TableHeader className="bg-muted/40">
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="w-16 ps-4">Item</TableHead>
+                  <TableHead>Description</TableHead>
+                  <TableHead className="text-end">Quantity</TableHead>
+                  <TableHead className="text-end">Rate</TableHead>
+                  <TableHead className="text-end">Amount</TableHead>
+                  <TableHead className="pe-4">Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {visible
+                  .slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE)
+                  .map((row) => (
+                    <BoqRow
+                      key={row.item.id}
+                      row={row}
+                      tenderId={tenderId}
+                      onOpen={() => selectRow(row.item.id)}
+                      onSource={onSource}
+                    />
+                  ))}
+                {visible.length === 0 ? (
+                  <TableRow className="hover:bg-transparent">
+                    <TableCell
+                      colSpan={6}
+                      className="h-20 text-center text-muted-foreground"
+                    >
+                      No rows match.
+                    </TableCell>
+                  </TableRow>
+                ) : null}
+              </TableBody>
+            </Table>
+          </div>
+
+          {visible.length > PAGE_SIZE ? (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-sm text-muted-foreground tabular-nums">
+                {page * PAGE_SIZE + 1}–
+                {Math.min(visible.length, page * PAGE_SIZE + PAGE_SIZE)} of{" "}
+                {visible.length} rows
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={page === 0}
+                  onClick={() => setPage(page - 1)}
                 >
-                  <h3 className="text-sm font-semibold tracking-tight">
-                    {total.currency}
-                  </h3>
-                  <dl className="flex flex-col gap-1.5 text-sm">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <dt className="text-muted-foreground">
-                        Priced subtotal excluding VAT
-                      </dt>
-                      <dd className="tabular-nums">
-                        {total.priced_subtotal_ex_vat}
-                      </dd>
-                    </div>
-                    <div className="flex items-baseline justify-between gap-2">
-                      <dt className="text-muted-foreground">
-                        Complete total excluding VAT
-                      </dt>
-                      <dd className="tabular-nums">
-                        {total.total_ex_vat ?? "Not established"}
-                      </dd>
-                    </div>
-                    <div className="flex items-baseline justify-between gap-2">
-                      <dt className="text-muted-foreground">
-                        Complete total including VAT
-                      </dt>
-                      <dd className="tabular-nums">
-                        {total.total_inc_vat ?? "Not established"}
-                      </dd>
-                    </div>
-                  </dl>
-                </section>
-              ))}
+                  Previous
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={(page + 1) * PAGE_SIZE >= visible.length}
+                  onClick={() => setPage(page + 1)}
+                >
+                  Next
+                </Button>
+              </div>
             </div>
           ) : null}
-
-          {view.items.length ? (
-            <>
-              <div className="flex flex-wrap items-center gap-2">
-                <Input
-                  className="min-w-60 flex-1"
-                  aria-label="Search estimate descriptions"
-                  placeholder="Search descriptions…"
-                  dir="auto"
-                  value={query}
-                  onChange={(event) => {
-                    setQuery(event.target.value);
-                    setPage(0);
-                  }}
-                />
-                <NativeSelect
-                  aria-label="Filter estimate rows"
-                  value={filter}
-                  onChange={(event) => {
-                    setFilter(event.target.value);
-                    setPage(0);
-                  }}
-                >
-                  <NativeSelectOption value="all">All rows</NativeSelectOption>
-                  <NativeSelectOption value="unconfirmed">
-                    Source not confirmed
-                  </NativeSelectOption>
-                  <NativeSelectOption value="unpriced">
-                    Without a rate
-                  </NativeSelectOption>
-                  <NativeSelectOption value="measured">
-                    Measured quantity
-                  </NativeSelectOption>
-                </NativeSelect>
-              </div>
-
-              <div className="overflow-x-auto rounded-xl border bg-card">
-                <Table aria-label="Estimate rows">
-                  <TableHeader className="bg-muted/40">
-                    <TableRow className="hover:bg-transparent">
-                      <TableHead className="ps-4">
-                        Description and source
-                      </TableHead>
-                      <TableHead>Unit</TableHead>
-                      <TableHead className="text-end">
-                        Supplied quantity
-                      </TableHead>
-                      <TableHead className="text-end">Quantity used</TableHead>
-                      <TableHead className="text-end">Unit rate</TableHead>
-                      <TableHead className="text-end">
-                        Amount excluding VAT
-                      </TableHead>
-                      <TableHead className="pe-4">Review</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {visible
-                      .slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE)
-                      .map((item) => (
-                        <TableRow key={item.id}>
-                          <TableCell className="min-w-72 py-3 ps-4 whitespace-normal">
-                            <div className="flex flex-col items-start gap-1">
-                              <Button
-                                type="button"
-                                variant="link"
-                                className="h-auto justify-start p-0 text-start font-medium whitespace-normal text-foreground"
-                                dir="auto"
-                                title={item.description}
-                                onClick={() => setSelected(item.id)}
-                              >
-                                {item.description}
-                              </Button>
-                              <button
-                                type="button"
-                                className="inline-flex max-w-full items-center gap-1.5 rounded-full border bg-background px-2.5 py-1 text-xs transition-colors hover:bg-accent"
-                                onClick={() =>
-                                  onSource({ sourceId: item.source_id })
-                                }
-                              >
-                                <span className="truncate" dir="auto">
-                                  {item.document} · {item.locator}
-                                </span>
-                              </button>
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-muted-foreground">
-                            {item.unit || "Not identified"}
-                          </TableCell>
-                          <TableCell className="text-end tabular-nums">
-                            {item.supplied_quantity ?? "Unresolved"}
-                          </TableCell>
-                          <TableCell className="text-end">
-                            <div className="flex flex-col items-end">
-                              <span className="tabular-nums">
-                                {item.effective_quantity ?? "Unresolved"}
-                              </span>
-                              <span className="text-xs text-muted-foreground">
-                                {item.quantity_basis === "approved_measurement"
-                                  ? "Approved measurement"
-                                  : "Supplied BOQ"}
-                              </span>
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-end">
-                            <div className="flex flex-col items-end">
-                              <span className="tabular-nums">
-                                {item.unit_rate ?? "Not priced"}
-                              </span>
-                              <span className="text-xs text-muted-foreground">
-                                {item.currency ?? ""}
-                              </span>
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-end tabular-nums">
-                            {item.line_ex_vat ?? "Not established"}
-                          </TableCell>
-                          <TableCell className="pe-4">
-                            <div className="flex flex-col items-start gap-1">
-                              <Status
-                                value={
-                                  item.confirmed ? "confirmed" : "needs_review"
-                                }
-                              />
-                              <Button
-                                type="button"
-                                variant="link"
-                                size="sm"
-                                className="h-auto p-0"
-                                onClick={() => setSelected(item.id)}
-                              >
-                                Review row
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    {visible.length === 0 ? (
-                      <TableRow className="hover:bg-transparent">
-                        <TableCell
-                          colSpan={7}
-                          className="h-24 text-center text-muted-foreground"
-                        >
-                          No estimate rows match these filters.
-                        </TableCell>
-                      </TableRow>
-                    ) : null}
-                  </TableBody>
-                </Table>
-              </div>
-
-              {visible.length > PAGE_SIZE ? (
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-sm text-muted-foreground tabular-nums">
-                    {page * PAGE_SIZE + 1}–
-                    {Math.min(visible.length, page * PAGE_SIZE + PAGE_SIZE)} of{" "}
-                    {visible.length} rows
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={page === 0}
-                      onClick={() => setPage((value) => value - 1)}
-                    >
-                      Previous
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={(page + 1) * PAGE_SIZE >= visible.length}
-                      onClick={() => setPage((value) => value + 1)}
-                    >
-                      Next
-                    </Button>
-                  </div>
-                </div>
-              ) : null}
-            </>
-          ) : (
-            <Empty title="No current BOQ rows">
-              Add a BOQ row from a PDF or Word source using the action above, or
-              import an Excel BOQ and choose Refresh source rows. Each proposed
-              row needs engineer confirmation against its source.
-            </Empty>
-          )}
-
-          <details className="rounded-xl border bg-card p-4">
-            <summary className="w-fit cursor-pointer text-sm font-medium">
-              More options
-            </summary>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Supplied bill quantities stay in use until you approve a
-              measurement. Scenario totals do not change accepted rates.
-            </p>
-          </details>
         </>
       ) : (
-        <div className="legacy-screen flex flex-col gap-5">
-          <RateProposals
-            tenderId={tenderId}
-            items={view.items}
-            onSource={onSource}
-            selectedId={selected}
-            onSelect={setSelected}
-          />
-          <section className="quantity-proposals">
-            <h2>Quantity proposals</h2>
-            <p className="muted">
-              Inspect the original BOQ row and calculation before approving a
-              different quantity.
-            </p>
-            {view.items
-              .filter((item) => item.quantity_proposals.length)
-              .map((item) => (
-                <article className="document-row" key={item.id}>
-                  <div>
-                    <strong>{item.description}</strong>
-                    <p className="field-help">
-                      {item.quantity_proposals.length} proposal(s) · Supplied{" "}
-                      {item.supplied_quantity ?? "unresolved"} {item.unit}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    className="button"
-                    onClick={() => setSelected(item.id)}
-                  >
-                    Review quantity proposals
-                  </button>
-                </article>
-              ))}
-            {!view.items.some((item) => item.quantity_proposals.length) ? (
-              <p className="field-help">
-                No quantity proposals have been recorded. Open a BOQ row to
-                propose a different quantity.
-              </p>
-            ) : null}
-          </section>
-        </div>
+        <Empty
+          title="No BOQ rows yet"
+          action={
+            <AskManagerButton
+              tenderId={tenderId}
+              className="items-center"
+              onSent={onOpenManager}
+              request="Read the BOQ in the tender documents and add every row to the estimate for my review: item number, description, unit and quantity, with the page each row comes from."
+            >
+              Ask the Tender Manager to read the BOQ
+            </AskManagerButton>
+          }
+        >
+          The Tender Manager can read the BOQ from the documents, or you can add
+          a row yourself.
+        </Empty>
       )}
-      {selectedItem ? (
-        <div className="legacy-screen">
-          <EstimateEditor
-            key={selectedItem.id}
-            item={selectedItem}
-            tenderId={tenderId}
-            defaultCurrency={defaultCurrency}
-            onSource={onSource}
-            onClose={closeEditor}
-          />
-        </div>
+
+      {unmatched.length ? (
+        <section
+          aria-label="On the drawings, not in the BOQ"
+          className="flex flex-col gap-2"
+        >
+          <h3 className="text-sm font-medium">
+            On the drawings, not in the BOQ
+            <span className="ms-1.5 text-muted-foreground tabular-nums">
+              {unmatched.length}
+            </span>
+          </h3>
+          <ul className="flex flex-col gap-2">
+            {unmatched.map((line) => (
+              <li key={line.id}>
+                <TakeoffRow
+                  tenderId={tenderId}
+                  line={line}
+                  onSource={onSource}
+                />
+              </li>
+            ))}
+          </ul>
+        </section>
       ) : null}
+
+      {selectedRow ? (
+        <EstimateEditor
+          key={selectedRow.item.id}
+          item={selectedRow.item}
+          tenderId={tenderId}
+          defaultCurrency={defaultCurrency}
+          onSource={onSource}
+          onClose={() => selectRow(null)}
+        >
+          {selectedRow.takeoff.length ? (
+            <section
+              aria-label="From the drawings"
+              className="flex flex-col gap-2"
+            >
+              <h4>From the drawings</h4>
+              {selectedRow.takeoff.map((line) => (
+                <TakeoffRow
+                  key={line.id}
+                  tenderId={tenderId}
+                  line={line}
+                  onSource={onSource}
+                />
+              ))}
+            </section>
+          ) : null}
+          {selectedRow.rates.length ||
+          (Array.isArray(rateProposals.data) &&
+            rateProposals.data.some(
+              (proposal) => proposal.item_id === selectedRow.item.id,
+            )) ? (
+            <RateProposals
+              tenderId={tenderId}
+              items={[selectedRow.item]}
+              itemId={selectedRow.item.id}
+              onSource={onSource}
+              selectedId={view === "proposals" ? selectedId : undefined}
+              onSelect={
+                view === "proposals"
+                  ? (id) => onSelect?.(id, "proposals")
+                  : undefined
+              }
+            />
+          ) : null}
+        </EstimateEditor>
+      ) : null}
+
+      {quotesOpen ? (
+        <Modal drawer title="Supplier quotes" onClose={() => openQuotes(false)}>
+          <Quotes
+            tenderId={tenderId}
+            onSource={onSource}
+            selectedId={view === "quotes" ? (selectedId ?? null) : undefined}
+            onSelect={onSelect ? (id) => onSelect(id, "quotes") : undefined}
+          />
+        </Modal>
+      ) : null}
+    </div>
+  );
+}
+
+function BoqRow({
+  row,
+  tenderId,
+  onOpen,
+  onSource,
+}: {
+  row: EstimateRow;
+  tenderId: string;
+  onOpen: () => void;
+  onSource: (source: SourceSelection) => void;
+}) {
+  const { item } = row;
+  const line = row.takeoff[0];
+  const rate = row.rates[0];
+  const decide =
+    row.waiting === 1 && line && takeoffNeedsDecision(line) ? line : null;
+  const quantity = formatNumber(item.effective_quantity);
+  const unitRate = formatNumber(item.unit_rate);
+  const amount = formatNumber(item.line_ex_vat);
+  return (
+    <TableRow className="align-top">
+      <TableCell className="py-3 ps-4 text-muted-foreground tabular-nums">
+        {item.row_reference || "—"}
+      </TableCell>
+      <TableCell className="min-w-64 py-3 whitespace-normal">
+        <div className="flex flex-col items-start gap-1">
+          <button
+            type="button"
+            className="text-start font-medium hover:underline"
+            onClick={onOpen}
+          >
+            {item.description}
+          </button>
+          <button
+            type="button"
+            className="max-w-full truncate text-xs text-muted-foreground hover:text-foreground"
+            onClick={() => onSource({ sourceId: item.source_id })}
+          >
+            {item.document} · {locatorLabel(item.locator)}
+          </button>
+        </div>
+      </TableCell>
+      <TableCell className="py-3 text-end">
+        <div className="flex flex-col items-end gap-0.5">
+          <span className="tabular-nums">
+            {quantity ? `${quantity} ${item.unit}` : "Not found"}
+          </span>
+          {line ? (
+            <span
+              className={cn(
+                "text-xs",
+                takeoffNeedsDecision(line)
+                  ? "text-(--warning-ink)"
+                  : "text-muted-foreground",
+              )}
+            >
+              Drawings{" "}
+              {line.quantity
+                ? `${formatNumber(line.quantity)} ${line.unit}`
+                : "—"}
+              {line.difference_percent
+                ? ` (${line.difference_percent.startsWith("-") ? "" : "+"}${line.difference_percent}%)`
+                : ` · ${COMPARISON[line.comparison]}`}
+            </span>
+          ) : item.quantity_basis === "approved_measurement" ? (
+            <span className="text-xs text-muted-foreground">Measured</span>
+          ) : null}
+        </div>
+      </TableCell>
+      <TableCell className="py-3 text-end">
+        <div className="flex flex-col items-end gap-0.5">
+          <span className="tabular-nums">
+            {unitRate ? `${unitRate} ${item.currency ?? ""}` : "—"}
+          </span>
+          {rate ? (
+            <span className="text-xs text-(--warning-ink)">
+              Proposed {formatNumber(proposedRate(rate))}{" "}
+              {rate.payload.currency}
+            </span>
+          ) : null}
+        </div>
+      </TableCell>
+      <TableCell className="py-3 text-end tabular-nums">
+        {amount ?? "—"}
+      </TableCell>
+      <TableCell className="py-3 pe-4">
+        <div className="flex flex-col items-start gap-1.5">
+          <span className="inline-flex items-center gap-1.5 text-xs whitespace-nowrap">
+            <span
+              aria-hidden
+              className={cn("size-1.5 rounded-full", STATUS[row.status].dot)}
+            />
+            {STATUS[row.status].label}
+          </span>
+          {decide ? (
+            <TakeoffDecision tenderId={tenderId} line={decide} />
+          ) : row.waiting ? (
+            <Button
+              type="button"
+              variant="link"
+              size="sm"
+              className="h-auto p-0 text-xs"
+              onClick={onOpen}
+            >
+              Review
+            </Button>
+          ) : null}
+        </div>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+/** Accept or reject the drawing quantity for a row without opening it. */
+function TakeoffDecision({ tenderId, line }: { tenderId: string; line: Line }) {
+  const api = useApi();
+  const refresh = useRefresh();
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  async function review(decision: "accepted" | "rejected") {
+    setSaving(true);
+    setError(null);
+    try {
+      await api.post<Line>(
+        `${tenderPath(tenderId)}/takeoff/${encodeURIComponent(line.id)}/review`,
+        { decision, note: "" } satisfies Schema<"TakeoffReview">,
+      );
+      await refresh();
+    } catch (failure) {
+      setError(failure);
+    } finally {
+      setSaving(false);
+    }
+  }
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-1">
+        <Button
+          type="button"
+          size="xs"
+          variant="outline"
+          disabled={saving}
+          aria-label={`Accept the drawing quantity for ${line.description}`}
+          onClick={() => void review("accepted")}
+        >
+          <Check data-icon="inline-start" />
+          Accept
+        </Button>
+        <Button
+          type="button"
+          size="xs"
+          variant="ghost"
+          disabled={saving}
+          aria-label={`Reject the drawing quantity for ${line.description}`}
+          onClick={() => void review("rejected")}
+        >
+          <X data-icon="inline-start" />
+          Reject
+        </Button>
+      </div>
+      <ErrorNotice error={error} />
     </div>
   );
 }

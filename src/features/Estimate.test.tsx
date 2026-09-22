@@ -194,9 +194,7 @@ it("saves an exact source BOQ proposal and opens the returned unconfirmed row", 
       </ApiContext.Provider>
     </QueryClientProvider>,
   );
-  await user.click(
-    await screen.findByRole("button", { name: "Add BOQ row from source" }),
-  );
+  await user.click(await screen.findByRole("button", { name: "Add BOQ row" }));
   await user.type(
     screen.getByPlaceholderText("Search imported source text…"),
     "Concrete",
@@ -307,7 +305,9 @@ it("keeps incomplete pricing visible when routine source refresh fails", async (
     await screen.findByText("One source row needs confirmation."),
   ).toBeInTheDocument();
   expect(screen.queryByText("Pricing complete")).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "Refresh source rows" }));
+  await user.click(
+    screen.getByRole("button", { name: "Refresh from documents" }),
+  );
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "Source refresh is unavailable.",
   );

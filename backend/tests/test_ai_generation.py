@@ -146,17 +146,33 @@ def test_openai_search_uses_provider_enforced_total_native_call_limit():
     assert settings["extra_body"]["max_tool_calls"] == 2
 
 
-@pytest.mark.parametrize("protocol,provider", [("google", "google"), ("openai_responses", "xai")])
+@pytest.mark.parametrize(
+    "protocol,provider", [("google", "google"), ("openai_chat", "custom"), ("openai_chat", "xai")]
+)
 def test_unbounded_native_search_is_rejected(protocol, provider):
     from quantix.ai_generation import validate_generation
 
     route = {"web_search": True}
-    with pytest.raises(ValueError, match="enforce|call limit"):
+    with pytest.raises(ValueError, match="enforce|call limit|limit how many searches"):
         validate_generation(route, account(protocol, provider, web_search=True))
 
 
+def test_any_responses_endpoint_applies_the_reviewed_search_call_limit():
+    """max_tool_calls belongs to the Responses API, not to one vendor."""
+
+    from quantix.ai_api_provider import build_model_settings
+    from quantix.ai_generation import validate_generation
+
+    connection = account("openai_responses", "custom", web_search=True)
+    route = {"web_search": True, "max_search_calls": 2}
+    validate_generation(route, connection)
+    assert build_model_settings(route, connection)["extra_body"]["max_tool_calls"] == 2
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("protocol,provider", [("google", "google"), ("openai_responses", "xai")])
+@pytest.mark.parametrize(
+    "protocol,provider", [("google", "google"), ("openai_chat", "custom"), ("openai_chat", "xai")]
+)
 async def test_uncapped_search_denied_before_model_transport_or_budget_reservation(
     monkeypatch, protocol, provider
 ):
@@ -171,7 +187,7 @@ async def test_uncapped_search_denied_before_model_transport_or_budget_reservati
         pytest.fail("Unbounded native search reached model transport or spending admission")
 
     monkeypatch.setattr("quantix.ai_api_engine.model_for_route", forbidden)
-    with pytest.raises(ValueError, match="enforce|call limit"):
+    with pytest.raises(ValueError, match="enforce|call limit|limit how many searches"):
         await run_model(
             {
                 "model_id": "exact-test-model",

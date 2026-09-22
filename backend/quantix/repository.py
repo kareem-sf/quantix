@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 
 from .db import Database, dump, new_id, now, record
 from .diagnostics import initialize
+from .message_wording import plain_message
 from .pending import ensure_schema as ensure_pending_schema
 from .storage import logs_dir
 
@@ -117,9 +118,11 @@ class Repository:
             raise ValueError("Unknown Tender name source.")
         name = text(name, "a Tender name", 200)
         self.get_tender(tender_id)
+        # The revision tracks the source documents, so a new name leaves the
+        # estimate and drafts built from those documents current.
         with self.db.connect(write=True) as conn:
             conn.execute(
-                "UPDATE tenders SET name=?, name_source=?, revision=revision+1, updated_at=? WHERE id=?",
+                "UPDATE tenders SET name=?, name_source=?, updated_at=? WHERE id=?",
                 (name, source, now(), tender_id),
             )
         return self.get_tender(tender_id)
@@ -658,7 +661,18 @@ class Repository:
 
     def _message_record(self, conn, tender_id: str, row) -> dict:
         item = record(row)
+        item["content"] = plain_message(item.get("role", ""), item.get("content", ""))
         item["result_links"] = self._message_result_links(conn, tender_id, item.get("run_id"))
+        if item.get("role") == "manager" and item.get("run_id"):
+            from .chat_approvals import approvals_for_run
+
+            asked = conn.execute(
+                "SELECT data_json FROM run_events WHERE run_id=? AND kind='engineer_question' "
+                "ORDER BY id DESC LIMIT 1",
+                (item["run_id"],),
+            ).fetchone()
+            item["question"] = json.loads(asked[0]) if asked else None
+            item["approvals"] = approvals_for_run(self, conn, tender_id, item["run_id"])
         return item
 
     def messages(self, tender_id):

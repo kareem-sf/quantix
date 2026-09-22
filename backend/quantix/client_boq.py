@@ -138,6 +138,21 @@ def _read(archive, member):
         ) from exc
 
 
+def _locked(element, flags) -> bool:
+    """Protection applies only when a lock flag or a password is set. Tools such
+    as openpyxl write an empty protection element that Excel does not enforce."""
+
+    if element is None:
+        return False
+    if any(element.get(flag, "").strip().lower() in {"1", "true"} for flag in flags):
+        return True
+    return any(
+        element.get(name)
+        for name in ("password", "workbookPassword", "revisionsPassword", "hashValue")
+        + ("workbookHashValue", "revisionsHashValue")
+    )
+
+
 def _parts(archive):
     try:
         workbook_bytes = _read(archive, "xl/workbook.xml")
@@ -147,7 +162,10 @@ def _parts(archive):
         raise ValueError("The workbook is missing its main sheet relationships.") from exc
     if workbook.tag != f"{{{SHEET_NS}}}workbook":
         raise ValueError("This workbook uses an unsupported spreadsheet XML format.")
-    if workbook.find(f"{{{SHEET_NS}}}workbookProtection") is not None:
+    if _locked(
+        workbook.find(f"{{{SHEET_NS}}}workbookProtection"),
+        ("lockStructure", "lockWindows", "lockRevision"),
+    ):
         raise ValueError(
             "The source workbook is protected. Supply an authorised unprotected working copy."
         )
@@ -192,7 +210,7 @@ def _sheet(archive, member, strings):
     root = _xml(payload)
     if root.tag != f"{{{SHEET_NS}}}worksheet":
         raise ValueError("The selected sheet is not a standard worksheet.")
-    if root.find(f"{{{SHEET_NS}}}sheetProtection") is not None:
+    if _locked(root.find(f"{{{SHEET_NS}}}sheetProtection"), ("sheet",)):
         raise ValueError(
             "A selected worksheet is protected. Supply an authorised unprotected working copy."
         )

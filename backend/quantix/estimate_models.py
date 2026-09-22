@@ -20,10 +20,25 @@ class SourceBoqProposal(EstimateModel):
     source_id: str = Field(min_length=1, max_length=100)
     row_reference: str = Field(min_length=1, max_length=100)
     source_excerpt: str = Field(min_length=1, max_length=6000)
-    description: str = Field(min_length=1, max_length=6000)
+    # Optional: without it the row reads as its excerpt, less the item number,
+    # unit and quantity, so a long BOQ is not written out twice.
+    description: str = Field(default="", max_length=6000)
     unit: str = Field(min_length=1, max_length=100)
     quantity: DecimalText
     replaces_item_id: str | None = Field(default=None, min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def _description_from_excerpt(self):
+        if not self.description:
+            text = " ".join(self.source_excerpt.split())
+            if text.startswith(self.row_reference):
+                text = text[len(self.row_reference) :].strip(" :-–")
+            for _ in range(2):
+                for written in (self.quantity, self.unit):
+                    if written and text.endswith(written):
+                        text = text[: -len(written)].strip()
+            self.description = text or " ".join(self.source_excerpt.split())
+        return self
 
 
 class EngineerDecision(EstimateModel):
@@ -84,7 +99,9 @@ class UnitRateInput(EstimateModel):
     @model_validator(mode="after")
     def rate_required(self):
         if (self.unit_rate is None) == (self.components is None):
-            raise ValueError("Propose exactly one direct rate or component build-up.")
+            raise ValueError(
+                "Give either unit_rate (a direct rate) or components (a build-up), not both and not neither."
+            )
         if self.vat_percent is not None and Decimal(self.vat_percent) > 100:
             raise ValueError("VAT percentage must be between zero and 100.")
         return self
@@ -108,7 +125,7 @@ class RateProposalRecord(EstimateModel):
     approved_basis_fingerprint: str | None
     source_ids: list[str]
     run_id: str | None
-    status: Literal["proposed", "approved"]
+    status: Literal["proposed", "approved", "rejected"]
     is_current: bool
     created_at: str
 

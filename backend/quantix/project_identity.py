@@ -60,6 +60,11 @@ class ProjectIdentity(BaseModel):
         "numbers or words like 'Tender documents'. If no document names the project, a short "
         "descriptive name from the package folder name.",
     )
+    short_name: OptionalText(
+        48,
+        description="A short English name an engineer would use in a list, for example "
+        "'New Fire Station · KSAU-HS'.",
+    )
     client: OptionalText(200, description="Employer or client organisation.")
     location: OptionalText(200, description="Site, city or region.")
     country: OptionalText(80)

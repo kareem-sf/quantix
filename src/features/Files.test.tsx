@@ -25,11 +25,18 @@ it("sends area and reading-status filters to Meaning search and shows the matche
     { base_url: "http://localhost/api", token: "test" },
     async (address) => {
       const url = new URL(String(address));
+      if (url.pathname.endsWith("/document-groups"))
+        return Response.json({
+          groups: [],
+          total: 1,
+          problems: 0,
+          grouped: true,
+        });
       if (url.pathname.endsWith("/search-status"))
         return new Response(
           JSON.stringify({ ready: true, status: "ready", detail: "Ready" }),
         );
-      expect(url.searchParams.get("mode")).toBe("meaning");
+      expect(url.searchParams.get("mode")).toBe("auto");
       expect(url.searchParams.get("area")).toBe("Area B");
       expect(url.searchParams.get("status")).toBe("needs_attention");
       return new Response(
@@ -76,12 +83,16 @@ it("sends area and reading-status filters to Meaning search and shows the matche
       </ApiContext.Provider>
     </QueryClientProvider>,
   );
+  await user.click(
+    screen.getByRole("button", {
+      name: "More: filters, reading map and full register",
+    }),
+  );
   await user.selectOptions(screen.getByLabelText("Filter by area"), "Area B");
   await user.selectOptions(
     screen.getByLabelText("Filter by processing status"),
     "needs_attention",
   );
-  await user.selectOptions(screen.getByLabelText("Search method"), "meaning");
   await user.type(screen.getByLabelText("Search source text"), "drainage");
   expect(
     await screen.findByText(
@@ -96,7 +107,7 @@ it("sends area and reading-status filters to Meaning search and shows the matche
   expect(screen.getByRole("button", { name: "Search" })).toBeInTheDocument();
 });
 
-it("keeps Both selected and reports meaning-search failures without substituting Words", async () => {
+it("offers one search box and lets the service pick meaning or exact words", async () => {
   const api = createApi(
     { base_url: "http://localhost/api", token: "test" },
     async (url) =>
@@ -108,11 +119,19 @@ it("keeps Both selected and reports meaning-search failures without substituting
                 ready: false,
                 detail: "The source documents have changed.",
               }
-            : String(url).includes("mode=combined")
-              ? { detail: "Prepare meaning search for the changed documents." }
+            : String(url).includes("/search?")
+              ? {
+                  hits: [],
+                  requested_mode: "auto",
+                  actual_mode: "words",
+                  ranking_version: "rrf-1",
+                  coverage: { truncated: false, scanned: 0, ceiling: 2000 },
+                  limitations: [
+                    "Meaning search is not ready; showing exact-word matches.",
+                  ],
+                }
               : [],
         ),
-        { status: String(url).includes("mode=combined") ? 409 : 200 },
       ),
   );
   const user = userEvent.setup();
@@ -133,12 +152,12 @@ it("keeps Both selected and reports meaning-search failures without substituting
       </ApiContext.Provider>
     </QueryClientProvider>,
   );
-  await user.selectOptions(screen.getByLabelText("Search method"), "combined");
+  expect(screen.queryByLabelText("Search method")).not.toBeInTheDocument();
   await user.type(screen.getByLabelText("Search source text"), "drainage");
-  expect(await screen.findByRole("alert")).toHaveTextContent(
-    "Prepare meaning search for the changed documents.",
-  );
-  expect(screen.getByLabelText("Search method")).toHaveValue("combined");
+  expect(
+    await screen.findByText(/showing exact-word matches/),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
 it("fetches actual historical files and opens the selected original revision", async () => {
@@ -191,6 +210,11 @@ it("fetches actual historical files and opens the selected original revision", a
         />
       </ApiContext.Provider>
     </QueryClientProvider>,
+  );
+  await user.click(
+    screen.getByRole("button", {
+      name: "More: filters, reading map and full register",
+    }),
   );
   await user.selectOptions(screen.getByLabelText("Filter by revision"), "all");
   const previous = await screen.findByText("Previous revision");
@@ -268,6 +292,11 @@ it("explains when document filters exclude all search results", async () => {
       </ApiContext.Provider>
     </QueryClientProvider>,
   );
+  await user.click(
+    screen.getByRole("button", {
+      name: "More: filters, reading map and full register",
+    }),
+  );
   await user.selectOptions(
     screen.getByLabelText("Filter by processing status"),
     "unsupported",
@@ -280,7 +309,8 @@ it("explains when document filters exclude all search results", async () => {
   ).toBeInTheDocument();
 });
 
-it("shows recorded reading status without inventing document analysis or human review", () => {
+it("shows recorded reading status without inventing document analysis or human review", async () => {
+  const user = userEvent.setup();
   const artifact: Schema<"Artifact"> = {
     id: "pdf",
     tender_id: "one",
@@ -314,6 +344,11 @@ it("shows recorded reading status without inventing document analysis or human r
       </ApiContext.Provider>
     </QueryClientProvider>,
   );
+  await user.click(
+    screen.getByRole("button", {
+      name: "More: filters, reading map and full register",
+    }),
+  );
   expect(
     screen.getByRole("table", { name: "Document register" }),
   ).toBeInTheDocument();
@@ -323,11 +358,10 @@ it("shows recorded reading status without inventing document analysis or human r
   expect(
     screen.queryByText("Human review: Not started"),
   ).not.toBeInTheDocument();
+  // The page no longer explains its rules in paragraphs.
   expect(
-    screen.getByText(
-      /Reading a document is not an engineering analysis or\s+review/i,
-    ),
-  ).toBeInTheDocument();
+    screen.queryByText(/Reading a document is not an engineering analysis/i),
+  ).not.toBeInTheDocument();
   expect(
     within(row).getAllByRole("button", { name: "Scope.pdf" }),
   ).toHaveLength(1);

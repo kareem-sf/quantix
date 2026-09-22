@@ -20,6 +20,10 @@ An agent-architecture audit ([report](reports/2026-09-14-agent-architect-audit.m
 
 **Not verified:** no live AI run of the team or the takeoff, no desktop app walk-through, and no check that a given vision model measures drawings accurately. Takeoff lines are proposals for the engineer to check.
 
+## Audit of the workspace overhaul — 22 September 2026
+
+An audit of branch `workspace-overhaul` ran the app against an isolated, synthetic workspace and fixed nine defects: the missing Activity technical log, "Group documents now" hanging without an AI, spreadsheet BOQ rows losing their item numbers, a stale confirmation warning, "excluding vat" wording, the side panel hiding the Manager on narrow windows, tabs overflowing at tablet width, and missing tenders retrying and polling forever. CI formatting was also repaired. Backend 845 passed, 1 skipped; UI 272 passed; typecheck, Ruff, Prettier, Clippy and the build pass. Follow-up the same day: Submission became one checklist with requirements, drafts and the package in sections below it; Activity rows gained a summary line (`GET /tenders/{id}/job-summaries`); a live run on a synthetic tender (USD 0.039, Runware deepseek-v4-flash) exercised naming, grouping, requirements, approval, planning, a hired QS and a choice card, and found that switching a tender's AI left the old account usable for staff, which is fixed. Backend 847 passed, 1 skipped; UI 275 passed. A second pass fixed the Team list and the Manager's voice, then completed the synthetic tender: rates approved, estimate complete at SAR 536,940.00 excluding VAT, priced client BOQ, requirements resolved and a local export approved (nothing sent), for USD 0.075 in total. It fixed six more defects: rates named by item number, a calculation argument ending the job, renames staling the estimate, openpyxl workbooks refused as protected, stale Manager status, and exceptions shown as plain ready. Backend 854 passed, 1 skipped; UI 276 passed. Details are in [the audit report](../audit-report.md).
+
 ## Open
 
 - Live acceptance of a Manager run that hires staff and of a drawing takeoff on the reference package.

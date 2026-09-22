@@ -9,6 +9,7 @@ import os
 import posixpath
 import re
 import threading
+import unicodedata
 import warnings
 import zipfile
 from collections.abc import Callable
@@ -391,6 +392,483 @@ def extract_document(
     return result
 
 
+def scrambled_text_layer(text: str) -> bool:
+    """Whether a PDF page's embedded text is unreadable glyph codes rather than words.
+
+    Broken font mappings show up as control characters used as spaces and as
+    Greek/Coptic code points standing in for Arabic letters.
+    """
+
+    visible = [character for character in text if not character.isspace()]
+    if len(visible) < 6:
+        return False
+    greek = sum(1 for character in visible if 0x0370 <= ord(character) <= 0x03FF)
+    if len(visible) < 40:
+        # Short title pages: only a page made almost entirely of Greek/Coptic
+        # code points, never a unit symbol such as "Ω" or "Δ" in a label.
+        return greek / len(visible) > 0.6
+    controls = sum(1 for character in text if ord(character) < 32 and character not in "\n\r\t")
+    return controls / len(text) > 0.02 or greek / len(visible) > 0.2
+
+
+def _right_to_left(character: str) -> bool:
+    code = ord(character)
+    return 0x0590 <= code <= 0x08FF or 0xFB1D <= code <= 0xFDFF or 0xFE70 <= code <= 0xFEFF
+
+
+def _is_mark(character: str) -> bool:
+    return unicodedata.category(character).startswith("M")
+
+
+# One character on a PDF page: the character and its box (left, right, bottom, top).
+Glyph = tuple[str, float, float, float, float]
+
+
+def _centre(glyphs: list[Glyph]) -> float:
+    return (min(glyph[1] for glyph in glyphs) + max(glyph[2] for glyph in glyphs)) / 2
+
+
+def _script(character: str) -> str:
+    if _right_to_left(character) and (character.isalnum() or _is_mark(character)):
+        return "rtl"
+    return "ltr" if character.isalnum() else ""
+
+
+def _is_core(character: str) -> bool:
+    return character.isalnum() or _is_mark(character)
+
+
+def _gap(first: list[Glyph], second: list[Glyph]) -> float:
+    return max(
+        min(glyph[1] for glyph in second) - max(glyph[2] for glyph in first),
+        min(glyph[1] for glyph in first) - max(glyph[2] for glyph in second),
+    )
+
+
+def _words(line: list[Glyph], main_rtl: bool = False) -> list[list[Glyph]]:
+    """Split a line into words drawn together.
+
+    Words end at spaces and where Arabic touches Latin letters or digits. PDFs
+    stored right to left often drop those spaces and keep punctuation with whichever
+    word came before it in storage, so punctuation at a word's edge, and a bracket
+    standing alone, goes to the word it is drawn closest to.
+    """
+
+    words: list[list[Glyph]] = []
+    word: list[Glyph] = []
+    for glyph in line:
+        character = glyph[0]
+        if character.isspace():
+            if word:
+                words.append(word)
+            word = []
+            continue
+        if word and {_script(word[-1][0]), _script(character)} == {"rtl", "ltr"}:
+            words.append(word)
+            word = []
+        word.append(glyph)
+    if word:
+        words.append(word)
+
+    heights = sorted(glyph[4] - glyph[3] for glyph in line if _is_core(glyph[0]))
+    reach = heights[len(heights) // 2] if heights else 0.0
+    if reach <= 0:
+        return words
+    kept: list[list[Glyph]] = []
+    pieces: list[tuple[Glyph, list[Glyph] | None]] = []
+    for word in words:
+        cores = [index for index, glyph in enumerate(word) if _is_core(glyph[0])]
+        if not cores:
+            if len(word) == 1 and word[0][0] in "()[]{}":
+                pieces.append((word[0], None))
+            else:
+                kept.append(word)
+            continue
+        middle = word[cores[0] : cores[-1] + 1]
+        kept.append(middle)
+        number = not any(glyph[0].isalpha() for glyph in middle)
+        for glyph in [*word[: cores[0]], *word[cores[-1] + 1 :]]:
+            if not (main_rtl and number):
+                pieces.append((glyph, middle))
+            elif glyph[0] in "()[]{}":
+                # On an Arabic line a bracket beside a number belongs to the Arabic
+                # flow around it, so it is placed on its own.
+                pieces.append((glyph, None))
+            else:
+                middle.append(glyph)
+    spans = [[glyph for glyph in word if _is_core(glyph[0])] for word in kept]
+    alone: list[list[Glyph]] = []
+    for glyph, own in pieces:
+        best, best_gap = own, _gap([glyph], [g for g in own if _is_core(g[0])]) if own else None
+        for word, core in zip(kept, spans, strict=True):
+            if not core or word is own:
+                continue
+            if main_rtl and not any(g[0].isalpha() for g in core):
+                continue
+            gap = _gap([glyph], core)
+            if gap <= reach and (best_gap is None or gap < best_gap):
+                best, best_gap = word, gap
+        if best is None:
+            alone.append([glyph])
+        else:
+            best.append(glyph)
+    kept.extend(alone)
+    # Keep storage order, which the caller relies on for lines already in order.
+    position: dict[int, float] = {id(glyph): index for index, glyph in enumerate(line)}
+    for word in [word for word in kept if all(_is_mark(glyph[0]) for glyph in word)]:
+        # A mark such as shadda stored apart from its word goes after the letter
+        # it is drawn over.
+        centre = _centre(word)
+        hosts = [
+            (other, glyph)
+            for other in kept
+            if other is not word
+            for glyph in other
+            if _script(glyph[0]) == "rtl"
+            and not _is_mark(glyph[0])
+            and glyph[1] - 0.5 <= centre <= glyph[2] + 0.5
+        ]
+        if not hosts:
+            continue
+        host, letter = hosts[0]
+        kept.remove(word)
+        for step, mark in enumerate(word, start=1):
+            position[id(mark)] = position[id(letter)] + step / (len(word) + 1)
+            host.append(mark)
+    for word in kept:
+        word.sort(key=lambda glyph: position[id(glyph)])
+    kept.sort(key=lambda word: position[id(word[0])])
+    return kept
+
+
+def _lam_first(glyphs: list[Glyph]) -> list[Glyph]:
+    """A lam ligature (lam-alef, lam-ya) is one drawn shape; some writers store its
+    two letters lam last. Both letters then share the same box."""
+
+    glyphs = list(glyphs)
+    for index in range(len(glyphs) - 1):
+        other, lam = glyphs[index], glyphs[index + 1]
+        if (
+            lam[0] == "ل"
+            and other[0].isalpha()
+            and abs(other[1] - lam[1]) < 0.5
+            and abs(other[2] - lam[2]) < 0.5
+        ):
+            glyphs[index], glyphs[index + 1] = lam, other
+    return glyphs
+
+
+def _word_text(word: list[Glyph], rtl: bool) -> tuple[str, str, str]:
+    """A word's text in reading order as (punctuation before, letters, punctuation after).
+
+    Punctuation is placed by where it is drawn: for Arabic, on the right means
+    before; for English and numbers, on the left means before. Marks stored ahead
+    of their letter, such as tanween, go after the letter they are drawn over, and
+    lam ligatures stored lam last are put back in order.
+    """
+
+    cores = [index for index, glyph in enumerate(word) if _is_core(glyph[0])]
+    if not cores:
+        return "", "".join(glyph[0] for glyph in word), ""
+    centre = _centre([word[index] for index in cores])
+    inside = word[cores[0] : cores[-1] + 1]
+    edges = [*word[: cores[0]], *word[cores[-1] + 1 :]]
+    before = [glyph for glyph in edges if ((glyph[1] + glyph[2]) / 2 > centre) == rtl]
+    after = [glyph for glyph in edges if ((glyph[1] + glyph[2]) / 2 > centre) != rtl]
+    if rtl and all(_script(glyph[0]) == "rtl" and not glyph[0].isdigit() for glyph in inside):
+        letters = [glyph for glyph in inside if not _is_mark(glyph[0])]
+        # A piece drawn inside another letter's box (the dots of a ya under a fa)
+        # rides on that letter like a mark. Ligature halves share one box instead.
+        riders = [
+            glyph
+            for glyph in letters
+            if any(
+                other is not glyph
+                and not (abs(other[1] - glyph[1]) < 0.5 and abs(other[2] - glyph[2]) < 0.5)
+                and other[1] - 0.5 <= glyph[1]
+                and glyph[2] <= other[2] + 0.5
+                for other in letters
+            )
+        ]
+        letters = [glyph for glyph in letters if not any(glyph is rider for rider in riders)]
+        centres = [round((glyph[1] + glyph[2]) / 2) for glyph in letters]
+        if any(later > earlier for earlier, later in zip(centres, centres[1:], strict=False)):
+            # Some writers store a word in pieces (around a shadda, say): put its
+            # letters back in right-to-left drawing order, each mark after its letter.
+            marks = [*riders, *(glyph for glyph in inside if _is_mark(glyph[0]))]
+            inside = _lam_first(
+                sorted(letters, key=lambda glyph: -round((glyph[1] + glyph[2]) / 2))
+            )
+            for mark in marks:
+                mark_centre = (mark[1] + mark[2]) / 2
+                # Nearest letter; of a ligature's two letters, the later one.
+                base = min(
+                    range(len(inside)),
+                    key=lambda index: (
+                        _is_mark(inside[index][0]),
+                        abs((inside[index][1] + inside[index][2]) / 2 - mark_centre),
+                        -index,
+                    ),
+                )
+                inside.insert(base + 1, mark)
+    if rtl:
+        # Marks stored ahead of the letters belong after the letter drawn under them.
+        leading = []
+        while inside and _is_mark(inside[0][0]):
+            leading.append(inside.pop(0))
+        for mark in leading:
+            bases = [index for index, glyph in enumerate(inside) if not _is_mark(glyph[0])]
+            if not bases:
+                inside.insert(0, mark)
+                continue
+            mark_centre = (mark[1] + mark[2]) / 2
+            base = min(
+                bases,
+                key=lambda index: abs((inside[index][1] + inside[index][2]) / 2 - mark_centre),
+            )
+            inside.insert(base + 1, mark)
+        inside = _lam_first(inside)
+        before.sort(key=lambda glyph: -glyph[1])
+        after.sort(key=lambda glyph: -glyph[1])
+    else:
+        before.sort(key=lambda glyph: glyph[1])
+        after.sort(key=lambda glyph: glyph[1])
+    return (
+        "".join(glyph[0] for glyph in before),
+        "".join(glyph[0] for glyph in inside),
+        "".join(glyph[0] for glyph in after),
+    )
+
+
+_BRACKET_FAMILIES = ("()", "[]", "{}")
+
+
+def _orient_brackets(parts: list[tuple[str, str, str]]) -> list[str]:
+    """Brackets on a line stored backwards can point the wrong way. Pair them in
+    reading order, then put each against the words it encloses."""
+
+    tokens = [[list(before), list(core), list(after)] for before, core, after in parts]
+    for family in _BRACKET_FAMILIES:
+        spots = [
+            (index, side, position)
+            for index, token in enumerate(tokens)
+            for side in (0, 1, 2)
+            for position, character in enumerate(token[side])
+            if character in family and (side != 1 or all(mark in "()[]{}" for mark in token[1]))
+        ]
+        paired = spots
+        if len(spots) % 2:
+            # One bracket belongs to a pair across lines: the first closes one opened
+            # above, or the last opens one closed below, whichever is nearer its end.
+            if spots[0][0] <= len(tokens) - 1 - spots[-1][0]:
+                (index, side, position), paired = spots[0], spots[1:]
+                tokens[index][side][position] = family[1]
+            else:
+                (index, side, position), paired = spots[-1], spots[:-1]
+                tokens[index][side][position] = family[0]
+        for number, (index, side, position) in enumerate(paired):
+            tokens[index][side][position] = family[number % 2]
+    texts = ["".join(part for side in token for part in side) for token in tokens]
+    result: list[str] = []
+    carry = ""
+    for text in texts:
+        text = carry + text
+        carry = ""
+        while text and text[-1] in "([{":
+            carry = text[-1] + carry
+            text = text[:-1]
+        while result and text and text[0] in ")]}":
+            result[-1] += text[0]
+            text = text[1:]
+        if text:
+            result.append(text)
+    if carry:
+        result.append(carry)
+    return result
+
+
+def reading_order_line(line: list[Glyph]) -> str:
+    """One PDF text line in reading order.
+
+    Many PDF writers store a right-to-left line word by word from left to right,
+    so Arabic comes out backwards. Words on a mostly right-to-left line are put in
+    right-to-left position order, and runs of left-to-right words (numbers, English)
+    keep their own left-to-right order. A line without right-to-left letters, or
+    one already stored in reading order, is returned unchanged.
+    """
+
+    stored = "".join(glyph[0] for glyph in line)
+    right = sum(1 for character in stored if character.isalpha() and _right_to_left(character))
+    if not right:
+        return stored
+    left = sum(1 for character in stored if character.isalpha() and not _right_to_left(character))
+    main_rtl = right > left
+    words = _words(line, main_rtl)
+    scripts = []
+    for word in words:
+        found = {_script(glyph[0]) for glyph in word} - {""}
+        scripts.append("rtl" if "rtl" in found else "ltr" if found else "")
+    order = sorted(
+        range(len(words)),
+        key=lambda index: -_centre(words[index]) if main_rtl else index,
+    )
+    main = "rtl" if main_rtl else "ltr"
+    is_rtl = {}
+    for place, index in enumerate(order):
+        if scripts[index]:
+            is_rtl[index] = scripts[index] == "rtl"
+            continue
+        # Punctuation on its own takes the direction of the words on both sides
+        # when they agree, and the line's direction otherwise.
+        sides = []
+        for step in (-1, 1):
+            other = place + step
+            while 0 <= other < len(order) and not scripts[order[other]]:
+                other += step
+            sides.append(scripts[order[other]] if 0 <= other < len(order) else main)
+        is_rtl[index] = (sides[0] if sides[0] == sides[1] else main) == "rtl"
+    arranged: list[int] = []
+    position = 0
+    while position < len(order):
+        end = position
+        # A run of words in the other direction is ordered by its own direction.
+        while end < len(order) and is_rtl[order[end]] != main_rtl:
+            end += 1
+        if end > position:
+            run = order[position:end]
+            arranged.extend(
+                sorted(run, key=lambda index: _centre(words[index]) * (1 if main_rtl else -1))
+            )
+            position = end
+        else:
+            arranged.append(order[position])
+            position += 1
+    parts = [_word_text(words[index], is_rtl[index]) for index in arranged]
+    stored_words = ["".join(glyph[0] for glyph in word) for word in words]
+    if arranged == list(range(len(words))) and ["".join(part) for part in parts] == stored_words:
+        return stored
+    texts = _orient_brackets(parts) if main_rtl else ["".join(part) for part in parts]
+    return " ".join(texts)
+
+
+def _overlap_vertically(first: Glyph, second: Glyph) -> bool:
+    shared = min(first[4], second[4]) - max(first[3], second[3])
+    smaller = min(first[4] - first[3], second[4] - second[3])
+    return smaller > 0 and shared > 0.3 * smaller
+
+
+def _join_mark_breaks(lines: list[list[Glyph]]) -> list[list[Glyph]]:
+    """PDFium starts a new line after a raised mark such as tanween. Put the rest
+    of the word back on its line when it sits on the same baseline."""
+
+    joined: list[list[Glyph]] = []
+    for line in lines:
+        if joined:
+            previous = [glyph for glyph in joined[-1] if not glyph[0].isspace()]
+            following = [glyph for glyph in line if not glyph[0].isspace()]
+            bases = [glyph for glyph in previous if not _is_mark(glyph[0])]
+            if (
+                previous
+                and following
+                and bases
+                and _is_mark(previous[-1][0])
+                and _overlap_vertically(bases[-1], following[0])
+            ):
+                joined[-1].extend(line)
+                continue
+        joined.append(list(line))
+    return joined
+
+
+def _attach_strays(lines: list[list[Glyph]]) -> list[list[Glyph]]:
+    """PDFium puts a small piece drawn just off its word, such as a tanween mark
+    or the dots under a final ya, on a line of its own. Put such a piece back
+    after the letter it is drawn in. Letters drawn above a word are left alone:
+    some fonts label the dot of a letter as another letter."""
+
+    stray_lines = set()
+    inserts: dict[int, list[tuple[int, Glyph]]] = {}
+    for index, line in enumerate(lines):
+        pieces = [glyph for glyph in line if not glyph[0].isspace()]
+        if not pieces or len(pieces) > 2:
+            continue
+        found = []
+        for piece in pieces:
+            centre_x = (piece[1] + piece[2]) / 2
+            centre_y = (piece[3] + piece[4]) / 2
+            best = None
+            for step in (-1, 1):
+                # The nearest line of text above and below, past blank lines and
+                # other stray pieces.
+                other = index + step
+                while (
+                    0 <= other < len(lines)
+                    and len("".join(glyph[0] for glyph in lines[other]).split()) <= 2
+                    and len("".join(glyph[0] for glyph in lines[other]).strip()) <= 2
+                ):
+                    other += step
+                if not 0 <= other < len(lines):
+                    continue
+                for position, host in enumerate(lines[other]):
+                    height = host[4] - host[3]
+                    if (
+                        host[0].isspace()
+                        or not _right_to_left(host[0])
+                        or height <= 0
+                        or not host[1] - 0.5 <= centre_x <= host[2] + 0.5
+                    ):
+                        continue
+                    distance = max(host[3] - piece[4], piece[3] - host[4], 0)
+                    below = centre_y < (host[3] + host[4]) / 2
+                    if distance > height / 2 or not (_is_mark(piece[0]) or below):
+                        continue
+                    if best is None or distance < best[0]:
+                        best = (distance, other, position)
+            if best is None:
+                break
+            found.append((best[1], best[2], piece))
+        if len(found) != len(pieces) or any(other in stray_lines for other, _, _ in found):
+            continue
+        stray_lines.add(index)
+        for other, position, piece in found:
+            inserts.setdefault(other, []).append((position, piece))
+    result = []
+    for index, line in enumerate(lines):
+        if index in stray_lines:
+            continue
+        line = list(line)
+        for position, piece in sorted(inserts.get(index, []), key=lambda item: -item[0]):
+            line.insert(position + 1, piece)
+        result.append(line)
+    return result
+
+
+def pdf_page_text(textpage) -> str:
+    """A PDF page's stored text, with right-to-left lines in reading order."""
+
+    text = textpage.get_text_bounded(errors="replace").replace("\r\n", "\n")
+    if not any(_right_to_left(character) for character in text):
+        return text
+    try:
+        count = textpage.count_chars()
+        stream = textpage.get_text_range(0, count, errors="replace")
+        if len(stream) != count:
+            return text
+        lines: list[list[Glyph]] = [[]]
+        for index, character in enumerate(stream):
+            if character == "\r":
+                continue
+            if character == "\n":
+                lines.append([])
+                continue
+            left, bottom, right, top = textpage.get_charbox(index)
+            lines[-1].append((character, left, right, bottom, top))
+    except pdfium.PdfiumError:
+        return text
+    lines = _join_mark_breaks(_attach_strays(lines))
+    return "\n".join(reading_order_line(line) for line in lines)
+
+
 def _extract_pdf(path, result, collector, cancelled):
     result.metadata["extraction_scope"] = "embedded_text"
     scanned = []
@@ -402,9 +880,20 @@ def _extract_pdf(path, result, collector, cancelled):
             _cancel(cancelled)
             locator = f"page:{index + 1}"
             with closing(document[index]) as page, closing(page.get_textpage()) as textpage:
-                text = textpage.get_text_bounded(errors="replace").replace("\r\n", "\n")
+                text = pdf_page_text(textpage)
                 if not text.strip():
                     # Rendering needs the same PDFium lock, so read these after.
+                    scanned.append((index + 1, page.get_width(), page.get_height()))
+                elif scrambled_text_layer(text):
+                    # The PDF's stored text uses a broken font mapping (for
+                    # example "6SHFLILFDWLRQV" for "Specifications"). Reading
+                    # the page image is the only faithful way to get its text.
+                    _warn(
+                        result,
+                        "pdf_text_scrambled",
+                        "This page's stored text is scrambled, so it was read from the page image.",
+                        locator,
+                    )
                     scanned.append((index + 1, page.get_width(), page.get_height()))
                 else:
                     collector.add(
@@ -513,8 +1002,8 @@ def _read_scanned_pages(path, result, collector, cancelled, pages):
             _warn(
                 result,
                 "ocr_language_missing",
-                "Arabic text recognition is not installed, so Arabic pages may be read incorrectly. "
-                "Add the Arabic language data to Tesseract and import again.",
+                "Arabic reading isn't set up on this computer, so Arabic pages may be read "
+                "wrongly. Read the file again once Arabic reading is set up.",
             )
 
 

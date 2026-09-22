@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowUp, Paperclip } from "lucide-react";
+import { ArrowUp, Paperclip, Square } from "lucide-react";
 import type { Schema } from "../api";
 import { ErrorNotice } from "../components/common";
 import { useResolvedTheme } from "../theme";
@@ -51,6 +51,9 @@ type ComposerProps = {
   ) => Promise<Schema<"MessageSubmission"> | void>;
   onImport: () => void;
   busy?: boolean;
+  /** Stops the tender's running work; the send button becomes Stop while busy. */
+  onStop?: () => void;
+  stopping?: boolean;
   busyMessage?: string;
   hasPending?: boolean;
   initialDraft?: string;
@@ -66,6 +69,8 @@ function ComposerDraft({
   onSend,
   onImport,
   busy = false,
+  onStop,
+  stopping = false,
   busyMessage,
   hasPending = false,
   initialDraft = "",
@@ -116,6 +121,24 @@ function ComposerDraft({
       isObsoleteBusyConflict(current) ? null : current,
     );
   }, [busy, busyMessage]);
+
+  // "Ask for changes" in a chat card starts the reply here for the engineer.
+  useEffect(() => {
+    const compose = (event: Event) => {
+      const text = (event as CustomEvent<string>).detail ?? "";
+      setDraft(text);
+      draftRef.current = text;
+      requestAnimationFrame(() => {
+        const field = document.querySelector<HTMLTextAreaElement>(
+          '[aria-label="Message to Tender Manager"]',
+        );
+        field?.focus();
+        field?.setSelectionRange(text.length, text.length);
+      });
+    };
+    window.addEventListener("quantix:compose", compose);
+    return () => window.removeEventListener("quantix:compose", compose);
+  }, []);
 
   async function send() {
     const rawSnapshot = draftRef.current;
@@ -223,7 +246,6 @@ function ComposerDraft({
               aria-label="Message to Tender Manager"
               placeholder={placeholders[placeholderKey % placeholders.length]}
               value={draft}
-              dir="auto"
               rows={2}
               maxLength={20000}
               className="max-h-60 min-h-16 px-4 pt-3.5 text-sm leading-relaxed"
@@ -259,21 +281,36 @@ function ComposerDraft({
                 <Paperclip />
               </InputGroupButton>
               {modelPicker}
-              <InputGroupButton
-                type="submit"
-                size="icon-xs"
-                variant="default"
-                className="ms-auto size-7 rounded-full shadow-sm transition-transform active:scale-95"
-                aria-label={busy ? "Send when ready" : "Send instruction"}
-                disabled={disabled}
-                title={
-                  hasPending
-                    ? "Edit or cancel the waiting instruction first"
-                    : undefined
-                }
-              >
-                <ArrowUp />
-              </InputGroupButton>
+              {busy && onStop ? (
+                <InputGroupButton
+                  type="button"
+                  size="icon-xs"
+                  variant="default"
+                  className="ms-auto size-7 rounded-full shadow-sm transition-transform active:scale-95"
+                  aria-label={stopping ? "Stopping" : "Stop"}
+                  title="Stop the work"
+                  disabled={stopping}
+                  onClick={onStop}
+                >
+                  <Square className="size-3 fill-current" />
+                </InputGroupButton>
+              ) : (
+                <InputGroupButton
+                  type="submit"
+                  size="icon-xs"
+                  variant="default"
+                  className="ms-auto size-7 rounded-full shadow-sm transition-transform active:scale-95"
+                  aria-label={busy ? "Send when ready" : "Send instruction"}
+                  disabled={disabled}
+                  title={
+                    hasPending
+                      ? "Edit or cancel the waiting instruction first"
+                      : undefined
+                  }
+                >
+                  <ArrowUp />
+                </InputGroupButton>
+              )}
             </InputGroupAddon>
           </InputGroup>
         </BorderBeam>

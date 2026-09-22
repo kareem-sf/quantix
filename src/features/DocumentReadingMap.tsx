@@ -182,9 +182,7 @@ export function DocumentReadingMap({
               height: AREA.height,
             }}
           >
-            <span className="truncate text-xs font-medium" dir="auto">
-              {area.name}
-            </span>
+            <span className="truncate text-xs font-medium">{area.name}</span>
             <span className="text-xs text-muted-foreground">
               {area.read} of {area.total} read
             </span>
@@ -223,7 +221,7 @@ export function DocumentReadingMap({
                 className="size-3.5 shrink-0 text-muted-foreground"
                 aria-hidden="true"
               />
-              <span className="min-w-0 flex-1 truncate text-xs" dir="auto">
+              <span className="min-w-0 flex-1 truncate text-xs">
                 {entry.artifact.name}
               </span>
               <span

@@ -14,11 +14,12 @@ XAI_LIMIT_DOC = "https://docs.x.ai/developers/tools/tool-usage-details"
 
 
 def bounded_native_call_limit(route: dict, connection: dict) -> int | None:
-    """OpenAI enforces one server-side ceiling on hosted search calls per request."""
-    if (
-        connection.get("provider_id") != "openai"
-        or connection.get("protocol") != "openai_responses"
-    ):
+    """The Responses API enforces one server-side ceiling on hosted tool calls.
+
+    ``max_tool_calls`` is part of the OpenAI Responses request, so every endpoint
+    that serves that API applies the engineer's reviewed limit, not just OpenAI.
+    """
+    if connection.get("protocol") != "openai_responses":
         return None
     if not route.get("web_search"):
         return None
@@ -61,9 +62,10 @@ def descriptors(connection: dict) -> list[CapabilityDescriptor]:
         if name in documented:
             evidence.append("https://developers.openai.com/api/docs/models/gpt-6-astra")
         if name == "web_search":
-            runtime = protocol == "anthropic" or (
-                protocol == "openai_responses" and connection.get("provider_id") == "openai"
-            )
+            # Hosted search is used where the reviewed per-request call limit can
+            # be applied: Anthropic counts uses, and the Responses API takes a
+            # maximum number of tool calls whoever serves it.
+            runtime = protocol in {"anthropic", "openai_responses"}
             requirements = ["Reviewed online research permission and search spending allowance."]
             if protocol == "google":
                 restriction = "Google Search is a native model feature, but this adapter cannot enforce the reviewed per-request call limit."
@@ -74,6 +76,11 @@ def descriptors(connection: dict) -> list[CapabilityDescriptor]:
                     "A turn limit can include parallel calls."
                 )
                 evidence.extend([XAI_SEARCH_DOC, XAI_LIMIT_DOC])
+            elif protocol == "openai_chat":
+                restriction = (
+                    "A chat-completions endpoint cannot limit how many searches one reply makes. "
+                    "Switch this account to the provider's Responses API to use online research."
+                )
             elif not runtime:
                 restriction = "This adapter has no documented enforceable native-search call limit."
         support = "supported" if value is True else "unsupported" if value is False else "unknown"
@@ -242,6 +249,7 @@ def generation_preview(connection: dict, route: dict) -> GenerationPreview:
                     connection["protocol"],
                     {**route, "model_id": model_id},
                     model_id,
+                    (connection.get("_model") or {}).get("capabilities") or {},
                 )
                 or {}
             )

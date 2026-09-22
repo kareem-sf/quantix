@@ -128,12 +128,16 @@ async def invoke(
             )
         ) from None
     except (KeyError, ValueError) as error:
+        from pydantic import ValidationError
+
         from .ai_tools import ToolArgumentError
 
         detail = str(error) or _SCOPE_REFUSAL
         raise ToolFenceError(
             _blocked(identity, capability_id, request_id, detail),
-            recoverable=isinstance(error, ToolArgumentError),
+            # Arguments that fail a record's validation, or name something not in
+            # this tender, are the model's to fix.
+            recoverable=isinstance(error, (ToolArgumentError, ValidationError, KeyError)),
         ) from error
     return ExecutionReceipt(
         status="completed",
@@ -202,9 +206,11 @@ async def dispatch(
     timeout: float | None = None,
 ):
     """Record one actual invocation, including nested calls and refused attempts."""
+    from .activity_facts import fact_for
     from .run_activity import ActivityRecorder, ActivityRecordingError, activity_scope
 
     recorder = ActivityRecorder(context)
+    lookup = _fact_lookup(context)
     operation = recorder.start(
         "tool",
         f"Preparing {definition.name}.",
@@ -212,6 +218,7 @@ async def dispatch(
         phase="prepared",
         tool=definition.name,
         provider_call_id=invocation_id,
+        fact=fact_for(definition.name, "prepared", arguments, lookup=lookup),
     )
     missing = object()
     result = missing
@@ -259,6 +266,14 @@ async def dispatch(
                     "receipt": error.receipt.model_dump(mode="json"),
                     "recoverable": error.recoverable,
                 },
+                fact=fact_for(
+                    definition.name,
+                    phase,
+                    arguments,
+                    error=str(error),
+                    recoverable=error.recoverable,
+                    lookup=lookup,
+                ),
             )
             raise
         except Exception as error:
@@ -268,9 +283,48 @@ async def dispatch(
                 "failed",
                 f"{definition.name} failed.",
                 {"error": str(error), "error_type": type(error).__name__},
+                fact=fact_for(definition.name, "failed", arguments, lookup=lookup),
             )
             raise
         recorder.record(
-            operation, "tool", "completed", f"Finished {definition.name}.", {"outputs": result}
+            operation,
+            "tool",
+            "completed",
+            f"Finished {definition.name}.",
+            {"outputs": result},
+            fact=fact_for(definition.name, "completed", arguments, result, lookup=lookup),
         )
         return result
+
+
+def _fact_lookup(context):
+    """Resolve IDs in tool arguments to the names an engineer recognises."""
+
+    repo = getattr(context, "repo", None)
+    tender_id = getattr(context, "tender_id", None)
+    if repo is None or not hasattr(repo, "db") or not tender_id:
+        return None
+
+    def lookup(kind, identifier):
+        with repo.db.connect() as conn:
+            if kind == "artifact":
+                row = conn.execute(
+                    "SELECT name FROM artifacts WHERE id=? AND tender_id=?", (identifier, tender_id)
+                ).fetchone()
+                return row[0] if row else None
+            if kind == "source":
+                row = conn.execute(
+                    "SELECT a.name FROM evidence e JOIN artifacts a ON a.id=e.artifact_id "
+                    "WHERE e.id=? AND a.tender_id=?",
+                    (identifier, tender_id),
+                ).fetchone()
+                return row[0] if row else None
+            if kind == "staff":
+                row = conn.execute(
+                    "SELECT data_json FROM team_staff WHERE id=? AND tender_id=?",
+                    (identifier, tender_id),
+                ).fetchone()
+                return json.loads(row[0]).get("name") if row else None
+        return None
+
+    return lookup

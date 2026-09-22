@@ -117,6 +117,26 @@ class Finding(ApiModel):
     updated_at: str
 
 
+class MessageChoice(ApiModel):
+    label: str
+    detail: str = ""
+    recommended: bool = False
+
+
+class MessageQuestion(ApiModel):
+    text: str
+    choices: list[MessageChoice]
+
+
+class MessageApproval(ApiModel):
+    kind: Literal["finding", "plan", "requirement", "boq_row", "takeoff", "quantity", "rate"]
+    id: str
+    title: str
+    detail: str = ""
+    state: Literal["waiting", "accepted", "rejected", "closed"]
+    can_reject: bool = True
+
+
 class Message(ApiModel):
     id: str
     tender_id: str
@@ -126,6 +146,8 @@ class Message(ApiModel):
     run_id: str | None = None
     created_at: str
     result_links: list[ResultLink] = Field(default_factory=list)
+    question: MessageQuestion | None = None
+    approvals: list[MessageApproval] = Field(default_factory=list)
 
 
 class MessagePage(ApiModel):

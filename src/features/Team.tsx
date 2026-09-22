@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ChevronDown, Send, Users } from "lucide-react";
+import { AiOrb, orbStateFor } from "@/components/ui/thinking-orb";
 import {
   tenderPath,
   useApi,
@@ -10,9 +11,12 @@ import {
 import { ErrorNotice, Loading } from "../components/common";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { CurrentWork } from "./office/CurrentWork";
+import { RichText } from "@/components/rich-text";
+import { TaskRows, type TaskRow } from "@/components/beautiful/task-rows";
+import { emptyFilters } from "./activity/types";
+import { useRunActivity } from "./activity/useRunActivity";
+import { blockHeading, buildWorkLog } from "./work-log/model";
 import { Citations, type SourceSelection } from "./Sources";
 import { NOTIONISTS_RECIPE, StaffPortrait } from "./StaffPortrait";
 
@@ -30,7 +34,7 @@ const statusText: Record<Assignment["status"], string> = {
 
 const statusTone: Record<Assignment["status"], string> = {
   queued: "bg-sky-500",
-  running: "bg-sky-500 animate-pulse",
+  running: "bg-sky-500",
   waiting: "bg-amber-500",
   completed: "bg-emerald-500",
   failed: "bg-destructive",
@@ -60,108 +64,178 @@ export function Team({
     `${tenderPath(tenderId)}/team`,
     true,
   );
-  const [selected, setSelected] = useState<string | null>(null);
-  const staff = team.data?.staff ?? [];
+  const [openMember, setOpenMember] = useState<string | null>(null);
+  const [showPast, setShowPast] = useState(false);
+  const staff = (team.data?.staff ?? []).filter(
+    (member) => member.status === "active",
+  );
   const assignments = team.data?.assignments ?? [];
-  const byId = new Map(staff.map((member) => [member.id, member]));
-  const shown = selected
-    ? assignments.filter((assignment) => assignment.staff_id === selected)
-    : assignments;
+  const byId = new Map(
+    (team.data?.staff ?? []).map((member) => [member.id, member]),
+  );
+  const past = assignments.filter((assignment) =>
+    ["completed", "failed", "cancelled"].includes(assignment.status),
+  );
+  const managerNow = useManagerNow(tenderId, managerRunId);
+
+  const managerRow: TaskRow = managerRunId
+    ? {
+        id: "manager",
+        label: "Tender Manager",
+        note: managerNow || "Working",
+        status: "running",
+      }
+    : {
+        id: "manager",
+        label: "Tender Manager",
+        note: "Ready for your next request",
+        status: "todo",
+      };
+  const rows: TaskRow[] = [
+    ...staff.map((member): TaskRow => {
+      const mine = assignments
+        .filter((assignment) => assignment.staff_id === member.id)
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+      const current = mine.find((assignment) =>
+        ["queued", "running", "waiting"].includes(assignment.status),
+      );
+      const last = mine[0];
+      const summary = last?.result?.summary?.split("\n")[0]?.trim();
+      return {
+        id: member.id,
+        label: `${member.name} · ${member.role}`,
+        note: current
+          ? current.status === "waiting"
+            ? `Asked the Tender Manager: ${current.question ?? current.title}`
+            : current.status === "queued"
+              ? `Starting next: ${current.title}`
+              : current.title
+          : last?.status === "completed"
+            ? `Finished: ${summary || last.title}`
+            : last
+              ? "Idle · last job stopped"
+              : "Idle",
+        meta:
+          current?.status === "running" || !last
+            ? undefined
+            : formatTime(last.updated_at),
+        status: current
+          ? current.status === "running"
+            ? "running"
+            : current.status === "waiting"
+              ? "blocked"
+              : "todo"
+          : last?.status === "completed"
+            ? "done"
+            : "todo",
+      };
+    }),
+  ];
+  const selected = openMember ? byId.get(openMember) : undefined;
+  const toggleMember = (row: TaskRow) => {
+    if (row.id === "manager") return;
+    setOpenMember((current) => (current === row.id ? null : row.id));
+  };
 
   return (
     <section
       aria-label="Tender team"
-      className="flex flex-col gap-5 @container"
+      className="flex flex-col gap-4 @container"
     >
-      <CurrentWork tenderId={tenderId} onSource={onSource} />
-      {managerRunId ? (
-        <SteerManager tenderId={tenderId} runId={managerRunId} />
-      ) : null}
-      <div className="flex flex-col gap-0.5">
-        <h2 className="text-sm font-medium">Team</h2>
-        <p className="text-xs text-muted-foreground">
-          The Tender Manager hires staff for this tender and assigns their work.
-        </p>
-      </div>
+      <h2 className="text-sm font-medium">Team</h2>
       <ErrorNotice error={team.error} />
       {team.isPending ? <Loading>Loading the team…</Loading> : null}
+      {team.data ? (
+        <TaskRows
+          aria-label="Team"
+          rows={[managerRow, ...rows]}
+          showStatusPill={false}
+          onSelect={toggleMember}
+        />
+      ) : null}
       {team.data && !staff.length ? (
-        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed p-6 text-center">
-          <Users className="size-5 text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">
-            No staff yet. The Manager hires them when the work needs more hands.
-          </p>
-        </div>
+        <p className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Users className="size-4" />
+          No staff yet. The Tender Manager hires them when the work needs more
+          hands.
+        </p>
       ) : null}
-      {staff.length ? (
-        <ul className="grid gap-2 @md:grid-cols-2" aria-label="Staff">
-          {staff.map((member) => (
-            <li key={member.id}>
-              <StaffCard
-                tenderId={tenderId}
-                member={member}
-                assignments={assignments.filter(
-                  (assignment) => assignment.staff_id === member.id,
-                )}
-                selected={selected === member.id}
-                onSelect={() =>
-                  setSelected((current) =>
-                    current === member.id ? null : member.id,
-                  )
-                }
-              />
-            </li>
-          ))}
-        </ul>
+      {selected ? (
+        <StaffCard
+          tenderId={tenderId}
+          member={selected}
+          assignments={assignments.filter(
+            (assignment) => assignment.staff_id === selected.id,
+          )}
+          onSource={onSource}
+          onClose={() => setOpenMember(null)}
+        />
       ) : null}
-      {assignments.length ? (
+      {past.length ? (
         <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between gap-2">
-            <h3 className="text-xs font-medium text-muted-foreground">
-              {selected
-                ? `Work for ${byId.get(selected)?.name ?? "this staff member"}`
-                : "All work"}
-            </h3>
-            {selected ? (
-              <Button
-                variant="ghost"
-                size="xs"
-                onClick={() => setSelected(null)}
-              >
-                Show all
-              </Button>
-            ) : null}
-          </div>
-          <ol className="flex flex-col gap-2" aria-label="Assignments">
-            {shown.map((assignment) => (
-              <li key={assignment.id}>
-                <AssignmentCard
-                  tenderId={tenderId}
-                  assignment={assignment}
-                  staff={byId.get(assignment.staff_id)}
-                  onSource={onSource}
-                />
-              </li>
-            ))}
-          </ol>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="-ms-2 self-start text-muted-foreground"
+            aria-expanded={showPast}
+            onClick={() => setShowPast((value) => !value)}
+          >
+            <ChevronDown
+              data-icon="inline-start"
+              className={cn("transition-transform", !showPast && "-rotate-90")}
+            />
+            Past work ({past.length})
+          </Button>
+          {showPast ? (
+            <ol className="flex flex-col gap-2" aria-label="Past work">
+              {past.map((assignment) => (
+                <li key={assignment.id}>
+                  <AssignmentCard
+                    tenderId={tenderId}
+                    assignment={assignment}
+                    staff={byId.get(assignment.staff_id)}
+                    onSource={onSource}
+                  />
+                </li>
+              ))}
+            </ol>
+          ) : null}
         </div>
       ) : null}
     </section>
   );
 }
 
+/** The Tender Manager's current action, from its live work log. */
+function useManagerNow(tenderId: string, runId?: string) {
+  const activity = useRunActivity(
+    tenderId,
+    runId ?? "none",
+    emptyFilters,
+    Boolean(runId),
+    true,
+  );
+  if (!runId) return "";
+  const log = buildWorkLog(activity.data?.items ?? []);
+  const last = log.blocks.at(-1);
+  if (!last) return "";
+  const running = last.facts.find((fact) => fact.state === "running");
+  if (running) return [running.line, running.subject].filter(Boolean).join(" ");
+  return blockHeading(last);
+}
+
 function StaffCard({
   tenderId,
   member,
   assignments,
-  selected,
-  onSelect,
+  onSource,
+  onClose,
 }: {
   tenderId: string;
   member: Staff;
   assignments: Assignment[];
-  selected: boolean;
-  onSelect: () => void;
+  onSource: (source: SourceSelection) => void;
+  onClose: () => void;
 }) {
   const api = useApi();
   const refresh = useRefresh();
@@ -188,19 +262,10 @@ function StaffCard({
 
   return (
     <article
-      className={cn(
-        "flex h-full flex-col gap-2 rounded-xl border bg-card p-3 text-sm",
-        selected && "border-ring ring-2 ring-ring/30",
-        member.status === "retired" && "opacity-70",
-      )}
+      className="bui-fade-up flex flex-col gap-3 rounded-lg bg-card p-3 text-sm ring-1 ring-border"
       aria-label={member.name}
     >
-      <button
-        type="button"
-        className="flex items-start gap-3 text-start"
-        aria-pressed={selected}
-        onClick={onSelect}
-      >
+      <div className="flex items-start gap-3">
         <StaffPortrait
           portrait={{
             style: NOTIONISTS_RECIPE.styleId,
@@ -210,25 +275,14 @@ function StaffCard({
           size={40}
           decorative
         />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate font-medium" dir="auto">
-            {member.name}
-          </span>
-          <span
-            className="block truncate text-xs text-muted-foreground"
-            dir="auto"
-          >
-            {member.role}
-          </span>
-          <span className="mt-1 block text-xs text-muted-foreground">
-            {member.status === "retired"
-              ? "Retired"
-              : open
-                ? `${open} open · ${assignments.length} total`
-                : `${assignments.length} ${assignments.length === 1 ? "assignment" : "assignments"}`}
-          </span>
-        </span>
-      </button>
+        <div className="min-w-0 flex-1">
+          <p className="font-medium">{member.name}</p>
+          <p className="text-xs text-muted-foreground">{member.role}</p>
+        </div>
+        <Button variant="ghost" size="xs" onClick={onClose}>
+          Close
+        </Button>
+      </div>
       <div className="flex flex-wrap gap-1">
         {member.specialisms.map((specialism) => (
           <Badge key={specialism} variant="secondary" className="font-normal">
@@ -236,34 +290,37 @@ function StaffCard({
           </Badge>
         ))}
       </div>
-      <details className="group text-xs">
-        <summary className="flex cursor-pointer list-none items-center gap-1 text-muted-foreground">
-          Profile
-          <ChevronDown className="size-3 transition-transform group-open:rotate-180" />
-        </summary>
-        <div className="mt-2 flex flex-col gap-2">
-          <p className="whitespace-pre-wrap" dir="auto">
-            {member.background}
-          </p>
-          <p className="whitespace-pre-wrap text-muted-foreground" dir="auto">
-            {member.working_style}
-          </p>
-          {member.status === "active" ? (
-            <Button
-              variant="outline"
-              size="xs"
-              className="self-start"
-              disabled={retiring || open > 0}
-              title={
-                open ? "Wait until their open work is finished." : undefined
-              }
-              onClick={() => void retire()}
-            >
-              Retire
-            </Button>
-          ) : null}
-        </div>
-      </details>
+      <p className="whitespace-pre-wrap">{member.background}</p>
+      <p className="whitespace-pre-wrap text-muted-foreground">
+        {member.working_style}
+      </p>
+      {assignments.length ? (
+        <ol
+          className="flex flex-col gap-2"
+          aria-label={`Work for ${member.name}`}
+        >
+          {assignments.map((assignment) => (
+            <li key={assignment.id}>
+              <AssignmentCard
+                tenderId={tenderId}
+                assignment={assignment}
+                staff={member}
+                onSource={onSource}
+              />
+            </li>
+          ))}
+        </ol>
+      ) : null}
+      <Button
+        variant="outline"
+        size="xs"
+        className="self-start"
+        disabled={retiring || open > 0}
+        title={open ? "Wait until their open work is finished." : undefined}
+        onClick={() => void retire()}
+      >
+        Retire
+      </Button>
       <ErrorNotice error={error} />
     </article>
   );
@@ -281,27 +338,26 @@ function AssignmentCard({
   onSource: (source: SourceSelection) => void;
 }) {
   const result = assignment.result;
-  const usage = assignment.usage ?? {};
-  const tokens =
-    Number(usage.input_tokens ?? 0) + Number(usage.output_tokens ?? 0);
   return (
     <details
       className="group rounded-xl border bg-card text-sm"
       open={assignment.status === "waiting" || undefined}
     >
       <summary className="flex cursor-pointer list-none items-start gap-3 p-3">
-        <span
-          aria-hidden="true"
-          className={cn(
-            "mt-1.5 size-2 shrink-0 rounded-full",
-            statusTone[assignment.status],
-          )}
-        />
+        {assignment.status === "running" ? (
+          <AiOrb state={orbStateFor(assignment.title)} className="-mx-1.5" />
+        ) : (
+          <span
+            aria-hidden="true"
+            className={cn(
+              "mt-1.5 size-2 shrink-0 rounded-full",
+              statusTone[assignment.status],
+            )}
+          />
+        )}
         <span className="min-w-0 flex-1">
-          <span className="block font-medium" dir="auto">
-            {assignment.title}
-          </span>
-          <span className="block text-xs text-muted-foreground" dir="auto">
+          <span className="block font-medium">{assignment.title}</span>
+          <span className="block text-xs text-muted-foreground">
             {staff?.name ?? "Staff member"} · {statusText[assignment.status]} ·{" "}
             {formatTime(assignment.updated_at)}
           </span>
@@ -324,9 +380,7 @@ function AssignmentCard({
         ) : null}
         {result ? (
           <div className="flex flex-col gap-2 rounded-lg bg-muted/50 p-3">
-            <p className="whitespace-pre-wrap" dir="auto">
-              {result.summary}
-            </p>
+            <RichText text={result.summary} className="text-sm" />
             {result.findings?.length ? (
               <ul className="flex flex-col gap-2" aria-label="Findings">
                 {result.findings.map((finding, index) => (
@@ -338,11 +392,9 @@ function AssignmentCard({
                       <Badge variant="outline" className="font-normal">
                         {finding.kind}
                       </Badge>
-                      <span className="font-medium" dir="auto">
-                        {finding.title}
-                      </span>
+                      <span className="font-medium">{finding.title}</span>
                     </span>
-                    <span className="text-muted-foreground" dir="auto">
+                    <span className="text-muted-foreground">
                       {finding.detail}
                     </span>
                     {finding.source_ids?.length ? (
@@ -375,13 +427,6 @@ function AssignmentCard({
             ) : null}
           </div>
         ) : null}
-        <p className="text-xs text-muted-foreground">
-          {assignment.model_id}
-          {usage.requests
-            ? ` · ${Number(usage.requests)} ${Number(usage.requests) === 1 ? "request" : "requests"}`
-            : ""}
-          {tokens ? ` · ${tokens.toLocaleString()} tokens` : ""}
-        </p>
       </div>
     </details>
   );
@@ -391,83 +436,8 @@ function Field({ label, children }: { label: string; children: string }) {
   return (
     <div className="flex flex-col gap-0.5">
       <span className="text-xs text-muted-foreground">{label}</span>
-      <p className="whitespace-pre-wrap" dir="auto">
-        {children}
-      </p>
+      <p className="whitespace-pre-wrap">{children}</p>
     </div>
-  );
-}
-
-function SteerManager({
-  tenderId,
-  runId,
-}: {
-  tenderId: string;
-  runId: string;
-}) {
-  const api = useApi();
-  const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
-  const [sent, setSent] = useState(false);
-  const [error, setError] = useState<unknown>(null);
-
-  async function send() {
-    const content = text.trim();
-    if (!content) return;
-    setSending(true);
-    setError(null);
-    try {
-      await api.post<Schema<"InstructionAdmission">>(
-        `${tenderPath(tenderId)}/runs/${encodeURIComponent(runId)}/steering`,
-        {
-          kind: "constraint",
-          content,
-          selection: "",
-          idempotency_key: `steer-${runId}-${Date.now()}`,
-        } satisfies Schema<"InstructionRevisionRequest">,
-      );
-      setText("");
-      setSent(true);
-    } catch (failure) {
-      setError(failure);
-    } finally {
-      setSending(false);
-    }
-  }
-
-  return (
-    <form
-      className="flex flex-col gap-2 rounded-xl border bg-card p-3"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void send();
-      }}
-    >
-      <label className="flex flex-col gap-1.5 text-sm">
-        Steer the Manager while it works
-        <Textarea
-          dir="auto"
-          rows={2}
-          maxLength={20000}
-          value={text}
-          onChange={(event) => {
-            setText(event.target.value);
-            setSent(false);
-          }}
-          placeholder="For example: use the revision C drawings only"
-        />
-      </label>
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-xs text-muted-foreground" role="status">
-          {sent ? "Sent. The Manager applies it at its next step." : ""}
-        </p>
-        <Button type="submit" size="sm" disabled={sending || !text.trim()}>
-          <Send data-icon="inline-start" />
-          Send
-        </Button>
-      </div>
-      <ErrorNotice error={error} />
-    </form>
   );
 }
 

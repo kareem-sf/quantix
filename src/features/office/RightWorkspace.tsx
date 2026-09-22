@@ -4,13 +4,11 @@ import {
   ClipboardCheck,
   Ellipsis,
   Files,
-  LayoutGrid,
   ListFilter,
   Maximize2,
   Minimize2,
   PanelRight,
   Users,
-  X,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -29,7 +27,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Kbd } from "@/components/ui/kbd";
+import { LiquidTabIndicator } from "@/components/ui/liquid-tab-indicator";
 import { SplitPane } from "@/components/ui/split-pane";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
@@ -41,9 +39,9 @@ export const workspaceViews: {
   icon: LucideIcon;
   shortcut: string;
 }[] = [
-  { id: "documents", label: "Documents", icon: Files, shortcut: "D" },
+  { id: "plan", label: "Plan", icon: ClipboardCheck, shortcut: "P" },
   { id: "team", label: "Team", icon: Users, shortcut: "T" },
-  { id: "reviews", label: "Reviews", icon: ClipboardCheck, shortcut: "R" },
+  { id: "documents", label: "Documents", icon: Files, shortcut: "D" },
   { id: "activity", label: "Activity", icon: Activity, shortcut: "A" },
 ];
 
@@ -70,7 +68,6 @@ export function RightWorkspace({
   const paneId = useId();
   const open = workspace.mode !== "hidden";
   const expanded = workspace.mode === "expanded";
-  const current = workspaceViews.find((view) => view.id === workspace.view);
 
   useEffect(() => {
     function shortcut(event: KeyboardEvent) {
@@ -107,14 +104,6 @@ export function RightWorkspace({
     workspace.open(view);
     requestAnimationFrame(() => paneRef.current?.focus());
   }
-  function goHome() {
-    workspace.home();
-    requestAnimationFrame(() => paneRef.current?.focus());
-  }
-  function closeTab() {
-    workspace.close();
-    requestAnimationFrame(() => paneRef.current?.focus());
-  }
 
   const workPane = (
     <aside
@@ -122,7 +111,7 @@ export function RightWorkspace({
       ref={paneRef}
       tabIndex={-1}
       aria-label="Tender workspace"
-      className="quantix-workspace flex min-h-0 min-w-0 flex-1 flex-col bg-background outline-none"
+      className="quantix-workspace @container flex min-h-0 min-w-0 flex-1 flex-col bg-background outline-none"
     >
       <Tabs
         value={workspace.view}
@@ -135,9 +124,10 @@ export function RightWorkspace({
               <TabsList
                 variant="line"
                 aria-label="Workspace tabs"
-                className="min-w-0 flex-1 justify-start overflow-x-auto overflow-y-hidden p-0"
+                className="relative isolate min-w-0 flex-1 justify-start overflow-x-auto overflow-y-hidden p-0"
                 style={{ height: 40 }}
               >
+                <LiquidTabIndicator value={workspace.view} />
                 {workspace.tabs.map((view) => {
                   const item = workspaceViews.find(
                     (entry) => entry.id === view,
@@ -146,10 +136,14 @@ export function RightWorkspace({
                     <TabsTrigger
                       key={view}
                       value={view}
-                      className="h-10 flex-none gap-1.5 px-3 text-xs motion-reduce:transition-none"
+                      title={item.label}
+                      className="relative z-10 h-10 flex-none gap-1.5 px-3 text-xs after:hidden motion-reduce:transition-none"
                     >
-                      <item.icon className="size-3.5" />
-                      {item.label}
+                      <item.icon className="size-3.5" aria-hidden />
+                      {/* A narrow pane keeps every tab in view as icons. */}
+                      <span className="sr-only @sm:not-sr-only">
+                        {item.label}
+                      </span>
                     </TabsTrigger>
                   );
                 })}
@@ -157,53 +151,7 @@ export function RightWorkspace({
             ) : (
               <span className="flex-1" />
             )}
-            {workspace.view !== "home" ? (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Workspace home"
-                title="Workspace home"
-                onClick={goHome}
-              >
-                <LayoutGrid />
-              </Button>
-            ) : null}
-            {current ? (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={`Close ${current.label} tab`}
-                title="Close tab"
-                onClick={closeTab}
-              >
-                <X />
-              </Button>
-            ) : null}
           </header>
-        ) : null}
-        {workspace.view === "home" ? (
-          <div
-            className="quantix-reveal flex min-h-0 flex-1 items-center justify-center overflow-auto p-6"
-            aria-label="Workspace launcher"
-          >
-            <div className="flex w-full max-w-sm flex-col gap-1">
-              {workspaceViews.map((view) => (
-                <Button
-                  key={view.id}
-                  variant="ghost"
-                  className="h-11 w-full justify-start gap-3 px-3 font-normal"
-                  onClick={() => openView(view.id)}
-                  aria-keyshortcuts={`Control+Alt+${view.shortcut}`}
-                >
-                  <view.icon className="text-muted-foreground" />
-                  <span>{view.label}</span>
-                  <Kbd className="ms-auto hidden text-muted-foreground sm:inline-flex">
-                    Ctrl+Alt+{view.shortcut}
-                  </Kbd>
-                </Button>
-              ))}
-            </div>
-          </div>
         ) : null}
         {workspace.tabs.map((view) => (
           <TabsContent
@@ -225,10 +173,7 @@ export function RightWorkspace({
       data-workspace-mode={workspace.mode}
     >
       <header className="flex h-11 shrink-0 items-center gap-1 px-3">
-        <span
-          className="me-auto min-w-0 truncate text-xs text-muted-foreground"
-          dir="auto"
-        >
+        <span className="me-auto min-w-0 truncate text-xs text-muted-foreground">
           {title}
         </span>
         <DropdownMenu>
@@ -277,16 +222,6 @@ export function RightWorkspace({
             ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="font-normal text-muted-foreground"
-          aria-label="Open reviews"
-          onClick={() => openView("reviews")}
-        >
-          <ClipboardCheck />
-          <span className="hidden sm:inline">Reviews</span>
-        </Button>
         <Popover open={contextOpen} onOpenChange={setContextOpen}>
           <PopoverTrigger
             render={

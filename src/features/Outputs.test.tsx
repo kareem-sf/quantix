@@ -219,3 +219,63 @@ it("retains client workbook draft inputs but never saves mapping or quantity app
   ).toBeDisabled();
   expect(writes).toEqual([]);
 });
+
+it("shows one checklist with drafts and the package in sections below it", async () => {
+  const api = createApi(
+    { base_url: "http://localhost/api", token: "test" },
+    async () => Response.json([]),
+  );
+  const onNavigate = vi.fn();
+  const user = userEvent.setup({ delay: null });
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <ApiContext.Provider value={api}>
+        <Outputs tenderId="one" onNavigate={onNavigate} />
+      </ApiContext.Provider>
+    </QueryClientProvider>,
+  );
+  expect(
+    await screen.findByText("Nothing on the checklist yet"),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByRole("navigation", { name: "Submission sections" }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "Create draft document" }),
+  ).not.toBeInTheDocument();
+
+  const drafts = screen.getByRole("button", { name: "Draft documents" });
+  expect(drafts).toHaveAttribute("aria-expanded", "false");
+  await user.click(drafts);
+  expect(drafts).toHaveAttribute("aria-expanded", "true");
+  expect(
+    screen.getByRole("button", { name: "Create draft document" }),
+  ).toBeInTheDocument();
+  expect(onNavigate).toHaveBeenLastCalledWith("documents", undefined);
+
+  await user.click(drafts);
+  expect(onNavigate).toHaveBeenLastCalledWith("requirements", undefined);
+  expect(
+    screen.queryByRole("button", { name: "Create draft document" }),
+  ).not.toBeInTheDocument();
+});
+
+it("opens the package section from an older package link", async () => {
+  const api = createApi(
+    { base_url: "http://localhost/api", token: "test" },
+    async () => Response.json([]),
+  );
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <ApiContext.Provider value={api}>
+        <Outputs tenderId="one" view="package" />
+      </ApiContext.Provider>
+    </QueryClientProvider>,
+  );
+  expect(
+    await screen.findByRole("button", { name: "Submission package" }),
+  ).toHaveAttribute("aria-expanded", "true");
+  expect(
+    screen.getByRole("button", { name: "Draft documents" }),
+  ).toHaveAttribute("aria-expanded", "false");
+});

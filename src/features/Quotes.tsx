@@ -12,6 +12,7 @@ import { Citations, type SourceSelection } from "./Sources";
 import { FieldError } from "../components/FieldError";
 import { createDraftScope, useFormDraft } from "./useFormDraft";
 import { searchHits } from "./DocumentSearch";
+import { locatorLabel } from "@/lib/locator";
 
 type SourceAction = (source: SourceSelection) => void;
 const quotePath = (tenderId: string, quoteId: string) =>
@@ -449,7 +450,7 @@ function SourcePicker({
               }
             >
               {ids.includes(source.id) ? "Remove" : "Add"}:{" "}
-              {source.artifact_name} · {source.locator}
+              {source.artifact_name} · {locatorLabel(source.locator)}
               <span>{source.text.slice(0, 240)}</span>
             </button>
           </li>

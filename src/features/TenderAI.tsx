@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { ProviderLogo } from "@/components/ui/provider-logo";
 import { GenerationControls } from "../components/GenerationControls";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -826,6 +827,11 @@ function PolicyForm({
                   );
                 }
               }}
+            />
+            <ProviderLogo
+              providerId={connection.provider_id}
+              name={connection.name}
+              className="size-5"
             />
             <span>
               <strong>{connection.name}</strong>

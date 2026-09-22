@@ -45,9 +45,6 @@ export function CalculationInspector({
       }}
     >
       <summary className="cursor-pointer">{label}</summary>
-      <p className="mt-2 text-muted-foreground">
-        Reference: <code className="wrap-anywhere">{calculationId}</code>
-      </p>
       {loading ? <p role="status">Loading saved calculation…</p> : null}
       {error ? (
         <p role="alert" className="text-destructive">
@@ -96,8 +93,6 @@ function CalculationRecordView({
         )}
       </section>
       <dl className="grid gap-1">
-        <Fact label="Formula SHA-256" value={record.formula_hash} />
-        <Fact label="Basis SHA-256" value={record.basis_fingerprint} />
         <Fact label="Saved" value={formatDate(record.created_at)} />
       </dl>
     </div>

@@ -189,12 +189,25 @@ def evidence_tools():
         if offset < 0 or not 1 <= limit <= 30:
             raise ToolArgumentError("Choose a non-negative offset and a limit of 1–30.")
         current = office.ensure_artifact_allowed(artifact_id)
+        if current["version"] == 1:
+            # Not a mistake to correct: the answer is simply that there is one version.
+            return json.dumps(
+                {
+                    "document": safe_text(current["name"], 300),
+                    "versions": 1,
+                    "changes": [],
+                    "note": (
+                        "This file has one version, so there is nothing to compare. A file read again "
+                        "keeps its version; its passages get new evidence IDs, and trace_change_impact "
+                        "lists the work that cites the earlier reading."
+                    ),
+                },
+                ensure_ascii=False,
+            )
         wanted = current["version"] - 1 if previous_version is None else previous_version
         if wanted < 1 or wanted >= current["version"]:
             raise ToolArgumentError(
                 f"This document is version {current['version']}. Choose an earlier version from 1 to {current['version'] - 1}."
-                if current["version"] > 1
-                else "This document has no earlier version to compare."
             )
         with office.repo.db.connect() as conn:
             earlier_row = conn.execute(
@@ -277,10 +290,6 @@ def evidence_tools():
                     (tender_id, current["relative_path"], current["version"]),
                 )
             ]
-            if not earlier:
-                raise ToolArgumentError(
-                    "This document has no earlier version, so nothing rests on a replaced version."
-                )
             earlier_ids = {item["id"] for item in earlier}
             old_ids = {
                 row[0]
@@ -289,6 +298,16 @@ def evidence_tools():
                     "SELECT id FROM evidence WHERE artifact_id=?", (artifact["id"],)
                 )
             }
+            # Passages from an earlier reading of this same version, before the file
+            # was read again.
+            earlier_readings = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT id FROM evidence WHERE artifact_id=? AND COALESCE(is_current,1)=0",
+                    (current["id"],),
+                )
+            }
+            old_ids |= earlier_readings
             match_ids = old_ids | earlier_ids
             affected: dict[str, list[dict]] = {}
 
@@ -393,7 +412,7 @@ def evidence_tools():
                             "generated_documents",
                             {"id": row["id"], "filename": safe_text(payload.get("filename"), 200)},
                         )
-            if _table_exists(conn, "research_dependencies"):
+            if earlier_ids and _table_exists(conn, "research_dependencies"):
                 owners = conn.execute(
                     f"SELECT DISTINCT owner_kind,owner_id FROM research_dependencies WHERE tender_id=? AND artifact_id IN ({','.join('?' * len(earlier_ids))})",
                     (tender_id, *sorted(earlier_ids)),
@@ -411,6 +430,7 @@ def evidence_tools():
             "document": safe_text(current["name"], 300),
             "current_version": current["version"],
             "replaced_versions": [item["version"] for item in earlier],
+            "earlier_reading_passages": len(earlier_readings),
             "affected_counts": {kind: len(items) for kind, items in sorted(affected.items())},
             "affected": {kind: items[:_PER_KIND] for kind, items in sorted(affected.items())},
             "lists_are_partial": any(len(items) > _PER_KIND for items in affected.values()),

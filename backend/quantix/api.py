@@ -21,6 +21,8 @@ from .ai_runtimes import RuntimeService
 from .ai_setup import AISetupService
 from .ai_setup_routes import create_router as create_setup_router
 from .backup_routes import create_router as create_backup_router
+from .chat_approvals import ApprovalDecision, ApprovalDetail, approval_detail
+from .chat_approvals import decide as decide_approval
 from .correspondence_routes import create_router as create_correspondence_router
 from .diagnostic_routes import create_router as create_diagnostic_router
 from .diagnostics import diagnostic_context, initialize, record, record_exception, route_template
@@ -438,6 +440,16 @@ def create_app(home: Path, token: str) -> FastAPI:
     def decide_finding(tender_id: str, finding_id: str, command: m.DecisionRequest):
         return repo.decide_finding(tender_id, finding_id, command.decision, command.rationale)
 
+    @app.get("/api/tenders/{tender_id}/approvals/{kind}/{record_id}", response_model=ApprovalDetail)
+    def approval(tender_id: str, kind: str, record_id: str):
+        return approval_detail(repo, tender_id, kind, record_id)
+
+    @app.post("/api/tenders/{tender_id}/approvals", response_model=m.MessageApproval)
+    async def decide_in_chat(tender_id: str, command: ApprovalDecision):
+        if command.kind == "plan" and jobs.active(tender_id):
+            raise ValueError("Finish or stop the current Tender work before approving a new plan.")
+        return decide_approval(repo, tender_id, command, carry_out_plan=jobs.carry_out_plan)
+
     @app.get("/api/tenders/{tender_id}/plans", response_model=list[m.WorkPlan])
     def plans(tender_id: str):
         return repo.list_plans(tender_id)
@@ -510,6 +522,18 @@ def create_app(home: Path, token: str) -> FastAPI:
     @app.post("/api/runs/{run_id}/resume", response_model=m.Run)
     async def resume(run_id: str):
         return jobs.resume(run_id)
+
+    @app.post("/api/tenders/{tender_id}/analysis", response_model=m.Run)
+    async def analyse_package(tender_id: str):
+        # The engineer asks for the package to be mapped again, for example to
+        # sort older packages into document groups.
+        if jobs.active(tender_id):
+            raise ValueError("Wait for the current work on this tender to finish.")
+        # Grouping needs the AI; without it the run would finish having done nothing.
+        ready = jobs.ai_ready(tender_id)
+        if ready is not True:
+            raise ValueError(ready)
+        return jobs.start_analysis(tender_id)
 
     @app.post("/api/shutdown", response_model=m.MutationReceipt)
     async def shutdown():

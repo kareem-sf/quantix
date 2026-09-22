@@ -34,12 +34,15 @@ import { FactoryReset } from "./FactoryReset";
 import { ManagerPersonality } from "./ManagerPersonality";
 import { CompanyLibrary } from "./CompanyLibrary";
 import { About } from "./About";
+import { TenderAISettings } from "./TenderAISettings";
 import { createDraftScope, useFormDraft } from "./useFormDraft";
 
 export type SettingsSection = SettingsSectionId;
 
 type SettingsProps = {
   section?: string;
+  /** The tender whose AI settings open first, when Settings was opened from one. */
+  tenderId?: string;
   onSection?: (section: SettingsSection) => void;
   connectionId?: string;
   onConnectionClose?: () => void;
@@ -58,6 +61,7 @@ function SettingsLayout({
   onSection,
   connectionId,
   onConnectionClose,
+  tenderId,
 }: SettingsProps & { settings: Schema<"Settings"> }) {
   const health = useResource<Schema<"Health">>("/health");
   const api = useApi();
@@ -121,11 +125,19 @@ function SettingsLayout({
           </Alert>
         ) : null}
         {active === "preferences" ? <Preferences settings={settings} /> : null}
+        {active === "tender-ai" ? (
+          <TenderAISettings
+            tenderId={tenderId}
+            onManageAccounts={() => select("accounts")}
+          />
+        ) : null}
         {active === "diagnostics" ? (
           <DiagnosticsSection home={settings.home} />
         ) : null}
         {/* Sections below have not been rebuilt on shadcn yet. */}
-        {active !== "preferences" && active !== "diagnostics" ? (
+        {active !== "preferences" &&
+        active !== "diagnostics" &&
+        active !== "tender-ai" ? (
           <div className="legacy-screen">
             {active === "accounts" ? (
               <AIConnections

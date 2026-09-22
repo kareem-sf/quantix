@@ -1,5 +1,7 @@
 """Public, read-only execution history; payload pages never grant authority."""
 
+from typing import Any
+
 from pydantic import Field
 
 from .models import ApiModel
@@ -33,6 +35,8 @@ class RunActivity(ApiModel):
     elapsed_ms: int | None = None
     source_ids: list[str] = Field(default_factory=list)
     artifact_refs: list[ActivityArtifactReference] = Field(default_factory=list)
+    # Engineer-facing description of a tool step, from activity_facts.
+    fact: dict[str, Any] | None = None
 
 
 class RunActivityPage(ApiModel):

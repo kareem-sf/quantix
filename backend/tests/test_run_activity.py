@@ -121,6 +121,8 @@ def test_legacy_events_have_truthful_incomplete_details(tmp_path):
     service = RunActivityService(repo)
     page = service.page(tender["id"], run["id"])
     assert page.items[0].capture_status == "historical"
+    # Events without a staff or Manager actor are Quantix's own steps.
+    assert page.items[0].actor_label == "Quantix"
     detail = service.detail(tender["id"], run["id"], page.items[0].event_id)
     assert "old-secret" not in detail.text
     assert "inputs" in detail.unavailable_fields

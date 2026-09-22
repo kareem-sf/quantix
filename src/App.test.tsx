@@ -244,10 +244,15 @@ it("preserves an engineer draft while inspecting Work and returning to Manager",
     name: "Message to Tender Manager",
   });
   await user.type(input, "Check the drainage quantities first");
-  await user.click(screen.getByRole("button", { name: "Work" }));
   expect(
-    await screen.findByRole("navigation", { name: "Work sections" }),
-  ).toBeInTheDocument();
+    screen.queryByRole("button", { name: "Work" }),
+  ).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Submission" }));
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("textbox", { name: "Message to Tender Manager" }),
+    ).not.toBeInTheDocument(),
+  );
   await user.click(screen.getByRole("button", { name: "Manager" }));
   expect(
     screen.getByRole("textbox", { name: "Message to Tender Manager" }),
@@ -332,7 +337,7 @@ it("keeps the tender read-only when the local workspace revision is incompatible
     screen.queryByRole("heading", { name: "Tender Manager" }),
   ).not.toBeInTheDocument();
   const user = userEvent.setup();
-  for (const section of ["Documents", "Work", "Estimate", "Submission"]) {
+  for (const section of ["Documents", "Estimate", "Submission"]) {
     await user.click(screen.getByRole("button", { name: section }));
     expect(
       screen.getByRole("heading", { name: "Workspace update required" }),
@@ -433,6 +438,30 @@ it("opens the current document inline and preserves Manager conversation context
     else if (path.endsWith("/messages") || path.endsWith("/runs")) data = [];
     else if (path.endsWith("/pending-message")) data = null;
     else if (path.endsWith("/evidence")) data = [];
+    else if (path.endsWith("/work-brief")) data = { brief: null };
+    else if (path.endsWith("/waiting")) data = { items: [], total: 0 };
+    else if (path.endsWith("/document-groups"))
+      data = {
+        grouped: true,
+        total: 1,
+        problems: 0,
+        groups: [
+          {
+            name: "Bill of quantities",
+            documents: [
+              {
+                artifact_id: artifact.id,
+                name: artifact.name,
+                label: "Priced BOQ",
+                pages: null,
+                kind: "xlsx",
+                problem: "",
+                moved_by_engineer: false,
+              },
+            ],
+          },
+        ],
+      };
     return Response.json(data);
   });
   render(
@@ -455,7 +484,7 @@ it("opens the current document inline and preserves Manager conversation context
   await user.click(
     within(
       screen.getByRole("complementary", { name: "Tender workspace" }),
-    ).getByRole("button", { name: /^Documents/ }),
+    ).getByRole("tab", { name: "Documents" }),
   );
   expect(
     screen.getByRole("region", { name: "Workspace documents" }),

@@ -313,3 +313,34 @@ def test_stopped_native_request_can_retain_already_observed_partial_section(tmp_
     assert captured[-1][0]["capture_status"] == "partial"
     assert captured[-1][1]["text"] == "Already observed draft"
     assert repo.get_run(run["id"])["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_compatible_provider_thinking_and_working_notes_are_captured(tmp_path):
+    from pydantic_ai.messages import ToolCallPart
+
+    repo = Repository(tmp_path)
+    tender = repo.create_tender("Synthetic notes")
+    run = repo.create_run(tender["id"], "manager")
+    context = SimpleNamespace(repo=repo, tender_id=tender["id"], run_id=run["id"])
+    thinking = "The date is probably in the visit schedule."
+    note = "I'll read the visit schedule for the date."
+
+    async def events():
+        yield PartStartEvent(index=0, part=ThinkingPart(thinking, provider_name="openai"))
+        yield PartEndEvent(index=0, part=ThinkingPart(thinking, provider_name="openai"))
+        yield PartStartEvent(index=1, part=TextPart(note))
+        yield PartEndEvent(index=1, part=TextPart(note))
+        yield PartStartEvent(index=2, part=ToolCallPart("read_source", {"source_id": "x"}))
+        yield PartEndEvent(index=2, part=ToolCallPart("read_source", {"source_id": "x"}))
+
+    await DraftStreamEvents(
+        context, {"provider_id": "custom", "protocol": "openai_chat"}, Output
+    ).handle(None, events())
+    saved = repo.run_events(run["id"])
+    assert (
+        "".join(e["data"]["text"] for e in saved if e["kind"] == "assistant_reasoning_summary")
+        == thinking
+    )
+    assert "".join(e["data"]["text"] for e in saved if e["kind"] == "assistant_note") == note
+    assert not [e for e in saved if e["kind"] == "assistant_text_delta"]

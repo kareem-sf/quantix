@@ -155,9 +155,7 @@ function WorkProductList({
         <article className="rounded-lg border p-3" key={item.product_id}>
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <strong className="block text-sm" dir="auto">
-                {item.title}
-              </strong>
+              <strong className="block text-sm">{item.title}</strong>
               <span className="text-xs text-muted-foreground">
                 {kindLabel(item.kind)} · version {item.version} ·{" "}
                 {item.row_count.toLocaleString()} rows
@@ -252,7 +250,7 @@ function WorkProductDetail({
           <ArrowLeft />
         </Button>
         <div className="min-w-0 flex-1">
-          <h3 className="text-sm font-medium" dir="auto">
+          <h3 className="text-sm font-medium">
             {detail.data?.title ?? initial.title}
           </h3>
           <p className="text-xs text-muted-foreground">

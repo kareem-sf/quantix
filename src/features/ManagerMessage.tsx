@@ -1,10 +1,7 @@
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { ArrowUpRight, FileText, Link2 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import type { Schema } from "../api";
 import { BrandMark } from "../app/BrandMark";
-import { ExternalLink } from "../components/ExternalLink";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,23 +18,31 @@ import {
   MessageHeader,
 } from "@/components/ui/message";
 import { Citations, type SourceSelection } from "./Sources";
-
-const markdownComponents = {
-  a: ({ href, children }: { href?: string; children?: ReactNode }) => (
-    <ExternalLink href={href}>{children}</ExternalLink>
-  ),
-};
+import { plainText, RichText } from "@/components/rich-text";
+import { ApprovalList } from "./chat/ApprovalList";
+import { ChoiceQuestion } from "./chat/ChoiceQuestion";
 
 export function ManagerMessage({
   message,
   tenderId,
   onSource,
   onArtifact,
+  answer,
+  onAnswer,
+  onAskChanges,
+  onOpenApproval,
 }: {
   message: Schema<"Message">;
   tenderId: string;
   onSource: (source: SourceSelection) => void;
   onArtifact?: (href: string, artifactId: string) => void;
+  /** The engineer's reply after this message, which answers its question. */
+  answer?: string;
+  /** Sends a picked answer; absent when the question can't be answered now. */
+  onAnswer?: (text: string) => Promise<unknown>;
+  onAskChanges?: (text: string) => void;
+  /** Opens one approval item in full in the side panel. */
+  onOpenApproval?: (kind: string, id: string) => void;
 }) {
   const long = isLong(message.content);
   const [expanded, setExpanded] = useState(!long);
@@ -48,17 +53,12 @@ export function ManagerMessage({
   if (message.role !== "engineer" && message.role !== "manager") return null;
   const engineer = message.role === "engineer";
   const content = expanded ? message.content : compactPreview(message.content);
-  const links = message.result_links ?? [];
-  const groups = [
-    "plan",
-    "finding",
-    "task",
-    "output",
-    "requirement",
-    "boq_item",
-    "work_product",
-    "calculation",
-  ] as const;
+  // BOQ rows, findings and requirements are decided in the approval card.
+  const groups = ["output", "work_product", "calculation"] as const;
+  const links = (message.result_links ?? []).filter((link) =>
+    (groups as readonly string[]).includes(link.kind),
+  );
+  const approvals = message.approvals ?? [];
 
   function recordLink(
     link: Schema<"ResultLink">,
@@ -104,7 +104,6 @@ export function ManagerMessage({
       align={engineer ? "end" : "start"}
       className="manager-message"
       data-message-id={message.id}
-      dir="auto"
     >
       {engineer ? null : <BrandMark size={32} className="self-start" />}
       <MessageContent>
@@ -124,14 +123,11 @@ export function ManagerMessage({
           <BubbleContent
             className={engineer ? "rounded-2xl px-4 py-2.5" : undefined}
           >
-            <div className="markdown typeset typeset-chat" dir="auto">
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={markdownComponents}
-              >
-                {content}
-              </ReactMarkdown>
-            </div>
+            <RichText
+              text={content}
+              className={engineer ? "bidi-text" : undefined}
+              onSource={(sourceId) => onSource({ sourceId })}
+            />
           </BubbleContent>
         </Bubble>
         {long ? (
@@ -147,6 +143,32 @@ export function ManagerMessage({
             {expanded ? "Show less" : "Show full reply"}
           </Button>
         ) : null}
+        {approvals.length ? (
+          <ApprovalList
+            tenderId={tenderId}
+            approvals={approvals}
+            onOpen={
+              onOpenApproval
+                ? (item) => onOpenApproval(item.kind, item.id)
+                : undefined
+            }
+            onAskChanges={
+              onAskChanges
+                ? (items) =>
+                    onAskChanges(
+                      `About ${items.length === 1 ? `"${plainText(items[0].title, 80)}"` : `these ${items.length} items`}: `,
+                    )
+                : undefined
+            }
+          />
+        ) : null}
+        {message.question ? (
+          <ChoiceQuestion
+            question={message.question}
+            answer={answer}
+            onAnswer={onAnswer}
+          />
+        ) : null}
         {links.length ? (
           <div
             className="flex w-full max-w-xl flex-col gap-2"
@@ -159,11 +181,9 @@ export function ManagerMessage({
               const label =
                 kind === "output"
                   ? "documents"
-                  : kind === "boq_item"
-                    ? "BOQ rows"
-                    : kind === "work_product"
-                      ? "saved drafts"
-                      : `${kind}s`;
+                  : kind === "work_product"
+                    ? "saved drafts"
+                    : "calculations";
               return (
                 <div key={kind} className="flex flex-col gap-2">
                   {recordLink(
@@ -225,8 +245,15 @@ function isLong(content: string) {
 
 function compactPreview(content: string) {
   const firstParagraph = content.split(/\n\s*\n/, 1)[0];
-  const cut = firstParagraph.slice(0, 280).trimEnd();
-  return `${cut}${cut.length < content.length ? " …" : ""}`;
+  // A whole first paragraph stays valid Markdown; cutting inside it would leave
+  // stray ** or table pipes, so a long one becomes clean plain text instead.
+  const preview =
+    firstParagraph.length <= 280 && !/^\s*\|/.test(firstParagraph)
+      ? firstParagraph.trimEnd()
+      : plainText(firstParagraph, 280);
+  return preview.length < content.length && !preview.endsWith("…")
+    ? `${preview} …`
+    : preview;
 }
 
 function formatTime(value: string) {
@@ -244,7 +271,7 @@ function resultKindLabel(kind: Schema<"ResultLink">["kind"]) {
     output: "Open document",
     requirement: "Review requirement",
     boq_item: "Review BOQ row",
-    work_product: "Inspect saved draft",
-    calculation: "Inspect calculation",
+    work_product: "Open draft",
+    calculation: "Open calculation",
   }[kind];
 }

@@ -311,7 +311,8 @@ it("keeps a failed completed-restoration check visible and offers an explicit re
     async (url) => {
       if (String(url).endsWith("/latest")) {
         attempts += 1;
-        if (attempts < 3)
+        // A refused read is shown at once; only the explicit retry reads again.
+        if (attempts < 2)
           return new Response(
             JSON.stringify({
               detail: "The restoration history could not be read.",
@@ -342,5 +343,5 @@ it("keeps a failed completed-restoration check visible and offers an explicit re
     screen.getByRole("button", { name: "Check restoration history again" }),
   );
   await screen.findByText("No backups have been created yet.");
-  expect(attempts).toBe(3);
+  expect(attempts).toBe(2);
 });

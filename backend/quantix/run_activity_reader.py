@@ -21,6 +21,7 @@ _PHASES = {
 _CATEGORIES = {
     "assistant_text_delta": "draft",
     "assistant_reasoning_summary": "reasoning_summary",
+    "assistant_note": "note",
     "sources_read": "source",
     "source_inspected": "source",
     "runtime_waiting": "waiting",
@@ -54,7 +55,7 @@ def project_activity(row):
         data.get("preview", "")
         if modern
         else data.get("text", "")
-        if kind in {"assistant_text_delta", "assistant_reasoning_summary"}
+        if kind in {"assistant_text_delta", "assistant_reasoning_summary", "assistant_note"}
         else ""
     )
     preview = preview if isinstance(preview, str) else ""
@@ -73,7 +74,7 @@ def project_activity(row):
             if data.get("assignment_id")
             else "Tender Manager"
             if actor == "manager"
-            else "Unknown actor"
+            else "Quantix"
         ),
         assignment_id=data.get("assignment_id"),
         category=category,
@@ -91,6 +92,7 @@ def project_activity(row):
         elapsed_ms=data.get("elapsed_ms") if modern else None,
         source_ids=[value for value in data.get("source_ids", []) if isinstance(value, str)],
         artifact_refs=data.get("artifact_refs", []) if modern else [],
+        fact=data.get("fact") if modern and isinstance(data.get("fact"), dict) else None,
     )
 
 
@@ -185,7 +187,7 @@ class RunActivityService:
             )
             filters = [
                 "e.run_id=?",
-                "NOT (e.kind IN ('assistant_text_delta','assistant_reasoning_summary') AND json_extract(e.data_json,'$.activity_operation_id') IS NOT NULL)",
+                "NOT (e.kind IN ('assistant_text_delta','assistant_reasoning_summary','assistant_note') AND json_extract(e.data_json,'$.activity_operation_id') IS NOT NULL)",
             ]
             values = [run_id]
             if after and not reset:

@@ -1,4 +1,5 @@
 import { MicroButton } from "@/components/ui/micro-button";
+import { ProviderLogo } from "@/components/ui/provider-logo";
 import { FieldError } from "../components/FieldError";
 import { useCallback, useState } from "react";
 import { prepareSignInBrowser } from "../browser";
@@ -98,15 +99,23 @@ export function AdvancedAIConnections() {
       {connections.data?.map((connection) => (
         <article className="ai-connection-card" key={connection.id}>
           <div className="section-heading">
-            <div>
-              <h3>{connection.name}</h3>
-              <p className="field-help">
-                {providers.data?.find(
-                  (provider) => provider.id === connection.provider_id,
-                )?.name ?? connection.provider_id}{" "}
-                · {protocolLabels[connection.protocol]} · {connection.billing}{" "}
-                billing
-              </p>
+            <div className="ai-account-title">
+              <span className="ai-brand-mark" aria-hidden="true">
+                <ProviderLogo
+                  providerId={connection.provider_id}
+                  name={connection.name}
+                />
+              </span>
+              <div>
+                <h3>{connection.name}</h3>
+                <p className="field-help">
+                  {providers.data?.find(
+                    (provider) => provider.id === connection.provider_id,
+                  )?.name ?? connection.provider_id}{" "}
+                  · {protocolLabels[connection.protocol]} · {connection.billing}{" "}
+                  billing
+                </p>
+              </div>
             </div>
             <Status
               value={connection.enabled ? connection.status : "disabled"}

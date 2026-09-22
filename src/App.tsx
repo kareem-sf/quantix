@@ -95,7 +95,9 @@ function ConnectionProblem({
   onRetry: () => void;
 }) {
   return (
-    <main className="flex min-h-svh flex-col justify-center gap-4 bg-background px-[max(2rem,10vw)] py-12 text-foreground">
+    <main
+      className={`flex min-h-svh flex-col justify-center gap-4 bg-background px-[max(2rem,10vw)] py-12 text-foreground ${error ? "" : "items-center"}`}
+    >
       {error ? (
         <div className="flex max-w-xl flex-col gap-4">
           <h1 className="text-lg font-semibold tracking-tight">

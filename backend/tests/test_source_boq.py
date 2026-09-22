@@ -358,3 +358,259 @@ def test_replacement_chain_keeps_only_the_last_unresolved_source_row(tmp_path):
     )
     service.update_item(tid, newest["id"], rate(vat_percent="0"))
     assert service.view(tid)["retired_source_rows"] == []
+
+
+def test_ocr_text_marks_spacing_and_arabic_units_do_not_block_an_exact_excerpt(tmp_path):
+    repo = Repository(tmp_path)
+    tid = repo.create_tender("Arabic OCR BOQ")["id"]
+    ocr = "6.3.1\u200f لوحة تحكم  الإنذار\n\nالرئيسية   عدد 1\n6.3.2 كاشف دخان عدد 58"
+    _, source = document(repo, tid, content=ocr, name="BOQ.pdf")
+    service = EstimateService(repo)
+    item = service.propose_source_row(
+        tid,
+        row(
+            source,
+            row_reference="6.3.1",
+            source_excerpt="6.3.1 لوحة تحكم الإنذار الرئيسية عدد 1",
+            description="Main fire alarm control panel",
+            unit="no",
+            quantity="1",
+        ),
+    )
+    assert item["unit"] == "no"
+    with pytest.raises(ValueError, match="unit"):
+        service.propose_source_row(
+            tid,
+            row(
+                source,
+                row_reference="6.3.2",
+                source_excerpt="6.3.2 كاشف دخان عدد 58",
+                description="Smoke detector",
+                unit="m2",
+                quantity="58",
+            ),
+        )
+    with pytest.raises(ValueError, match="exact BOQ source excerpt"):
+        service.propose_source_row(
+            tid,
+            row(
+                source,
+                row_reference="6.3.9",
+                source_excerpt="6.3.9 كاشف حرارة عدد 3",
+                description="Heat detector",
+                unit="no",
+                quantity="3",
+            ),
+        )
+
+
+def _read_again(repo, tid, artifact, text):
+    from quantix.extraction_publication import publish_extraction
+
+    with repo.atomic() as conn:
+        publish_extraction(
+            conn,
+            artifact=artifact,
+            extraction_id="reread",
+            segments=[{"locator": "page:1", "page": 1, "state": "extracted", "text": text}],
+            stamp="2026-09-15T00:00:00Z",
+        )
+    return next(
+        item
+        for item in repo.artifact_evidence(tid, artifact["id"], 0, 10)
+        if item.get("extraction_current", True)
+    )
+
+
+def test_row_proposed_again_after_a_file_is_read_again_replaces_the_unreviewed_row(tmp_path):
+    repo = Repository(tmp_path)
+    tid = repo.create_tender("Read again")["id"]
+    artifact, source = document(repo, tid)
+    service = EstimateService(repo)
+    first = service.propose_source_row(tid, row(source))
+    newer = _read_again(repo, tid, artifact, "A1 Concrete foundations 12.5 m3 (corrected)")
+    assert any("read again" in issue for issue in service.view(tid)["items"][0]["issues"])
+
+    second = service.propose_source_row(tid, row(newer, description="Concrete to foundations"))
+
+    items = service.view(tid)["items"]
+    assert [item["id"] for item in items] == [second["id"]]
+    with repo.db.connect() as conn:
+        old = conn.execute(
+            "SELECT active,data_json FROM boq_items WHERE id=?", (first["id"],)
+        ).fetchone()
+    assert old["active"] == 0 and second["id"] in old["data_json"]
+
+
+def test_confirmed_row_is_not_replaced_after_a_file_is_read_again(tmp_path):
+    repo = Repository(tmp_path)
+    tid = repo.create_tender("Read again confirmed")["id"]
+    artifact, source = document(repo, tid)
+    service = EstimateService(repo)
+    item = service.propose_source_row(tid, row(source))
+    service.update_item(tid, item["id"], approval(confirm_source=True))
+    newer = _read_again(repo, tid, artifact, "A1 Concrete foundations 12.5 m3")
+
+    with pytest.raises(ValueError, match="already confirmed"):
+        service.propose_source_row(tid, row(newer))
+
+
+def test_description_defaults_to_the_excerpt_and_errors_name_the_row(tmp_path):
+    from quantix.estimate_models import SourceBoqProposal
+
+    repo = Repository(tmp_path)
+    tid = repo.create_tender("Short rows")["id"]
+    _, source = document(repo, tid)
+    values = row(source)
+    values.pop("description")
+    assert SourceBoqProposal.model_validate(values).description == "Concrete foundations"
+    item = EstimateService(repo).propose_source_row(tid, values)
+    assert item["description"] == "Concrete foundations"
+    with pytest.raises(ValueError, match='The unit "m2" is not written'):
+        EstimateService(repo).propose_source_row(tid, row(source, row_reference="A9", unit="m2"))
+
+
+def test_a_long_row_excerpt_may_be_shortened_with_dots(tmp_path):
+    repo = Repository(tmp_path)
+    tid = repo.create_tender("Shortened excerpts")["id"]
+    content = (
+        "A1 Concrete foundations to all pad footings, strip footings and ground beams "
+        "including formwork and curing 12.5 m3\nA2 Formwork 30 m2"
+    )
+    _, source = document(repo, tid, content=content)
+    service = EstimateService(repo)
+    item = service.propose_source_row(
+        tid,
+        {
+            "source_id": source["id"],
+            "row_reference": "A1",
+            "source_excerpt": "A1 Concrete foundations ... formwork and curing 12.5 m3",
+            "unit": "m3",
+            "quantity": "12.5",
+        },
+    )
+    assert item["source_excerpt"] == content.split("\n")[0]
+    assert item["description"].startswith("Concrete foundations to all pad footings")
+    assert item["description"].endswith("curing")
+    # Every piece must be in the passage, in order.
+    with pytest.raises(ValueError, match="excerpt"):
+        service.propose_source_row(
+            tid,
+            {
+                "source_id": source["id"],
+                "row_reference": "A3",
+                "source_excerpt": "A1 Concrete foundations ... piling 12.5 m3",
+                "unit": "m3",
+                "quantity": "12.5",
+            },
+        )
+
+
+def test_an_excerpt_that_differs_says_where():
+    from quantix.source_boq import _first_difference
+
+    text = "A1 Concrete foundations 12.5 m3"
+    message = _first_difference("A1 Concrete footings 12.5 m3", text)
+    assert 'up to "A1 Concrete fo"' in message
+    assert '"otings 12.5 m3"' in message and '"undations 12.5 m3"' in message
+    assert "opening words" in _first_difference("Z9 Steel", text)
+
+
+def test_refresh_does_not_bring_back_a_replaced_row(tmp_path):
+    repo = Repository(tmp_path)
+    tid = repo.create_tender("Refresh after read again")["id"]
+    artifact, source = document(repo, tid)
+    service = EstimateService(repo)
+    first = service.propose_source_row(tid, row(source))
+    newer = _read_again(repo, tid, artifact, "A1 Concrete foundations 12.5 m3 (corrected)")
+    second = service.propose_source_row(tid, row(newer))
+    service.refresh(tid)
+    assert [item["id"] for item in service.view(tid)["items"]] == [second["id"]]
+    assert first["id"] != second["id"]
+
+
+def test_a_confirmed_row_stays_confirmed_when_its_passage_has_marks_and_line_breaks(tmp_path):
+    repo = Repository(tmp_path)
+    tid = repo.create_tender("Marks in passage")["id"]
+    content = "A1 Concrete‏ foundations\n 12.5 m3"
+    _, source = document(repo, tid, content=content)
+    service = EstimateService(repo)
+    item = service.propose_source_row(
+        tid, row(source, source_excerpt="A1 Concrete foundations 12.5 m3")
+    )
+    service.update_item(tid, item["id"], approval(confirm_source=True))
+    assert service.view(tid)["items"][0]["confirmed"] is True
+
+
+def test_an_excerpt_without_arabic_vowel_marks_still_matches(tmp_path):
+    repo = Repository(tmp_path)
+    tid = repo.create_tender("Vowel marks")["id"]
+    content = "5.3.1.2 مرشات ّ رذاذ منبثقة 180 درجة عدد 40"
+    _, source = document(repo, tid, content=content)
+    item = EstimateService(repo).propose_source_row(
+        tid,
+        row(
+            source,
+            row_reference="5.3.1.2",
+            source_excerpt="5.3.1.2 مرشات رذاذ منبثقة 180 درجة عدد 40",
+            description="مرشات رذاذ منبثقة",
+            unit="عدد",
+            quantity="40",
+        ),
+    )
+    assert item["supplied_quantity"] == "40"
+
+
+@pytest.mark.asyncio
+async def test_the_estimate_tool_narrows_rows_and_sends_a_page_passage_once(tmp_path):
+    import json as json_module
+
+    from quantix.office_business import business_tools
+    from quantix.office_tools import OfficeContext
+
+    repo = Repository(tmp_path)
+    tid = repo.create_tender("Estimate tool")["id"]
+    _, source = document(repo, tid)
+    service = EstimateService(repo)
+    service.propose_source_row(tid, row(source))
+    service.propose_source_row(
+        tid,
+        row(
+            source,
+            row_reference="A2",
+            source_excerpt="A2 Formwork 30 m2",
+            description="Formwork",
+            quantity="30",
+            unit="m2",
+        ),
+    )
+    context = OfficeContext(repo, tid, repo.create_run(tid, "manager", "Price")["id"])
+    tool = next(item for item in business_tools() if item.name == "inspect_estimate")
+
+    everything = json_module.loads(await tool.invoke(context, {"page_number": 1}))
+    assert everything["matching_items"] == 2
+    texts = [entry["source"]["text"] for entry in everything["items"]]
+    assert (
+        "A1 Concrete foundations" in texts[0]
+        and texts[1] == "Same passage as an earlier row above."
+    )
+    assert "source_proposal" not in everything["items"][0]["item"]
+
+    one = json_module.loads(await tool.invoke(context, {"row_references": ["a2"]}))
+    assert [entry["item"]["row_reference"] for entry in one["items"]] == ["A2"]
+    assert json_module.loads(await tool.invoke(context, {"page_number": 2}))["matching_items"] == 0
+
+
+def test_a_confirmed_row_no_longer_asks_to_be_checked(tmp_path):
+    repo = Repository(tmp_path)
+    tid = repo.create_tender("Checked rows")["id"]
+    _, source = document(repo, tid)
+    service = EstimateService(repo)
+    item = service.propose_source_row(tid, row(source))
+    assert any(
+        issue.startswith("Check the proposed") for issue in service.view(tid)["items"][0]["issues"]
+    )
+    service.update_item(tid, item["id"], approval(confirm_source=True))
+    assert not any(
+        issue.startswith("Check the proposed") for issue in service.view(tid)["items"][0]["issues"]
+    )

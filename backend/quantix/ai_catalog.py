@@ -253,6 +253,58 @@ def catalog_price(provider_id: str, model_id: str) -> dict | None:
     ).model_dump(mode="json")
 
 
+def profile_capabilities(provider_id: str, protocol: str, model_id: str) -> dict:
+    """What the bundled model-profile library establishes about this exact model.
+
+    Pydantic AI maintains a profile per model family, including which models
+    accept a reasoning effort and which can search the web. Using it keeps every
+    provider working without Quantix keeping its own table of model names. Only
+    what a profile confirms is returned; a profile default never denies a
+    capability the provider itself reported.
+    """
+
+    if protocol not in {"openai_chat", "openai_responses"} or not model_id:
+        return {}
+    if provider_id == "custom":
+        # A gateway serves a model under its own name and its own rules: it may
+        # refuse an effort, or refuse thinking together with tools, however the
+        # original model behaves. Only what this endpoint itself reports counts.
+        return {}
+    from pydantic_ai.native_tools import WebSearchTool
+    from pydantic_ai.providers.litellm import LiteLLMProvider
+
+    try:
+        profile = LiteLLMProvider.model_profile(model_id) or {}
+    except Exception:
+        return {}
+    result: dict = {}
+    if profile.get("openai_supports_reasoning"):
+        # Every OpenAI-compatible reasoning model takes these three. The extra
+        # efforts belong to an exact model on its own vendor's endpoint: a
+        # gateway serving the same family often refuses them.
+        levels = ["low", "medium", "high"]
+        if provider_id == "openai":
+            if profile.get("openai_supports_minimal_reasoning_effort"):
+                levels.insert(0, "minimal")
+            if profile.get("openai_supports_reasoning_effort_none"):
+                levels.insert(0, "none")
+        result["reasoning"] = levels
+    # The chat flag is a per-model fact. On the Responses API every profile
+    # carries the hosted tools by default, so that only means anything for
+    # OpenAI's own endpoint; other endpoints must report their own search.
+    searches = profile.get("openai_chat_supports_web_search") or (
+        provider_id == "openai"
+        and protocol == "openai_responses"
+        and WebSearchTool in (profile.get("supported_native_tools") or ())
+    )
+    if searches:
+        result["web_search"] = True
+    window = profile.get("context_window")
+    if isinstance(window, int) and window > 0:
+        result["context_window"] = window
+    return result
+
+
 def documented_capabilities(provider_id: str, protocol: str, model_id: str) -> dict:
     """Only exact, source-confirmed models have initial capability metadata."""
     if protocol == "grok_build":
@@ -277,4 +329,4 @@ def documented_capabilities(provider_id: str, protocol: str, model_id: str) -> d
             "context_window": 1048576,
             "max_output_tokens": 65536,
         }
-    return {}
+    return profile_capabilities(provider_id, protocol, model_id)

@@ -10,6 +10,10 @@ from .ai_tools import ToolArgumentError, ToolContext, argument_problem, tool
 from .office_tools import OfficeContext, redact_prompt_data
 from .team import TeamService
 from .team_models import StaffDraft
+from .team_runtime import manager_reserve
+
+# The fewest AI steps left in a job for a colleague to take on work in it.
+MIN_STEPS_TO_ASSIGN = 6
 
 
 def team_tools(repo, tender_id: str, run_id: str) -> list:
@@ -112,6 +116,21 @@ def team_tools(repo, tender_id: str, run_id: str) -> list:
                 ) from None
         if not title.strip() or not brief.strip() or not expected_result.strip():
             raise ToolArgumentError("Give the assignment a title, a brief and the expected result.")
+        # Colleagues' AI steps come out of this job's allowance. Work handed over
+        # with only a few steps left fails at once and wastes what it spends.
+        with repo.db.connect() as conn:
+            _, _, used = policies._totals(conn, tender_id, run_id)
+        allowance = int(policies.get(tender_id).get("max_requests") or 12)
+        left = allowance - used - manager_reserve(allowance)
+        waiting = len(team.queued(tender_id, run_id))
+        if left < MIN_STEPS_TO_ASSIGN * (waiting + 1):
+            raise ToolArgumentError(
+                f"Only {max(left, 0)} AI steps are left for colleagues in this job"
+                + (f" and {waiting} hand-over(s) already wait for them" if waiting else "")
+                + ", too few for a colleague to finish this work. Do not hand it over now: stage "
+                "what you have, then end your turn saying what is left so the engineer can let "
+                "you carry on."
+            )
         try:
             assignment = team.assign(
                 tender_id,
@@ -136,7 +155,7 @@ def team_tools(repo, tender_id: str, run_id: str) -> list:
             {
                 "assignment_id": assignment.id,
                 "status": assignment.status,
-                "detail": "Queued. It starts after this turn ends.",
+                "detail": "Queued. It starts only when you end this turn, so finish the turn soon.",
             }
         )
 

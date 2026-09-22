@@ -2,7 +2,7 @@ import { MicroButton } from "@/components/ui/micro-button";
 import { FieldError } from "../components/FieldError";
 import { useCallback, useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronRight, Sparkles } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Plus, Sparkles } from "lucide-react";
 import { useApi, useRefresh, useResource, type Schema } from "../api";
 import { ErrorNotice, Loading, Modal } from "../components/common";
 import { ConnectionForm, ConnectionModels } from "./AIAdvancedConnections";
@@ -15,6 +15,15 @@ import {
   NativeSelectOption,
 } from "@/components/ui/native-select";
 import { cn } from "@/lib/utils";
+import { ProviderLogo } from "@/components/ui/provider-logo";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 
 type Account = Schema<"SetupAccount">;
 type AccountView = Account;
@@ -312,64 +321,65 @@ export function AISetup({
     health.data && !setupAvailable
       ? "Restart Quantix to finish updating AI connections."
       : undefined;
+  const addButton = (
+    <Button
+      type="button"
+      size="sm"
+      disabled={!setupAvailable}
+      title={addTitle}
+      onClick={() => setAdding(true)}
+    >
+      <Plus data-icon="inline-start" />
+      Add account
+    </Button>
+  );
   return (
-    <div className="ai-setup">
-      <div className="section-heading">
-        <div>
-          <h2 id={headingId}>AI accounts</h2>
-          <p className="muted">
-            Connect an API key or an eligible official subscription.
+    <section className="flex min-w-0 flex-col gap-4">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0">
+          <h2 id={headingId} className="text-base font-medium">
+            AI accounts
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            The AI that does your tender work. Any provider with an API key, or
+            an eligible subscription.
           </p>
         </div>
-        <button
-          type="button"
-          className="button primary"
-          disabled={!setupAvailable}
-          title={addTitle}
-          onClick={() => setAdding(true)}
-        >
-          Add AI account
-        </button>
+        {active.length ? addButton : null}
       </div>
       <ErrorNotice error={accounts.error || health.error} />
       {accounts.isPending ? <Loading>Loading AI accounts…</Loading> : null}
       {active.length === 0 && !accounts.isPending ? (
-        <div className="ai-setup-empty">
-          <Sparkles size={28} />
-          <h3>Connect your first AI account</h3>
-          <p>
-            Choose OpenAI, Anthropic, Google, xAI or a custom API endpoint.
-            Eligible ChatGPT/Codex and Grok subscriptions use their official
-            clients.
-          </p>
-          <button
-            type="button"
-            className="button primary"
-            disabled={!setupAvailable}
-            title={addTitle}
-            onClick={() => setAdding(true)}
-          >
-            Choose an AI provider
-          </button>
-        </div>
-      ) : null}
-      <div className="ai-account-list">
-        {active.map((account) => (
-          <AccountCard
-            account={account}
-            key={account.id}
-            onOpen={() => setSelected(account.id)}
-          />
-        ))}
-      </div>
+        <Empty className="border">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <Sparkles />
+            </EmptyMedia>
+            <EmptyTitle>No AI connected yet</EmptyTitle>
+            <EmptyDescription>
+              Paste an API key from OpenAI, Anthropic, Google, xAI or any
+              OpenAI-compatible provider. Quantix finds the models for you.
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>{addButton}</EmptyContent>
+        </Empty>
+      ) : (
+        <ul className="divide-y overflow-hidden rounded-xl border bg-card">
+          {active.map((account) => (
+            <AccountCard
+              account={account}
+              key={account.id}
+              onOpen={() => setSelected(account.id)}
+            />
+          ))}
+        </ul>
+      )}
       {retired.length ? (
-        <details className="ai-retired-accounts">
-          <summary>Older AI connections ({retired.length})</summary>
-          <p className="field-help">
-            These saved accounts are kept for inspection and removal. Add an API
-            account above for new Tender work.
-          </p>
-          <div className="ai-account-list">
+        <details className="text-sm">
+          <summary className="w-fit cursor-pointer text-xs text-muted-foreground">
+            Older connections ({retired.length})
+          </summary>
+          <ul className="mt-2 divide-y overflow-hidden rounded-xl border bg-card">
             {retired.map((account) => (
               <AccountCard
                 account={account}
@@ -378,7 +388,7 @@ export function AISetup({
                 onOpen={() => setSelected(account.id)}
               />
             ))}
-          </div>
+          </ul>
         </details>
       ) : null}
       {adding && setupAvailable ? (
@@ -397,10 +407,11 @@ export function AISetup({
           onClose={closeAccount}
         />
       ) : null}
-    </div>
+    </section>
   );
 }
 
+/** One line per account: who it is, what it uses, and whether it is ready. */
 function AccountCard({
   account,
   retired = false,
@@ -415,64 +426,61 @@ function AccountCard({
   );
   const ready =
     !retired && account.stage === "ready" && account.connection.enabled;
+  const detail = retired
+    ? "Kept for inspection only"
+    : ready
+      ? (model?.display_name ?? account.selected_model_id ?? "")
+      : accountNextAction(account);
   return (
-    <article className="ai-account-card">
-      <div className="section-heading">
-        <div className="ai-account-title">
-          <span className="ai-brand-mark" aria-hidden="true">
-            {account.service_title.slice(0, 1)}
+    <li>
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex w-full min-w-0 items-center gap-3 px-4 py-3 text-start transition-colors hover:bg-muted/50"
+      >
+        <span
+          aria-hidden="true"
+          className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted"
+        >
+          <ProviderLogo
+            providerId={account.connection.provider_id}
+            name={account.service_title}
+          />
+        </span>
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-sm font-medium">
+            {account.connection.name}
           </span>
-          <div>
-            <h3>{account.connection.name}</h3>
-            <p className="field-help">
-              {account.service_title} ·{" "}
-              {isSubscriptionAccount(account)
-                ? "Official subscription"
-                : "API key"}
-            </p>
-          </div>
-        </div>
-        <span className={`ai-state ${ready ? "ai-state-ready" : ""}`}>
-          {ready ? <Check size={14} /> : null}
+          <span className="truncate text-xs text-muted-foreground">
+            {detail}
+          </span>
+        </span>
+        <span
+          className={cn(
+            "flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-xs",
+            ready
+              ? "bg-(--success-tint) text-(--success)"
+              : account.stage === "attention"
+                ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                : "bg-muted text-muted-foreground",
+          )}
+        >
+          {ready ? <Check className="size-3.5" /> : null}
           {retired ? "Older setup" : accountStageLabel(account)}
         </span>
-      </div>
-      {retired ? (
-        <p className="field-help">
-          This account is kept for inspection. It is not offered for new Tender
-          setup.
-        </p>
-      ) : (
-        <>
-          <p className="field-help">
-            {model?.display_name ??
-              account.selected_model_id ??
-              "Choose a model"}{" "}
-            ·{" "}
-            {isSubscriptionAccount(account)
-              ? "Official subscription"
-              : billingDescription(account.connection.billing)}
-          </p>
-          <p className="ai-account-next">
-            <strong>Next:</strong> {accountNextAction(account)}
-          </p>
-          {account.stage !== "ready" ? (
-            <p className="field-help">{account.detail}</p>
-          ) : null}
-        </>
-      )}
-      <button type="button" className="text-button" onClick={onOpen}>
-        {retired
-          ? "Review saved account"
-          : ready
-            ? "Manage account"
-            : "Continue setup"}
-        <ChevronRight size={15} />
+        <ChevronRight
+          aria-hidden
+          className="size-4 shrink-0 text-muted-foreground/60 rtl:-scale-x-100"
+        />
       </button>
-    </article>
+    </li>
   );
 }
 
+/**
+ * Adding an account is one screen: choose the provider, paste the key, connect.
+ * Quantix looks up the models itself, so nothing else is asked for.
+ */
 function AddAI({
   onClose,
   onStarted,
@@ -481,11 +489,11 @@ function AddAI({
   onStarted: (id: string) => void;
 }) {
   const services = useResource<Service[]>("/ai/setup/services");
+  const presets = useResource<Schema<"ProviderPreset">[]>("/ai/providers");
   const api = useApi();
   const refresh = useRefresh();
   const [service, setService] = useState<Service | null>(null);
   const [method, setMethod] = useState<Method | null>(null);
-  const [details, setDetails] = useState<Method | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const directServices = (services.data ?? [])
@@ -500,16 +508,16 @@ function AddAI({
 
   async function start(
     item: Service,
-    method: Method,
+    selected: Method,
     connection?: Schema<"ConnectionInput">,
   ) {
-    if (busy || !method.available) return;
+    if (busy || !selected.available) return;
     setBusy(true);
     setError(null);
     try {
       const account = await api.post<Account>("/ai/setup/accounts", {
         service_id: item.id,
-        method_id: method.id,
+        method_id: selected.id,
         ...(connection ? { connection, name: connection.name } : {}),
       } satisfies Schema<"SetupStart">);
       await refresh();
@@ -523,125 +531,125 @@ function AddAI({
 
   function choose(item: Service) {
     setService(item);
-    setDetails(null);
+    // Only a provider that also offers a subscription has anything to ask.
     setMethod(item.methods.length === 1 ? item.methods[0] : null);
-    if (item.methods.length === 1) chooseMethod(item, item.methods[0]);
-  }
-
-  function chooseMethod(item: Service, selected: Method) {
-    setMethod(selected);
-    if (selected.requires_details) setDetails(selected);
-    else void start(item, selected);
   }
 
   return (
     <Modal
-      title={service ? `Connect ${service.title}` : "Add an AI account"}
+      legacy={false}
+      title={service?.title ?? "Add an AI account"}
       onClose={onClose}
     >
-      <div className="ai-setup-panel">
-        <ErrorNotice error={services.error || error} />
+      <div className="flex min-w-0 flex-col gap-4">
+        <ErrorNotice error={services.error || presets.error || error} />
         {services.isPending ? <Loading>Loading providers…</Loading> : null}
         {!service ? (
-          <>
-            <p className="ai-setup-intro">
-              Choose a provider, then choose API key or an eligible official
-              subscription.
-            </p>
-            <div className="ai-provider-grid">
-              {directServices.map((item) => (
-                <button
-                  type="button"
-                  className="ai-choice-card ai-provider-card"
-                  key={item.id}
-                  onClick={() => choose(item)}
+          <div className="grid gap-2 @sm:grid-cols-2">
+            {directServices.map((item) => (
+              <button
+                type="button"
+                key={item.id}
+                onClick={() => choose(item)}
+                className="flex min-w-0 items-center gap-3 rounded-xl border p-3 text-start transition-colors hover:bg-muted/50"
+              >
+                <span
+                  aria-hidden="true"
+                  className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted"
                 >
-                  <span className="ai-brand-mark" aria-hidden="true">
-                    {item.title.slice(0, 1)}
+                  <ProviderLogo providerId={item.id} name={item.title} />
+                </span>
+                <span className="flex min-w-0 flex-col">
+                  <span className="truncate text-sm font-medium">
+                    {item.title}
                   </span>
-                  <strong>{item.title}</strong>
-                  <span>{item.detail}</span>
-                  {item.subscription_note ? (
-                    <span className="field-help">{item.subscription_note}</span>
-                  ) : null}
-                  {webLink(item.subscription_docs_url) ? (
-                    <ExternalLink
-                      className="text-button"
-                      href={webLink(item.subscription_docs_url)!}
-                    >
-                      Why no subscription here
-                    </ExternalLink>
-                  ) : null}
-                  <span className="ai-choice-foot">
+                  <span className="truncate text-xs text-muted-foreground">
                     {item.methods.some(isSubscriptionMethod)
-                      ? "API key or official subscription"
-                      : "API key"}{" "}
-                    <ChevronRight size={16} />
+                      ? "API key or subscription"
+                      : "API key"}
                   </span>
-                </button>
-              ))}
-            </div>
-          </>
+                </span>
+              </button>
+            ))}
+          </div>
         ) : (
           <>
-            <button
+            <Button
               type="button"
-              className="text-button"
+              variant="link"
+              size="sm"
+              className="h-auto w-fit p-0 text-muted-foreground"
               disabled={busy}
               onClick={() => {
                 setService(null);
                 setMethod(null);
-                setDetails(null);
               }}
             >
-              Back to providers
-            </button>
+              <ChevronLeft
+                data-icon="inline-start"
+                className="rtl:-scale-x-100"
+              />
+              All providers
+            </Button>
             {!method ? (
-              <div className="ai-method-list">
+              <div className="flex flex-col gap-2">
                 {service.methods.map((candidate) => (
-                  <div className="ai-method" key={candidate.id}>
+                  <div key={candidate.id} className="flex flex-col gap-1">
                     <button
                       type="button"
-                      className="ai-choice-card"
                       disabled={busy || !candidate.available}
-                      onClick={() => chooseMethod(service, candidate)}
+                      onClick={() => setMethod(candidate)}
+                      className="flex min-w-0 items-center justify-between gap-3 rounded-xl border p-3 text-start transition-colors enabled:hover:bg-muted/50 disabled:opacity-60"
                     >
-                      <strong>{candidate.title}</strong>
-                      <span>{candidate.detail}</span>
-                      <span className="ai-choice-foot">
-                        {candidate.access_kind === "subscription" ||
-                        isSubscriptionMethod(candidate)
-                          ? "Official subscription"
-                          : "API key"}
-                        <ChevronRight size={16} />
+                      <span className="flex min-w-0 flex-col">
+                        <span className="text-sm font-medium">
+                          {candidate.title}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {candidate.detail}
+                        </span>
                       </span>
+                      <ChevronRight
+                        aria-hidden
+                        className="size-4 shrink-0 text-muted-foreground/60 rtl:-scale-x-100"
+                      />
                     </button>
                     {!candidate.available ? (
-                      <p className="field-help">
+                      <p className="text-xs text-muted-foreground">
                         {candidate.unavailable_reason}
                       </p>
                     ) : null}
                   </div>
                 ))}
               </div>
-            ) : details ? (
-              <CustomDetails
+            ) : isSubscriptionMethod(method) ? (
+              <div className="flex flex-col items-start gap-3">
+                <p className="text-sm text-muted-foreground">
+                  Sign in through the provider&rsquo;s own client on the next
+                  screen. Quantix never copies subscription credentials into API
+                  fields.
+                </p>
+                <Button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void start(service, method)}
+                >
+                  {busy ? "Saving…" : "Continue"}
+                </Button>
+              </div>
+            ) : (
+              <ConnectForm
                 service={service}
-                method={details}
+                method={method}
+                preset={presets.data?.find(
+                  (item) => item.id === method.provider_id,
+                )}
                 busy={busy}
-                onContinue={(connection) =>
-                  void start(service, details, connection)
+                onConnect={(connection) =>
+                  void start(service, method, connection)
                 }
               />
-            ) : (
-              <p className="ai-setup-intro">
-                {method.access_kind === "subscription" ||
-                isSubscriptionMethod(method)
-                  ? "Complete sign-in through the provider’s official client. Quantix does not copy subscription credentials into API fields."
-                  : "This provider uses an API key stored securely on this device."}
-              </p>
             )}
-            {busy ? <Loading>Saving account…</Loading> : null}
           </>
         )}
       </div>
@@ -649,89 +657,169 @@ function AddAI({
   );
 }
 
-function CustomDetails({
+/** A readable account name from the address the engineer pasted. */
+function nameFromAddress(address: string) {
+  try {
+    const host = new URL(
+      /^https?:\/\//i.test(address) ? address : `https://${address}`,
+    ).hostname;
+    const label = host
+      .replace(/^www\./, "")
+      .replace(/^api\./, "")
+      .split(".")[0];
+    return label ? label.charAt(0).toUpperCase() + label.slice(1) : "";
+  } catch {
+    return "";
+  }
+}
+
+/** Address and key in one place; everything else has a sensible default. */
+function ConnectForm({
   service,
   method,
+  preset,
   busy,
-  onContinue,
+  onConnect,
 }: {
   service: Service;
   method: Method;
+  preset?: Schema<"ProviderPreset">;
   busy: boolean;
-  onContinue: (connection: Schema<"ConnectionInput">) => void;
+  onConnect: (connection: Schema<"ConnectionInput">) => void;
 }) {
-  const [name, setName] = useState(`${service.title} account`);
-  const [endpoint, setEndpoint] = useState("");
-  const [protocol, setProtocol] = useState<"openai_chat" | "openai_responses">(
-    "openai_chat",
-  );
-  const valid = !!name.trim() && !!endpoint.trim();
+  const ownEndpoint = method.requires_details;
+  const [name, setName] = useState(ownEndpoint ? "" : service.title);
+  const [address, setAddress] = useState("");
+  const [key, setKey] = useState("");
+  const [protocol, setProtocol] = useState<
+    Schema<"ConnectionInput">["protocol"]
+  >(ownEndpoint ? "openai_chat" : (preset?.default_protocol ?? "openai_chat"));
+  const [sessionOnly, setSessionOnly] = useState(false);
+  useEffect(() => {
+    if (!ownEndpoint && preset?.default_protocol)
+      setProtocol(preset.default_protocol);
+  }, [ownEndpoint, preset?.default_protocol]);
+  // An account the engineer does not name is named after its address.
+  const chosenName =
+    name.trim() || (ownEndpoint ? nameFromAddress(address) : service.title);
+  const valid =
+    !!key.trim() && !!chosenName && (!ownEndpoint || !!address.trim());
   return (
     <form
-      className="ai-form ai-company-form"
+      className="flex min-w-0 flex-col gap-4"
       onSubmit={(event) => {
         event.preventDefault();
         if (!valid || busy) return;
-        onContinue({
-          name: name.trim(),
+        onConnect({
+          name: chosenName,
           provider_id: method.provider_id,
           protocol,
           auth_type: "api_key",
-          billing: "unknown",
+          billing: preset?.billing ?? (ownEndpoint ? "unknown" : "metered"),
           enabled: true,
-          base_url: endpoint.trim(),
+          base_url: ownEndpoint ? address.trim() : (preset?.base_url ?? null),
           settings: {},
-          session_only: false,
+          session_only: sessionOnly,
           allow_insecure_http: false,
+          credentials: { api_key: key.trim() },
         } satisfies Schema<"ConnectionInput">);
       }}
     >
-      <p className="ai-setup-intro">
-        Enter the address supplied by your company or AI service. Quantix will
-        ask for the API key next.
-      </p>
-      <fieldset disabled={busy}>
-        <label>
-          Account name
-          <input
-            required
-            maxLength={150}
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-          />
-        </label>
-        <label>
-          Connection address
-          <input
-            required
-            type="url"
-            maxLength={2000}
-            value={endpoint}
-            onChange={(event) => setEndpoint(event.target.value)}
-            placeholder="https://…"
-          />
-        </label>
-        <details className="ai-more-options">
-          <summary>More options</summary>
-          <label>
-            Connection protocol
-            <select
-              value={protocol}
-              onChange={(event) =>
-                setProtocol(event.target.value as typeof protocol)
-              }
-            >
-              <option value="openai_chat">OpenAI-compatible chat</option>
-              <option value="openai_responses">
-                OpenAI-compatible responses
-              </option>
-            </select>
+      <fieldset className="flex min-w-0 flex-col gap-4" disabled={busy}>
+        {ownEndpoint ? (
+          <label className="flex min-w-0 flex-col gap-1.5 text-sm">
+            API address
+            <Input
+              required
+              type="text"
+              maxLength={2000}
+              value={address}
+              onChange={(event) => setAddress(event.target.value)}
+              placeholder="https://api.example.com/v1"
+            />
+            <span className="text-xs text-muted-foreground">
+              Any provider that speaks the OpenAI API works here. Paste the
+              provider&rsquo;s website if you don&rsquo;t know the exact
+              address; Quantix looks for the API on it.
+            </span>
           </label>
+        ) : null}
+        <label className="flex min-w-0 flex-col gap-1.5 text-sm">
+          API key
+          <Input
+            required
+            type="password"
+            autoComplete="off"
+            value={key}
+            onChange={(event) => setKey(event.target.value)}
+            placeholder="Paste your API key"
+          />
+          <span className="text-xs text-muted-foreground">
+            Kept in this device&rsquo;s credential store. Quantix never shows it
+            again.
+          </span>
+        </label>
+        <details className="text-sm">
+          <summary className="w-fit cursor-pointer text-xs text-muted-foreground">
+            More options
+          </summary>
+          <div className="mt-3 flex min-w-0 flex-col gap-3">
+            <label className="flex min-w-0 flex-col gap-1.5 text-sm">
+              Account name
+              <Input
+                maxLength={150}
+                value={name}
+                placeholder={chosenName || service.title}
+                onChange={(event) => setName(event.target.value)}
+              />
+            </label>
+            {ownEndpoint ? (
+              <label className="flex min-w-0 flex-col gap-1.5 text-sm">
+                API style
+                <NativeSelect
+                  className="w-full"
+                  value={protocol}
+                  onChange={(event) =>
+                    setProtocol(
+                      event.target
+                        .value as Schema<"ConnectionInput">["protocol"],
+                    )
+                  }
+                >
+                  <NativeSelectOption value="openai_chat">
+                    Chat completions (most providers)
+                  </NativeSelectOption>
+                  <NativeSelectOption value="openai_responses">
+                    Responses (needed for online research)
+                  </NativeSelectOption>
+                </NativeSelect>
+              </label>
+            ) : null}
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              <input
+                type="checkbox"
+                className="size-4"
+                checked={sessionOnly}
+                onChange={(event) => setSessionOnly(event.target.checked)}
+              />
+              Keep this key only until Quantix closes
+            </label>
+          </div>
         </details>
       </fieldset>
-      <button className="button primary" disabled={busy || !valid}>
-        Continue to API key
-      </button>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="submit" disabled={busy || !valid}>
+          {busy ? "Connecting…" : "Connect"}
+        </Button>
+        {!ownEndpoint && webLink(method.docs_url) ? (
+          <ExternalLink
+            className="text-xs text-muted-foreground underline underline-offset-4"
+            href={webLink(method.docs_url)!}
+          >
+            Where to find the key
+          </ExternalLink>
+        ) : null}
+      </div>
     </form>
   );
 }
@@ -1800,6 +1888,20 @@ function DirectKeyForm({
   );
 }
 
+/** What one model costs and how much it can read, in the engineer's terms. */
+function modelSummary(model: Schema<"ModelRecord">) {
+  const parts: string[] = [];
+  const price = model.pricing;
+  if (price)
+    parts.push(
+      `$${price.input_per_million} in / $${price.output_per_million} out per million`,
+    );
+  const window = model.capabilities?.context_window;
+  if (window)
+    parts.push(`${Math.round(window / 1000).toLocaleString()}k input`);
+  return parts.join(" · ");
+}
+
 function DirectModelChoice({
   account,
   disabled,
@@ -1811,10 +1913,12 @@ function DirectModelChoice({
 }) {
   const api = useApi();
   const client = useQueryClient();
+  const models = account.models;
   const [id, setId] = useState(
     account.selected_model_id ?? account.recommended_model_id ?? "",
   );
-  const [manualEntry, setManualEntry] = useState(account.models.length === 0);
+  const [manualEntry, setManualEntry] = useState(false);
+  const [query, setQuery] = useState("");
   const [manualBusy, setManualBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   useEffect(
@@ -1822,13 +1926,48 @@ function DirectModelChoice({
       setId(account.selected_model_id ?? account.recommended_model_id ?? ""),
     [account.selected_model_id, account.recommended_model_id],
   );
-  useEffect(() => {
-    if (account.models.length === 0) setManualEntry(true);
-  }, [account.models.length]);
-  const manual = manualEntry;
+  // Typing an ID is the fallback for a provider with no model list; a provider
+  // that later returns one takes over again.
+  const manual = manualEntry || models.length === 0;
+  const term = query.trim().toLowerCase();
+  const shown = term
+    ? models.filter((model) =>
+        `${model.display_name} ${model.model_id}`.toLowerCase().includes(term),
+      )
+    : models;
+  const save = async () => {
+    setError(null);
+    if (!manual) {
+      await onSelect(id);
+      return;
+    }
+    setManualBusy(true);
+    try {
+      await api.post<Schema<"ModelRecord">>(
+        `/ai/connections/${encodeURIComponent(account.connection.id)}/models`,
+        {
+          model_id: id.trim(),
+          display_name: id.trim(),
+        } satisfies Schema<"ModelInput">,
+      );
+      await client.invalidateQueries({ queryKey: [accountPath(account.id)] });
+      await onSelect(id.trim());
+    } catch (failure) {
+      setError(failure);
+    } finally {
+      setManualBusy(false);
+    }
+  };
   return (
     <section className="flex min-w-0 flex-col gap-3 border-t pt-4">
-      <h3 className="text-sm font-medium">Model</h3>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-sm font-medium">Model</h3>
+        {models.length ? (
+          <span className="text-xs text-muted-foreground">
+            {models.length} available
+          </span>
+        ) : null}
+      </div>
       {manual ? (
         <label className="flex min-w-0 flex-col gap-1.5 text-sm">
           Model ID
@@ -1839,33 +1978,84 @@ function DirectModelChoice({
             placeholder="For example, provider-model-name"
           />
           <FieldError error={error} name="model_id" />
+          <span className="text-xs text-muted-foreground">
+            {models.length
+              ? "Enter the exact ID from the provider's documentation."
+              : "This provider did not return a model list. Enter the exact ID from its documentation."}
+          </span>
         </label>
       ) : (
-        <label className="flex min-w-0 flex-col gap-1.5 text-sm">
-          Choose a model
-          <NativeSelect
-            className="w-full"
-            value={id}
-            disabled={disabled}
-            onChange={(event) => setId(event.target.value)}
+        <>
+          {models.length > 6 ? (
+            <Input
+              type="search"
+              value={query}
+              disabled={disabled}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search models"
+              aria-label="Search models"
+            />
+          ) : null}
+          <ul
+            className="max-h-64 min-w-0 divide-y overflow-y-auto rounded-lg border"
+            aria-label="Available models"
           >
-            <NativeSelectOption value="">Select a model</NativeSelectOption>
-            {account.models.map((model) => (
-              <NativeSelectOption key={model.model_id} value={model.model_id}>
-                {model.display_name} · {model.model_id}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
-        </label>
+            {shown.map((model) => {
+              const chosen = model.model_id === id;
+              const summary = modelSummary(model);
+              return (
+                <li key={model.model_id}>
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    aria-pressed={chosen}
+                    onClick={() => setId(model.model_id)}
+                    className={cn(
+                      "flex w-full min-w-0 items-center gap-2 px-3 py-2 text-start transition-colors enabled:hover:bg-muted/50",
+                      chosen && "bg-muted",
+                    )}
+                  >
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate text-sm">
+                        {model.display_name}
+                        {model.model_id === account.recommended_model_id ? (
+                          <span className="ms-2 text-xs text-muted-foreground">
+                            suggested
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="truncate text-xs text-muted-foreground">
+                        {model.model_id}
+                        {summary ? ` · ${summary}` : ""}
+                      </span>
+                    </span>
+                    {chosen ? (
+                      <Check className="size-4 shrink-0 text-(--success)" />
+                    ) : null}
+                  </button>
+                </li>
+              );
+            })}
+            {!shown.length ? (
+              <li className="px-3 py-2 text-sm text-muted-foreground">
+                No model matches that search.
+              </li>
+            ) : null}
+          </ul>
+        </>
       )}
-      {manual ? (
-        <p className="text-xs text-muted-foreground">
-          No model list was available. Save the documented model ID to continue.
-        </p>
-      ) : null}
       <ErrorNotice error={error} />
       <div className="flex min-w-0 flex-wrap items-center gap-3">
-        {account.models.length > 0 ? (
+        <Button
+          type="button"
+          size="sm"
+          className="order-1"
+          disabled={disabled || manualBusy || !id.trim()}
+          onClick={() => void save()}
+        >
+          {manualBusy ? "Saving…" : "Use this model"}
+        </Button>
+        {models.length > 0 ? (
           <Button
             type="button"
             variant="link"
@@ -1873,49 +2063,13 @@ function DirectModelChoice({
             className="order-2 h-auto p-0 text-muted-foreground"
             disabled={disabled || manualBusy}
             onClick={() => {
-              setManualEntry((value) => !value);
+              setManualEntry(!manual);
               setId("");
             }}
           >
-            {manual
-              ? "Use the discovered model list"
-              : "Enter a model ID manually"}
+            {manual ? "Choose from the list" : "Enter a model ID"}
           </Button>
         ) : null}
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="order-1"
-          disabled={disabled || manualBusy || !id.trim()}
-          onClick={async () => {
-            setError(null);
-            if (manual) {
-              setManualBusy(true);
-              try {
-                await api.post<Schema<"ModelRecord">>(
-                  `/ai/connections/${encodeURIComponent(account.connection.id)}/models`,
-                  {
-                    model_id: id.trim(),
-                    display_name: id.trim(),
-                  } satisfies Schema<"ModelInput">,
-                );
-                await client.invalidateQueries({
-                  queryKey: [accountPath(account.id)],
-                });
-                await onSelect(id.trim());
-              } catch (failure) {
-                setError(failure);
-              } finally {
-                setManualBusy(false);
-              }
-            } else {
-              await onSelect(id);
-            }
-          }}
-        >
-          {manualBusy ? "Saving model…" : "Save model selection"}
-        </Button>
       </div>
     </section>
   );

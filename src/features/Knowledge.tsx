@@ -18,6 +18,7 @@ import {
 } from "../components/common";
 import { EvidencePicker } from "./EvidencePicker";
 import { Citations, SourceDrawer, type SourceSelection } from "./Sources";
+import { locatorLabel } from "@/lib/locator";
 
 type Category = Schema<"KnowledgeCreate">["category"];
 type SourceVisit = { tenderId: string; selection: SourceSelection };
@@ -590,7 +591,7 @@ function NoteRecord({
                     })
                   }
                 >
-                  {source.artifact_name} · {source.locator}
+                  {source.artifact_name} · {locatorLabel(source.locator)}
                 </button>
                 <p className="field-help">
                   {source.relative_path} · Saved version {source.version}
@@ -602,19 +603,6 @@ function NoteRecord({
                       ? "Current file version"
                       : "An earlier file version was approved with this note."}
                 </p>
-                <details>
-                  <summary>Recorded source identity</summary>
-                  <dl>
-                    <dt>File hash</dt>
-                    <dd>
-                      <code>{source.content_hash}</code>
-                    </dd>
-                    <dt>Source text hash</dt>
-                    <dd>
-                      <code>{source.evidence_hash}</code>
-                    </dd>
-                  </dl>
-                </details>
               </article>
             ))
           ) : (

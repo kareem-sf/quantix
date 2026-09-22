@@ -162,6 +162,17 @@ def _candidate(evidence, artifact, headers):
         if len(candidates) == 1
         else None
     )
+    reference = next(
+        (
+            str(c["value"]).strip()
+            for c in cells
+            if headers.get("item")
+            and _column(c) == headers["item"]
+            and not c.get("formula")
+            and str(c.get("value") or "").strip()
+        ),
+        None,
+    )
     issues = ["Confirm this inferred BOQ row against the source before including it in totals."]
     if headers.get("unit") and headers["unit"] != _column(unit):
         issues.append("Header labels conflict with the row's unit and quantity values.")
@@ -183,6 +194,7 @@ def _candidate(evidence, artifact, headers):
         "sheet": evidence.get("sheet") or "",
         "locator": evidence["locator"],
         "description": description[:6000],
+        "row_reference": reference[:100] if reference else None,
         "unit": _unit(unit["value"]),
         "unit_cell": unit["coordinate"],
         "quantity_cell": quantity_cell,
@@ -237,6 +249,8 @@ class EstimateService:
                 conn.execute("UPDATE boq_items SET active=0 WHERE tender_id=?", (tender_id,))
                 conn.execute(
                     """UPDATE boq_items SET active=1 WHERE tender_id=? AND row_key<>''
+                    AND COALESCE(json_extract(data_json,'$.rejected'),0)=0
+                    AND json_extract(data_json,'$.superseded_by') IS NULL
                     AND EXISTS (SELECT 1 FROM artifacts a WHERE a.id=boq_items.artifact_id AND a.is_current=1)""",
                     (tender_id,),
                 )
@@ -254,7 +268,7 @@ class EstimateService:
                             if data is None:
                                 continue
                             conn.execute(
-                                "INSERT INTO boq_items(id,tender_id,source_id,artifact_id,active,data_json) VALUES(?,?,?,?,1,?) ON CONFLICT(tender_id,source_id,row_key) DO UPDATE SET active=1",
+                                "INSERT INTO boq_items(id,tender_id,source_id,artifact_id,active,data_json) VALUES(?,?,?,?,1,?) ON CONFLICT(tender_id,source_id,row_key) DO UPDATE SET active=1, data_json=json_set(data_json,'$.row_reference',json_extract(excluded.data_json,'$.row_reference'))",
                                 (new_id(), tender_id, evidence["id"], artifact["id"], dump(data)),
                             )
                         offset += len(rows)
@@ -430,6 +444,94 @@ class EstimateService:
                     conn, tender_id, "rate_proposal", proposal_id, "approve", decision.rationale
                 )
         return self.get_rate_proposal(tender_id, proposal_id)
+
+    def reject_rate(self, tender_id, proposal_id, rationale):
+        """Set a proposed rate aside; the item keeps its current rate."""
+        with self.repo.db.connect(write=True) as conn:
+            row = conn.execute(
+                "SELECT status FROM rate_proposals WHERE id=? AND tender_id=?",
+                (proposal_id, tender_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("This rate proposal is not in the tender.")
+            if row["status"] != "proposed":
+                raise ValueError("This rate proposal is already decided.")
+            conn.execute("UPDATE rate_proposals SET status='rejected' WHERE id=?", (proposal_id,))
+            self._decision(conn, tender_id, "rate_proposal", proposal_id, "reject", rationale)
+        return self.get_rate_proposal(tender_id, proposal_id)
+
+    def reject_source_row(self, tender_id, item_id, rationale):
+        """Set aside a BOQ row the team proposed; a later refresh does not bring it back."""
+        with self.repo.db.connect(write=True) as conn:
+            row = conn.execute(
+                "SELECT data_json FROM boq_items WHERE id=? AND tender_id=?", (item_id, tender_id)
+            ).fetchone()
+            if row is None:
+                raise KeyError("This BOQ row is not in the tender.")
+            data = json.loads(row["data_json"])
+            if not data.get("source_proposal"):
+                raise ValueError("Only a proposed BOQ row can be rejected.")
+            if data.get("confirmed"):
+                priced = data.get("unit_rate") or data.get("components")
+                measured = conn.execute(
+                    "SELECT 1 FROM quantity_proposals WHERE item_id=? AND status='approved'",
+                    (item_id,),
+                ).fetchone()
+                if priced or measured:
+                    raise ValueError(
+                        "This BOQ row already has a rate or an approved quantity. "
+                        "Ask the Tender Manager to change it."
+                    )
+            # An accepted row that is not priced yet can still be set aside.
+            data["confirmed"] = False
+            data["rejected"] = True
+            conn.execute(
+                "UPDATE boq_items SET active=0,data_json=? WHERE id=?", (dump(data), item_id)
+            )
+            self._decision(conn, tender_id, "boq_item", item_id, "reject", rationale)
+        return self.view(tender_id)
+
+    def restore_source_row(self, tender_id, item_id, rationale):
+        """Bring back a BOQ row the engineer rejected, so it can be accepted after all."""
+        with self.repo.db.connect(write=True) as conn:
+            row = conn.execute(
+                "SELECT artifact_id,row_key,data_json FROM boq_items WHERE id=? AND tender_id=?",
+                (item_id, tender_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("This BOQ row is not in the tender.")
+            data = json.loads(row["data_json"])
+            if not data.get("rejected"):
+                return
+            newer = conn.execute(
+                "SELECT 1 FROM boq_items WHERE tender_id=? AND artifact_id=? AND row_key=? AND active=1 AND id<>?",
+                (tender_id, row["artifact_id"], row["row_key"], item_id),
+            ).fetchone()
+            if newer:
+                raise ValueError("A newer version of this BOQ row is waiting. Review that one.")
+            data.pop("rejected")
+            conn.execute(
+                "UPDATE boq_items SET active=1,data_json=? WHERE id=?", (dump(data), item_id)
+            )
+            self._decision(conn, tender_id, "boq_item", item_id, "restore", rationale)
+
+    def reject_quantity(self, tender_id, proposal_id, rationale):
+        """Set a proposed quantity aside; the row keeps the quantity it uses now."""
+        with self.repo.db.connect(write=True) as conn:
+            row = conn.execute(
+                "SELECT status FROM quantity_proposals WHERE id=? AND tender_id=?",
+                (proposal_id, tender_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("This quantity proposal is not in the tender.")
+            if row["status"] != "proposed":
+                raise ValueError("This quantity proposal is already decided.")
+            conn.execute(
+                "UPDATE quantity_proposals SET status='rejected',updated_at=? WHERE id=?",
+                (now(), proposal_id),
+            )
+            self._decision(conn, tender_id, "quantity_proposal", proposal_id, "reject", rationale)
+        return self.view(tender_id)
 
     def update_item(self, tender_id, item_id, values):
         with localcontext() as arithmetic:
@@ -693,12 +795,32 @@ class EstimateService:
             items = []
             for identifier in identifiers:
                 item = self._item(conn, tender_id, identifier)
+                if item.get("confirmed"):
+                    # The reminder to check a proposed row is done once it is confirmed.
+                    item["issues"] = [
+                        issue
+                        for issue in item.get("issues", [])
+                        if not issue.startswith(
+                            (
+                                "Check the proposed description, unit and quantity",
+                                "Confirm this inferred BOQ row",
+                            )
+                        )
+                    ]
                 if item.get("source_proposal"):
+                    from .source_boq import matchable
+
                     evidence = self.repo.get_evidence(tender_id, item["source_id"])
-                    if item["source_excerpt"] not in evidence["text"]:
+                    # Compared the way it was checked when proposed: spacing, line
+                    # breaks and invisible direction marks do not count.
+                    if matchable(item["source_excerpt"]) not in matchable(evidence["text"]):
                         item["confirmed"] = False
                         item["issues"].append(
                             "The extracted source passage changed. Review and replace this BOQ proposal before pricing."
+                        )
+                    elif not item["confirmed"] and not evidence.get("extraction_current", True):
+                        item["issues"].append(
+                            "This file was read again since this row was proposed. Check it against the new reading, or ask the Manager to redo it."
                         )
                 proposals = [
                     record(row)

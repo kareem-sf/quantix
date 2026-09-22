@@ -23,9 +23,8 @@ import { Separator } from "@/components/ui/separator";
 import { MicroButton } from "@/components/ui/micro-button";
 import { ErrorNotice, Loading, statusLabel } from "@/components/common";
 import { SourceDrawer, type SourceSelection } from "../Sources";
-import { PlanReview } from "../PlanReview";
-import { WorkDecisions } from "../WorkDecisions";
-import { ActivitySection } from "../Work";
+import { JobHistory } from "../activity/JobHistory";
+import { DocumentGroups } from "../documents/DocumentGroups";
 import { WorkProductLibrary } from "../WorkProductLibrary";
 import { sourceSelectionKey } from "./workspace-state";
 import { tenderDisplayName } from "@/app/tender-name";
@@ -52,7 +51,7 @@ export function WorkspaceContext({
       <div className="flex items-start gap-3">
         <BriefcaseBusiness className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
         <div className="min-w-0">
-          <p className="truncate text-sm" dir="auto">
+          <p className="truncate text-sm">
             {tenderDisplayName(overview.tender)}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
@@ -97,9 +96,7 @@ export function WorkspaceContext({
           }
         >
           <FileText className="text-muted-foreground" />
-          <span className="truncate" dir="auto">
-            {source.name}
-          </span>
+          <span className="truncate">{source.name}</span>
         </Button>
       ))}
       <p className="text-xs text-muted-foreground">
@@ -127,7 +124,9 @@ export function WorkspaceDocuments({
   onSelectionChange,
   onImport,
   onRegister,
+  revision,
 }: {
+  revision?: string;
   tenderId: string;
   artifacts: Schema<"Artifact">[];
   selection: SourceSelection | null;
@@ -138,14 +137,6 @@ export function WorkspaceDocuments({
   onRegister?: () => void;
 }) {
   const [query, setQuery] = useState("");
-  const [versions, setVersions] = useState("current");
-  const files = artifacts.filter(
-    (file) =>
-      (versions === "all" || file.is_current) &&
-      `${file.name} ${file.relative_path}`
-        .toLocaleLowerCase()
-        .includes(query.trim().toLocaleLowerCase()),
-  );
   if (selection && onCloseSource)
     return (
       <SourceDrawer
@@ -158,10 +149,27 @@ export function WorkspaceDocuments({
         onSelectionChange={onSelectionChange ?? onSource}
       />
     );
+  const open = (artifactId: string) => {
+    const file = artifacts.find((item) => item.id === artifactId);
+    onSource({
+      artifactId,
+      artifact: file,
+      version: file?.version,
+      contentHash: file?.content_hash,
+    });
+  };
   return (
-    <section className="flex flex-col gap-5" aria-label="Workspace documents">
+    <section className="flex flex-col gap-4" aria-label="Workspace documents">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-medium">Documents</h2>
+        <h2 className="text-sm font-medium">
+          Documents
+          {artifacts.length ? (
+            <span className="font-normal text-muted-foreground">
+              {" "}
+              · {artifacts.filter((file) => file.is_current).length}
+            </span>
+          ) : null}
+        </h2>
         <Button
           variant="ghost"
           size="icon-sm"
@@ -172,69 +180,31 @@ export function WorkspaceDocuments({
           <Plus />
         </Button>
       </div>
-      <div className="flex flex-wrap gap-2">
-        <InputGroup className="min-w-32 flex-1">
-          <InputGroupAddon>
-            <Search />
-          </InputGroupAddon>
-          <InputGroupInput
-            aria-label="Find a workspace document"
-            placeholder="Find a document…"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
+      {artifacts.length ? (
+        <>
+          <InputGroup>
+            <InputGroupAddon>
+              <Search />
+            </InputGroupAddon>
+            <InputGroupInput
+              aria-label="Find a workspace document"
+              placeholder="Find a document…"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </InputGroup>
+          <DocumentGroups
+            tenderId={tenderId}
+            query={query}
+            onOpen={open}
+            revision={revision}
           />
-        </InputGroup>
-        <NativeSelect
-          aria-label="Workspace document revisions"
-          value={versions}
-          onChange={(event) => setVersions(event.target.value)}
-        >
-          <NativeSelectOption value="current">Current files</NativeSelectOption>
-          <NativeSelectOption value="all">All revisions</NativeSelectOption>
-        </NativeSelect>
-      </div>
-      <div
-        className="flex flex-col"
-        role="list"
-        aria-label="Workspace document list"
-      >
-        {files.map((file) => (
-          <div role="listitem" key={file.id}>
-            <Button
-              variant="ghost"
-              className="h-auto w-full justify-start gap-3 rounded-lg px-2 py-3 text-start font-normal whitespace-normal"
-              onClick={() =>
-                onSource({
-                  artifactId: file.id,
-                  artifact: file,
-                  version: file.version,
-                  contentHash: file.content_hash,
-                })
-              }
-            >
-              <FileText className="size-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm" dir="auto">
-                  {file.name}
-                </span>
-                <span className="mt-1 block text-xs text-muted-foreground">
-                  Version {file.version} ·{" "}
-                  {file.is_current ? "Current" : "Earlier revision"} ·{" "}
-                  {statusLabel(file.status)}
-                </span>
-              </span>
-              <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
-            </Button>
-          </div>
-        ))}
-      </div>
-      {!files.length ? (
+        </>
+      ) : (
         <p className="text-sm text-muted-foreground">
-          {artifacts.length
-            ? "No documents match this search."
-            : "Import the Tender package to start reviewing documents."}
+          Import the tender package to start reviewing documents.
         </p>
-      ) : null}
+      )}
       {onRegister ? (
         <Button
           variant="ghost"
@@ -253,95 +223,30 @@ export function WorkspaceDocuments({
   );
 }
 
-export function WorkspaceReviews({
-  overview,
-  planId,
-  focusedFinding,
+export function WorkspaceActivity({
+  tenderId,
   onSource,
-  onPlan,
-  onConversation,
+  onRaiseLimit,
 }: {
-  overview: Schema<"Overview">;
-  planId?: string;
-  focusedFinding?: string;
-  onSource: (source: SourceSelection) => void;
-  onPlan: (id: string) => void;
-  onConversation: () => void;
+  tenderId: string;
+  onSource?: (source: SourceSelection) => void;
+  onRaiseLimit?: () => void;
 }) {
-  if (planId)
-    return (
-      <PlanReview
-        tenderId={overview.tender.id}
-        planId={planId}
-        onSource={onSource}
-        onBack={onConversation}
-      />
-    );
-  return (
-    <section className="flex flex-col gap-5" aria-label="Workspace reviews">
-      <div>
-        <h2 className="text-sm font-medium">Reviews</h2>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Review the work and its sources before making a decision.
-        </p>
-      </div>
-      {overview.plan ? (
-        <Button
-          variant="outline"
-          className="h-auto justify-between gap-3 py-3 text-start whitespace-normal"
-          onClick={() => onPlan(overview.plan!.id)}
-        >
-          <span className="min-w-0">
-            <span className="block text-sm" dir="auto">
-              {overview.plan.title}
-            </span>
-            <span className="mt-1 block text-xs font-normal text-muted-foreground">
-              Review work plan
-            </span>
-          </span>
-          <ChevronRight />
-        </Button>
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          The Tender Manager has not proposed a work plan yet.
-        </p>
-      )}
-      <WorkDecisions
-        tenderId={overview.tender.id}
-        focusedId={focusedFinding}
-        onSource={onSource}
-      />
-      <WorkProductLibrary
-        tenderId={overview.tender.id}
-        tenderRevision={overview.tender.revision}
-        workRevision={overview.active_runs
-          .map((run) => `${run.id}:${run.status}`)
-          .sort()
-          .join("|")}
-        onSource={(sourceId) => onSource({ sourceId })}
-      />
-    </section>
-  );
-}
-
-export function WorkspaceActivity({ tenderId }: { tenderId: string }) {
   const runs = useResource<Schema<"Run">[]>(
     `${tenderPath(tenderId)}/runs`,
     true,
   );
-  const messages = useResource<Schema<"Message">[]>(
-    `${tenderPath(tenderId)}/messages`,
-    true,
-  );
   return (
     <div className="flex flex-col gap-3">
-      <ErrorNotice error={runs.error || messages.error} />
-      {runs.isPending || messages.isPending ? (
+      <ErrorNotice error={runs.error} />
+      {runs.isPending ? (
         <Loading>Loading activity…</Loading>
       ) : (
-        <ActivitySection
+        <JobHistory
+          tenderId={tenderId}
           runs={runs.data ?? []}
-          messages={messages.data ?? []}
+          onSource={onSource}
+          onRaiseLimit={onRaiseLimit}
         />
       )}
     </div>

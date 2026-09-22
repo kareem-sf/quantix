@@ -22,7 +22,6 @@ import {
   type WorkspaceSection,
 } from "../navigation/routes";
 import { type Theme } from "../theme";
-import { AnimatedNumber } from "@/components/ui/animated-number";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -94,6 +93,10 @@ export function AppSidebar({
     : null;
   const activeTender = context?.kind === "tender" ? context : null;
   const origin = activeTender ? stripSourceQuery(current) : undefined;
+  const summaries = useResource<Schema<"TenderSummaryList">>(
+    "/tender-summaries",
+    Boolean(tenders?.length),
+  );
 
   return (
     <Sidebar collapsible="icon" variant="inset">
@@ -156,17 +159,50 @@ export function AppSidebar({
               ) : null}
               {tenders?.map((tender) => {
                 const open = activeTender?.tenderId === tender.id;
+                const summary = summaries.data?.tenders?.find(
+                  (item) => item.tender_id === tender.id,
+                );
+                const name = summary?.short_name ?? tenderDisplayName(tender);
                 return (
                   <SidebarMenuItem key={tender.id}>
                     <SidebarMenuButton
                       tooltip={tenderDisplayName(tender)}
+                      title={tenderDisplayName(tender)}
                       aria-expanded={open}
+                      className="h-auto min-h-8 items-start py-1.5"
                       onClick={() =>
                         navigate(tenderRoute(tender.id, "manager"))
                       }
                     >
                       {open ? <FolderOpen /> : <Folder />}
-                      <span>{tenderDisplayName(tender)}</span>
+                      <span className="grid min-w-0 flex-1 leading-tight">
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <span className="truncate">{name}</span>
+                          {summary?.working ? (
+                            <span
+                              aria-label="Working"
+                              className="size-1.5 shrink-0 rounded-full bg-emerald-500"
+                            />
+                          ) : null}
+                        </span>
+                        {summary?.due || summary?.waiting ? (
+                          <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+                            {summary.due ? (
+                              <span className="truncate">
+                                Due {summary.due}
+                              </span>
+                            ) : null}
+                            {summary.waiting ? (
+                              <span
+                                className="shrink-0 rounded-full bg-(--warning-tint) px-1.5 text-(--warning-ink) tabular-nums"
+                                aria-label={`${summary.waiting} waiting for you`}
+                              >
+                                {summary.waiting}
+                              </span>
+                            ) : null}
+                          </span>
+                        ) : null}
+                      </span>
                     </SidebarMenuButton>
                     {activeTender && open ? (
                       <TenderPages
@@ -292,12 +328,19 @@ function TenderPages({
   onNavigate: (target: string) => void;
 }) {
   const overview = useResource<Schema<"Overview">>(tenderPath(tenderId), true);
-  const findingsToReview =
-    overview.data?.findings.filter((finding) => finding.state === "proposed")
-      .length ?? 0;
-  const toReview =
-    findingsToReview + (overview.data?.plan?.status === "proposed" ? 1 : 0);
   const working = (overview.data?.active_runs.length ?? 0) > 0;
+  const coverage = overview.data?.coverage;
+  const issues = (coverage?.needs_attention ?? 0) + (coverage?.failed ?? 0);
+  const state: Partial<Record<(typeof tenderSections)[number], string>> = {
+    documents: coverage?.registered
+      ? `${coverage.registered}${issues ? ` · ${issues} ${issues === 1 ? "issue" : "issues"}` : ""}`
+      : undefined,
+    estimate: overview.data
+      ? overview.data.boq_count
+        ? `${overview.data.boq_count} items`
+        : "not started"
+      : undefined,
+  };
   return (
     <SidebarMenuSub>
       {tenderSections.map((item) => (
@@ -317,9 +360,9 @@ function TenderPages({
               Working
             </span>
           ) : null}
-          {item === "work" && toReview > 0 ? (
-            <span className="pointer-events-none absolute end-2 top-1/2 flex -translate-y-1/2 items-center gap-1 text-xs text-amber-600 dark:text-amber-400">
-              <AnimatedNumber value={toReview} /> to review
+          {item !== "manager" && state[item] ? (
+            <span className="pointer-events-none absolute end-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground tabular-nums">
+              {state[item]}
             </span>
           ) : null}
         </SidebarMenuSubItem>

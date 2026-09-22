@@ -13,7 +13,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pydantic import BaseModel, ConfigDict
 
 from .ai_api_catalog import discover_models
-from .ai_api_engine import CHECK_DEADLINE_SECONDS, run_model
+from .ai_api_engine import CHECK_DEADLINE_SECONDS, CHECK_MAX_REQUESTS, run_model
 from .ai_api_errors import (
     DirectAPIError,
     DirectDependencyError,
@@ -241,8 +241,11 @@ class DirectAPIService:
             "output_mode": "auto",
         }
         bounded = dict(connection)
+        # Setup checks send a fixed sample and no Tender content, so a failure
+        # may carry the provider's own explanation back to the engineer.
+        bounded["_setup_check"] = True
         bounded["_execution_limits"] = {
-            "max_requests": 2,
+            "max_requests": CHECK_MAX_REQUESTS,
             "max_output_tokens": 1024,
             "context_window": (connection.get("_model") or {})
             .get("capabilities", {})
@@ -254,6 +257,24 @@ class DirectAPIService:
         }
         selected["reasoning"] = _check_reasoning(selected, bounded)
         check_tool = _ConnectionCheckTool()
+
+        def confirm_check_value(output, _sources):
+            """Let a model that muddled the value put it right within this check.
+
+            Weaker models sometimes answer with their own words instead of the
+            value the tool gave them. Saying so once is how the Office corrects
+            every other result, and it still proves tools and structured output.
+            """
+
+            if check_tool.calls != 1:
+                raise ValueError(
+                    "Call quantix_connection_check exactly once, then return the value it gave you."
+                )
+            if output.value != check_tool.value:
+                raise ValueError(
+                    "The value must be exactly the one the check tool returned, with nothing added or changed."
+                )
+
         instruction = (
             "Perform this connection check only. Call quantix_connection_check exactly once, then return its value unchanged "
             "in a structured object with the single property value. Do not use any other tools, Tender data or web access."
@@ -273,6 +294,7 @@ class DirectAPIService:
                         on_response=on_response,
                         definitions=[check_tool],
                         operation="check",
+                        validate_output=confirm_check_value,
                     )
             except asyncio.CancelledError:
                 raise

@@ -116,7 +116,7 @@ async def test_local_stages_complete_and_the_map_waits_for_ai(tmp_path, local_on
         for event in repo.run_events(run["id"])
         if event["kind"] == "analysis_stage"
     ]
-    assert "Indexing tender evidence" in labels and "Mapping the tender package" in labels
+    assert "Preparing documents for search" in labels and "Mapping the tender package" in labels
 
 
 async def test_package_map_names_the_project_and_briefs_are_cached(

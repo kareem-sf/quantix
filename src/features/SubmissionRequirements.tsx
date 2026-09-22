@@ -14,6 +14,7 @@ import { Citations, SourceDrawer, type SourceSelection } from "./Sources";
 import { FieldError } from "../components/FieldError";
 import { createDraftScope, useFormDraft } from "./useFormDraft";
 import type { SubmissionView } from "./Outputs";
+import { locatorLabel } from "@/lib/locator";
 
 type Requirement = Schema<"RequirementRecord">;
 type Deliverable = Schema<"RequirementProposal">["deliverable_kind"];
@@ -526,7 +527,7 @@ function RequirementDetail({
                 {current.sources.map((source) => (
                   <div key={source.source_id}>
                     <strong>
-                      {source.artifact_name} · {source.locator}
+                      {source.artifact_name} · {locatorLabel(source.locator)}
                     </strong>
                     <p>
                       {source.relative_path} · version {source.version}
@@ -536,7 +537,6 @@ function RequirementDetail({
                         ? "Current preserved source"
                         : "Source needs recheck"}
                     </p>
-                    <small>SHA-256 {source.content_hash}</small>
                   </div>
                 ))}
               </div>

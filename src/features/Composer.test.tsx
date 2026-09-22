@@ -242,3 +242,32 @@ it("keeps newer text typed while an accepted submission is in flight", async () 
   await screen.findByRole("status");
   expect(input).toHaveValue("First instructionSecond instruction");
 });
+
+it("turns the send button into Stop while work runs", async () => {
+  const user = userEvent.setup();
+  const onStop = vi.fn();
+  const { rerender } = render(
+    <Composer
+      busy
+      onStop={onStop}
+      onSend={async () => {}}
+      onImport={() => {}}
+    />,
+  );
+  expect(
+    screen.queryByRole("button", { name: /Send/ }),
+  ).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Stop" }));
+  expect(onStop).toHaveBeenCalledTimes(1);
+  rerender(
+    <Composer
+      busy={false}
+      onStop={onStop}
+      onSend={async () => {}}
+      onImport={() => {}}
+    />,
+  );
+  expect(
+    screen.getByRole("button", { name: "Send instruction" }),
+  ).toBeInTheDocument();
+});

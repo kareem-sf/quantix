@@ -6,6 +6,7 @@ import inspect
 import json
 from decimal import ROUND_UP, Decimal
 
+from .ai_api_engine import CHECK_MAX_REQUESTS
 from .ai_catalog import catalog_price, documented_capabilities
 from .ai_connections import (
     AIConnectionService,
@@ -217,6 +218,30 @@ class AISetupService:
     def list(self):
         return [self.get(connection["id"]) for connection in self.connections.list()]
 
+    @staticmethod
+    async def _api_address(values, *, saved=None):
+        """Correct a pasted website to the API address on the same site.
+
+        People have the provider's home page to hand, not its API address. The
+        address is judged by how it answers an unauthenticated model-list
+        request; no credential is sent while looking.
+
+        An edit that leaves the address alone is left alone: moving an account
+        to another address is only allowed with a freshly supplied key, so it is
+        corrected while the engineer is entering one.
+        """
+
+        if values.base_url is None or values.auth_type == "client_login":
+            return values.base_url
+        if saved is not None and values.credentials is None:
+            return values.base_url
+        from .ai_api_endpoint import resolve_api_base_url
+
+        found = await resolve_api_base_url(
+            values.base_url, allow_insecure_http=values.allow_insecure_http
+        )
+        return found or values.base_url
+
     async def start(self, values):
         request = SetupStart.model_validate(values)
         service, method = setup_method(request.service_id, request.method_id)
@@ -228,6 +253,7 @@ class AISetupService:
         if connection_values.provider_id != method["provider_id"]:
             raise ValueError("The supplied account details do not match the AI service you chose.")
         connection_values.name = name
+        connection_values.base_url = await self._api_address(connection_values)
         if method["requires_details"] and request.connection is None:
             raise ValueError(
                 "Enter the service details in More options. Your provider or company administrator supplies them."
@@ -270,6 +296,9 @@ class AISetupService:
             raise ValueError(
                 "This saved AI account is retired. Choose one of the five supported provider routes."
             )
+        request.connection.base_url = await self._api_address(
+            request.connection, saved=connection_before
+        )
         connection = self.connections.update(identifier, request.connection)
         self._state(
             identifier,
@@ -938,7 +967,7 @@ class AISetupService:
         cost = None
         source = None
         requires_unknown = False
-        requests = 2
+        requests = CHECK_MAX_REQUESTS
         max_output = 1024
         max_input = 16384
         limit_description = None

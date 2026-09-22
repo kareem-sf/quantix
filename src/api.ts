@@ -169,13 +169,29 @@ export function useApi() {
   if (!api) throw new Error("The local service is not connected.");
   return api;
 }
+/** A missing record or a refused request will not change on its own, so only
+ * busy, server and connection failures are tried again. */
+export function shouldRetry(failures: number, error: unknown) {
+  if (
+    error instanceof ApiError &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    error.status !== 408 &&
+    error.status !== 429
+  )
+    return false;
+  return failures < 3;
+}
 export function useResource<T>(path: string, poll = false) {
   const api = useApi();
   return useQuery({
     queryKey: [path],
     queryFn: ({ signal }) => api.get<T>(path, signal),
-    refetchInterval: poll ? 2000 : false,
-    retry: 1,
+    refetchInterval: ({ state }) =>
+      poll && (state.error === null || shouldRetry(0, state.error))
+        ? 2000
+        : false,
+    retry: (failures, error) => failures < 1 && shouldRetry(failures, error),
   });
 }
 export function useRefresh() {

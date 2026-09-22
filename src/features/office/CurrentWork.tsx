@@ -61,9 +61,7 @@ export function CurrentWork({
       <header className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-0.5">
           <h2 className="text-sm font-semibold tracking-tight">Current work</h2>
-          <p className="text-sm" dir="auto">
-            {brief.outcome}
-          </p>
+          <p className="text-sm">{brief.outcome}</p>
         </div>
         <Badge
           variant={
@@ -89,7 +87,7 @@ export function CurrentWork({
         </div>
       ) : null}
       {progressCurrent && brief.next_step ? (
-        <p className="text-sm" dir="auto">
+        <p className="text-sm">
           <span className="font-medium">Next: </span>
           {brief.next_step}
         </p>
@@ -110,7 +108,7 @@ export function CurrentWork({
                   }
                   aria-hidden="true"
                 />
-                <span className="min-w-0" dir="auto">
+                <span className="min-w-0">
                   <span className="sr-only">{label}: </span>
                   <span
                     className={
@@ -139,7 +137,7 @@ export function CurrentWork({
           </h3>
           <ul className="flex flex-col gap-1.5">
             {questions.map((question, index) => (
-              <li key={index} className="text-sm" dir="auto">
+              <li key={index} className="text-sm">
                 {question.text}
                 <span className="block text-xs text-muted-foreground">
                   {ownerLabel[question.owner]}
@@ -173,9 +171,7 @@ export function CurrentWork({
               <h3 className="text-xs font-medium">Done when</h3>
               <ul className="mt-1 list-disc ps-5">
                 {doneWhen.map((check, index) => (
-                  <li key={index} dir="auto">
-                    {check}
-                  </li>
+                  <li key={index}>{check}</li>
                 ))}
               </ul>
             </section>
@@ -185,7 +181,7 @@ export function CurrentWork({
               <h3 className="text-xs font-medium">Settled points</h3>
               <ul className="mt-1 flex flex-col gap-1.5">
                 {settled.map((point, index) => (
-                  <li key={index} dir="auto">
+                  <li key={index}>
                     {point.text}
                     {point.source_ids?.length ? (
                       <span className="ms-1 inline-flex flex-wrap gap-1">
@@ -211,7 +207,7 @@ export function CurrentWork({
               <h3 className="text-xs font-medium">Saved drafts</h3>
               <ul className="mt-1 flex flex-col gap-1">
                 {drafts.map((draft) => (
-                  <li key={draft.product_id} dir="auto">
+                  <li key={draft.product_id}>
                     <a
                       className="text-brand-ink underline-offset-4 hover:underline"
                       href={`#/tenders/${encodeURIComponent(tenderId)}/manager?view=work-product&record=${encodeURIComponent(draft.product_id)}`}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import types
 import typing
 from typing import Literal
@@ -56,9 +57,17 @@ RULES: dict[str, str] = {
         "document needs first; drafts come after approval."
     ),
     "boq_item_proposals": (
-        "Rows from a BOQ supplied as PDF or Word. Use the exact read source ID and excerpt, a stable unique "
-        "row reference, the description, and the quantity and unit as written. Several rows may cite the same "
-        "page. Inspect saved estimate rows first to avoid duplicates. When replacing a row affected by a "
+        "Rows from a BOQ supplied as PDF or Word. Stage them as you go, about 25 rows per propose call "
+        "after each page or two you read; never hold a whole BOQ for one call or write the rows out in your "
+        "thinking first. Use the exact read source ID and excerpt, a stable unique "
+        "row reference, and the quantity and unit as written. A long row's excerpt may be shortened with ... "
+        "between exact pieces, ending with the piece that holds its unit and quantity; the words between are "
+        "taken from the passage. Leave description out when the excerpt reads "
+        "clearly: the row then uses the excerpt without its item number, unit and quantity. Write a "
+        "description only to make a garbled excerpt readable. Several rows may cite the same "
+        "page. Inspect saved estimate rows first to avoid duplicates. After a file is read again, propose its "
+        "rows again from the new reading with the same row references: each replaces the earlier row the "
+        "engineer has not decided yet, so no row IDs are needed. When replacing a row affected by a new file "
         "revision, set replaces_item_id to the exact earlier row ID from the estimate's retired_source_rows; "
         "repeated labels on different pages are separate items. These create unconfirmed rows; they never "
         "confirm a quantity or install a rate, and a calculated quantity never replaces the supplied one."
@@ -70,8 +79,9 @@ RULES: dict[str, str] = {
     ),
     "unit_rate_proposals": (
         "Proposed installed unit rates for BOQ items you read with inspect_estimate in this run, with their "
-        "provenance: read source IDs and any web search URLs from this run. Keep market prices separate from "
-        "installed rates. They never install a rate."
+        "provenance: read source IDs and any web search URLs from this run. Each has either unit_rate or "
+        "components, never both; keep component names short. Keep market prices separate from installed "
+        "rates. They never install a rate."
     ),
     "price_proposals": (
         "Market prices from native web search. Label observed quotations separately from estimates and give "
@@ -110,6 +120,156 @@ RULES: dict[str, str] = {
 }
 
 
+# Field names models commonly use for these records instead of the real ones.
+# Fields a model adds that the record does not keep; dropping them is safe because
+# the same wording stays in detail or the quote.
+_IGNORED: dict[str, set[str]] = {"submission_requirements": {"language", "format", "copies"}}
+
+_ALIASES: dict[str, dict[str, str]] = {
+    "boq_item_proposals": {
+        "item_number": "row_reference",
+        "item_no": "row_reference",
+        "item": "row_reference",
+        "item_ref": "row_reference",
+        "reference": "row_reference",
+        "ref": "row_reference",
+        "row": "row_reference",
+        "row_ref": "row_reference",
+        "excerpt": "source_excerpt",
+        "quote": "source_excerpt",
+        "source_quote": "source_excerpt",
+        "source_text": "source_excerpt",
+        "qty": "quantity",
+        "source": "source_id",
+        "evidence_id": "source_id",
+    },
+}
+
+
+def _decimal_text(value) -> str:
+    from decimal import Decimal
+
+    text = format(Decimal(repr(value)) if isinstance(value, float) else Decimal(value), "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _list_fields(kind: str) -> set[str]:
+    schema = TypeAdapter(_item_type(kind)).json_schema()
+    fields = set()
+    for name, spec in schema.get("properties", {}).items():
+        options = spec.get("anyOf", [spec])
+        if any(option.get("type") == "array" for option in options):
+            fields.add(name)
+    return fields
+
+
+def _string_fields(kind: str) -> set[str]:
+    schema = TypeAdapter(_item_type(kind)).json_schema()
+    fields = set()
+    for name, spec in schema.get("properties", {}).items():
+        options = spec.get("anyOf", [spec])
+        if any(option.get("type") == "string" for option in options):
+            fields.add(name)
+    return fields
+
+
+def normalize_items(kind: str, items: list) -> list:
+    """Accept obvious near-misses before validation: known alias names, a single
+    source ID sent as a list, and numbers sent where the record keeps text."""
+
+    aliases = _ALIASES.get(kind, {})
+    try:
+        strings = _string_fields(kind)
+        names = set(TypeAdapter(_item_type(kind)).json_schema().get("properties", {}))
+    except Exception:  # noqa: BLE001 - validation below reports the real problem
+        return items
+    normalized = []
+    ignored = _IGNORED.get(kind, set())
+    lists = _list_fields(kind)
+    for item in items:
+        if not isinstance(item, dict):
+            normalized.append(item)
+            continue
+        item = {key: value for key, value in item.items() if key not in ignored}
+        fixed: dict = {}
+        for key, value in item.items():
+            name = key
+            if key not in names:
+                if key == "source_ids" and "source_id" in names and "source_ids" not in names:
+                    if isinstance(value, list) and len(value) == 1:
+                        name, value = "source_id", value[0]
+                else:
+                    name = aliases.get(key, key)
+            if name in fixed and name != key:
+                continue
+            if name in strings and isinstance(value, (int, float)) and not isinstance(value, bool):
+                value = _decimal_text(value)
+            if name in lists and isinstance(value, str):
+                # One item written as text where the record keeps a list.
+                value = [value] if value.strip() else []
+            if name == "due_date" and isinstance(value, str) and not _DATE.fullmatch(value.strip()):
+                # A year or "with the offer" is not a date; the wording stays in detail.
+                continue
+            fixed[name] = value
+        normalized.append(fixed)
+    return normalized
+
+
+# Records that name a saved BOQ row by its id.
+_ROW_KINDS = frozenset({"unit_rate_proposals", "quantity_proposals"})
+
+
+def resolve_item_numbers(kind: str, items: list, context) -> list:
+    """Rates and quantities name a BOQ row by its id. Models often send the item
+    number ("1.1") they see instead; accept it when it names exactly one row
+    read in this job, so the check does not send them back to read it again."""
+
+    read = list(getattr(context, "item_bases", {}) or {})
+    if kind not in _ROW_KINDS or not read:
+        return items
+    with context.repo.db.connect() as conn:
+        numbers = {
+            identifier: str(reference or "").strip().casefold()
+            for identifier, reference in conn.execute(
+                "SELECT id, json_extract(data_json,'$.row_reference') FROM boq_items "
+                f"WHERE id IN ({','.join('?' * len(read))})",
+                read,
+            )
+        }
+    resolved = []
+    for item in items:
+        named = item.get("item_id") if isinstance(item, dict) else None
+        if isinstance(named, str) and named not in numbers:
+            matches = [
+                identifier
+                for identifier, number in numbers.items()
+                if number and number == named.strip().casefold()
+            ]
+            if len(matches) == 1:
+                item = {**item, "item_id": matches[0]}
+        resolved.append(item)
+    return resolved
+
+
+def field_guide(kind: str) -> str:
+    """The item fields for a kind, so one correction can fix every field at once."""
+
+    schema = TypeAdapter(_item_type(kind)).json_schema()
+    required = set(schema.get("required", []))
+    parts = []
+    for name, spec in schema.get("properties", {}).items():
+        options = spec.get("anyOf", [spec])
+        kinds = sorted({option.get("type", "object") for option in options} - {"null"})
+        label = "/".join(kinds) or "value"
+        if any("pattern" in option for option in options):
+            label = 'number written as text, e.g. "12.5"'
+        parts.append(f"{name} ({label}{', required' if name in required else ''})")
+    return f"Each {kind} item has exactly these fields: " + "; ".join(parts) + "."
+
+
 def _item_type(kind: str):
     annotation = OfficeProposals.model_fields[kind].annotation
     if isinstance(annotation, types.UnionType) or typing.get_origin(annotation) is typing.Union:
@@ -135,6 +295,7 @@ def proposal_tools() -> list:
             )
         if kind in SINGLE and len(items) > 1:
             raise ToolArgumentError(f"Pass exactly one {kind} item.")
+        items = resolve_item_numbers(kind, normalize_items(kind, items), context)
         staged = dict(context.proposals)
         if kind in SINGLE:
             staged[kind] = items[0] if items else None
@@ -143,7 +304,7 @@ def proposal_tools() -> list:
         try:
             proposals = OfficeProposals.model_validate(staged)
         except ValidationError as error:
-            raise ToolArgumentError(argument_problem(error)) from None
+            raise ToolArgumentError(f"{argument_problem(error)} {field_guide(kind)}") from None
         from .office import validate_proposals
 
         try:

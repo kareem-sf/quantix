@@ -1,26 +1,23 @@
 import { useState } from "react";
-import { ChevronDown, CircleAlert, RotateCcw, Square } from "lucide-react";
+import { AiOrb, orbStateFor } from "@/components/ui/thinking-orb";
+import { CircleAlert, RotateCcw, Square } from "lucide-react";
 import { isActive, useApi, useRefresh, type Schema } from "../api";
 import { ErrorNotice, Status } from "../components/common";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
-import { LiveRunStream } from "./LiveRunStream";
 
 /** One piece of Tender work: its state, reported progress and recovery. */
 export function RunRow({
   run,
   compact = false,
-  focused = false,
 }: {
   run: Schema<"Run">;
   compact?: boolean;
-  focused?: boolean;
 }) {
   const api = useApi(),
     refresh = useRefresh();
-  const [expanded, setExpanded] = useState(focused),
-    [pending, setPending] = useState(false),
+  const [pending, setPending] = useState(false),
     [error, setError] = useState<unknown>(null);
   const active = isActive(run.status);
 
@@ -48,10 +45,7 @@ export function RunRow({
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           {active ? (
-            <span
-              aria-hidden="true"
-              className="size-2 shrink-0 animate-pulse rounded-full bg-sky-500"
-            />
+            <AiOrb state={orbStateFor(run.detail || runLabel(run.kind))} />
           ) : null}
           <strong className="truncate font-medium">{runLabel(run.kind)}</strong>
         </div>
@@ -101,32 +95,8 @@ export function RunRow({
             Resume
           </Button>
         ) : null}
-        {!compact ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground"
-            onClick={() => setExpanded((value) => !value)}
-            aria-expanded={expanded}
-          >
-            <ChevronDown
-              data-icon="inline-start"
-              className={cn("transition-transform", expanded && "rotate-180")}
-            />
-            Run details
-          </Button>
-        ) : null}
       </div>
       <ErrorNotice error={error} />
-      {expanded ? (
-        <LiveRunStream
-          tenderId={run.tender_id}
-          runId={run.id}
-          status={run.status}
-          startedAt={run.created_at}
-        />
-      ) : null}
     </article>
   );
 }

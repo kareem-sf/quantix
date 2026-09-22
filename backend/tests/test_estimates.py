@@ -114,6 +114,32 @@ def test_refresh_infers_actual_values_with_reversed_headers_and_preserves_source
     assert repo.get_evidence(tid, item["source_id"])["metadata"]["cells"][3]["value"] == 12.5
 
 
+def test_spreadsheet_rows_keep_their_item_numbers_and_refresh_backfills_them(setup):
+    repo, tid, service = setup
+    item = service.refresh(tid)["items"][0]
+    assert item["row_reference"] == "C01"
+
+    # Rows saved before item numbers were read get them on the next refresh.
+    with repo.db.connect(write=True) as conn:
+        conn.execute(
+            "UPDATE boq_items SET data_json=json_remove(data_json,'$.row_reference') WHERE id=?",
+            (item["id"],),
+        )
+    assert service.view(tid)["items"][0].get("row_reference") is None
+    refreshed = service.refresh(tid)["items"][0]
+    assert (refreshed["id"], refreshed["row_reference"]) == (item["id"], "C01")
+
+
+def test_confirmed_spreadsheet_row_drops_the_confirm_reminder(setup):
+    repo, tid, service = setup
+    item = service.refresh(tid)["items"][0]
+    assert any(issue.startswith("Confirm this inferred") for issue in item["issues"])
+    service.update_item(tid, item["id"], approval(confirm_source=True))
+    confirmed = service.view(tid)["items"][0]
+    assert confirmed["confirmed"] is True
+    assert not any(issue.startswith("Confirm this inferred") for issue in confirmed["issues"])
+
+
 def test_decimal_rate_build_up_and_explicit_vat(setup):
     repo, tid, service = setup
     item = service.refresh(tid)["items"][0]
@@ -336,3 +362,29 @@ def test_broken_boq_quantity_can_use_explicitly_approved_measurement_for_pricing
     assert priced["issues"]
     assert priced["line_ex_vat"] == "60.60"
     assert service.view(tid)["complete"] is True
+
+
+def test_renaming_the_tender_does_not_make_the_estimate_stale(setup):
+    repo, tid, service = setup
+    service.refresh(tid)
+    assert service.view(tid)["refresh_required"] is False
+    repo.rename_tender(tid, "Concrete Foundations Tender", source="ai")
+    assert service.view(tid)["refresh_required"] is False
+
+
+def test_the_manager_sees_saved_pricing_whatever_its_notes_say(setup):
+    import json
+
+    from quantix.office import _prompt
+    from quantix.office_tools import OfficeContext
+
+    repo, tid, service = setup
+    item = service.refresh(tid)["items"][0]
+    service.update_item(tid, item["id"], rate())
+    run = repo.create_run(tid, "manager", "Where does the tender stand?")
+
+    now = json.loads(_prompt(OfficeContext(repo, tid, run["id"]), "Status?"))["tender_records_now"]
+
+    assert now["boq_rows"] == {"accepted": 1, "waiting_for_engineer": 0, "priced": 1}
+    assert now["estimate_totals"][0]["currency"] == "EGP"
+    assert now["estimate_totals"][0]["total_ex_vat"] is not None

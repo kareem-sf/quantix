@@ -230,11 +230,11 @@ it("keeps supporting sources in their selected tender and source buttons do not 
   );
   await fill(user, "Supporting sources", "scope");
   await user.click(
-    await screen.findByRole("button", { name: /source-a.docx · paragraph:2/ }),
+    await screen.findByRole("button", { name: /source-a.docx · paragraph 2/ }),
   );
   await user.click(
     await screen.findByRole("button", {
-      name: "source-a.docx · paragraph:2",
+      name: "source-a.docx · paragraph 2",
     }),
   );
   const sourceDialog = await screen.findByRole("dialog", {
@@ -256,7 +256,7 @@ it("keeps supporting sources in their selected tender and source buttons do not 
   );
   await fill(user, "Supporting sources", "scope");
   await user.click(
-    await screen.findByRole("button", { name: /source-b.docx · paragraph:2/ }),
+    await screen.findByRole("button", { name: /source-b.docx · paragraph 2/ }),
   );
   await user.click(
     screen.getByRole("button", { name: "Approve and save note" }),

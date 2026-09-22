@@ -13,7 +13,6 @@ import { tenderPath, useApi, type Schema } from "../api";
 import { ErrorNotice, Loading, Modal } from "../components/common";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { CopyButton } from "@/components/ui/copy-button";
 import { MicroButton } from "@/components/ui/micro-button";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -31,6 +30,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { rtlDir } from "@/lib/text-direction";
+import { locatorLabel } from "@/lib/locator";
 
 export type SourceSelection =
   | ({ sourceId: string } & SourceContext)
@@ -105,9 +106,9 @@ function Citation({
       title={evidence.data?.relative_path}
     >
       <FileText className="size-3" aria-hidden="true" />
-      <span className="truncate" dir="auto">
+      <span className="truncate">
         {evidence.data
-          ? `${evidence.data.artifact_name} · ${evidence.data.locator}`
+          ? `${evidence.data.artifact_name} · ${locatorLabel(evidence.data.locator)}`
           : evidence.isError
             ? "Source unavailable"
             : "Source…"}
@@ -382,9 +383,7 @@ export function SourceDrawer({
   const sourceBody = (
     <div className="flex flex-col gap-4">
       {sourcePath ? (
-        <p className="text-xs break-all text-muted-foreground" dir="auto">
-          {sourcePath}
-        </p>
+        <p className="text-xs break-all text-muted-foreground">{sourcePath}</p>
       ) : null}
       {artifact ? (
         <div
@@ -408,18 +407,6 @@ export function SourceDrawer({
             <Badge variant="secondary" className="font-mono font-normal">
               {context.cellRange}
             </Badge>
-          ) : null}
-          {context.contentHash ? (
-            <>
-              <Badge
-                variant="outline"
-                className="font-mono font-normal text-muted-foreground"
-                title={context.contentHash}
-              >
-                Hash {context.contentHash.slice(0, 12)}…
-              </Badge>
-              <CopyButton value={context.contentHash} />
-            </>
           ) : null}
         </div>
       ) : null}
@@ -658,9 +645,7 @@ export function SourceDrawer({
             >
               <FileText className="size-4" />
             </span>
-            <h2 className="truncate text-sm font-semibold" dir="auto">
-              {title}
-            </h2>
+            <h2 className="truncate text-sm font-semibold">{title}</h2>
           </div>
           <Button
             type="button"
@@ -796,7 +781,11 @@ function SourceText({
   highlighted?: boolean;
 }) {
   const cells = evidence.metadata?.cells;
-  const location = [evidence.locator, evidence.sheet, evidence.cell_range]
+  const location = [
+    locatorLabel(evidence.locator),
+    evidence.sheet,
+    evidence.cell_range,
+  ]
     .filter(Boolean)
     .filter((part, index, all) => all.indexOf(part) === index)
     .join(" · ");
@@ -812,8 +801,8 @@ function SourceText({
         {location || "Source passage"}
       </h4>
       <pre
-        className="font-sans text-sm leading-relaxed break-words whitespace-pre-wrap"
-        dir="auto"
+        dir={rtlDir(evidence.text)}
+        className="bidi-text font-sans text-sm leading-relaxed break-words whitespace-pre-wrap"
       >
         {evidence.text || "No extracted text is available for this passage."}
       </pre>

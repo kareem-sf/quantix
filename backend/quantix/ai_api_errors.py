@@ -29,8 +29,10 @@ class DirectBudgetError(DirectAPIError):
 _STATUS_DETAILS = {
     400: "The provider rejected the request settings. Check the model and supported options.",
     401: "The provider rejected the API key. Check the selected credentials.",
+    402: "The AI account has run out of credit. Add credit with the provider, then continue.",
     403: "The provider denied this request. Check API permissions and model access.",
     404: "The provider could not find the endpoint or model. Check both values exactly.",
+    413: "The request was too large for the provider. Continue to pick up with a smaller request.",
     429: "The provider rate or usage limit was reached. Wait or review the provider account limits.",
 }
 
@@ -62,13 +64,46 @@ def rejected_before_processing(error: BaseException | None) -> bool:
     )
 
 
-def provider_failure(error: BaseException) -> DirectProviderError:
+def _provider_message(error: BaseException) -> str:
+    """The provider's own short explanation, for requests that carry no Tender data.
+
+    Setup work sends a fixed sample and no document, so the provider can only be
+    describing its own API. That sentence is usually the one thing that says how
+    to fix the connection ("use /v1/responses", "add credit").
+    """
+
+    body = getattr(error, "body", None)
+    message = body.get("message") if isinstance(body, dict) else None
+    if isinstance(message, dict):
+        message = message.get("message")
+    if not isinstance(message, str):
+        return ""
+    text = " ".join(message.split())
+    if len(text) > 300:
+        text = text[:297].rstrip() + "…"
+    return text
+
+
+def provider_failure(error: BaseException, *, reveal: bool = False) -> DirectProviderError:
     """Return a useful provider error without retaining provider data.
 
     This intentionally does not inspect or interpolate ``str(error)``.  SDK
     exception text commonly includes the raw response body and sometimes the
-    submitted request.
+    submitted request.  ``reveal`` is for setup only, where the request is a
+    fixed sample with no Tender content and the provider's own sentence is safe
+    to pass on.
     """
+
+    # Streaming wraps the provider's own error in exception groups; classify the
+    # error inside, or its status and kind are lost.
+    said = _provider_message(error) if reveal else ""
+    seen: set[int] = set()
+    while isinstance(getattr(error, "exceptions", None), (list, tuple)) and id(error) not in seen:
+        seen.add(id(error))
+        members = [member for member in error.exceptions if isinstance(member, BaseException)]
+        if not members:
+            break
+        error = members[0]
 
     status = getattr(error, "status_code", None)
     if not isinstance(status, int):
@@ -77,6 +112,15 @@ def provider_failure(error: BaseException) -> DirectProviderError:
     if not isinstance(status, int):
         status = getattr(error, "code", None)
     safe_status = status if isinstance(status, int) and 100 <= status <= 599 else None
+    said = said or (_provider_message(error) if reveal else "")
+
+    def with_message(failure: DirectProviderError) -> DirectProviderError:
+        if not said:
+            return failure
+        detailed = DirectProviderError(f"{failure} The provider said: {said}")
+        detailed.__dict__.update(failure.__dict__)
+        return detailed
+
     error_name = type(error).__name__.lower()
     if isinstance(error, TimeoutError) or error_name in {
         "apitimeouterror",
@@ -87,6 +131,8 @@ def provider_failure(error: BaseException) -> DirectProviderError:
         failure = DirectProviderError(
             "The provider request timed out. Check the endpoint, model and provider limits."
         )
+        # A stalled reply is resent like a broken stream before the job stops.
+        failure.timed_out = True
         if safe_status is not None:
             failure.status_code = safe_status
         return failure
@@ -105,12 +151,56 @@ def provider_failure(error: BaseException) -> DirectProviderError:
         return failure
     if safe_status is not None:
         failure = DirectProviderError(_status_detail(safe_status))
+        # A provider-side fault is often gone a moment later, so the step is resent.
+        failure.transient = safe_status >= 500
         failure.status_code = safe_status
         failure.rejected_before_processing = safe_status in REJECTED_BEFORE_PROCESSING
+        return with_message(failure)
+    if error_name == "apierror":
+        # The provider sent an error event after the reply had started
+        # streaming. Keep only its short error code, never its message body.
+        failure = DirectProviderError(
+            "The provider stopped its reply with an error part-way through. This is usually "
+            "temporary; press Resume to try again."
+        )
+        failure.provider_code = _provider_code(
+            getattr(error, "body", None), getattr(error, "code", None)
+        )
         return failure
-    return DirectProviderError(
-        "The provider rejected the request. Check the credentials, endpoint, model and permissions."
+    return with_message(
+        DirectProviderError(
+            "The provider rejected the request. Check the credentials, endpoint, model and permissions."
+        )
     )
+
+
+def _provider_code(body, code) -> str | None:
+    values = [code]
+    if isinstance(body, dict):
+        values += [body.get("code"), body.get("type"), body.get("status")]
+    for value in values:
+        text = str(value) if isinstance(value, (str, int)) else ""
+        if text and len(text) <= 64 and all(c.isalnum() or c in "_-." for c in text):
+            return text
+    return None
+
+
+def provider_code(error: BaseException | None) -> str | None:
+    """The first sanitized provider error code in an exception chain."""
+
+    seen: set[int] = set()
+    pending = [error]
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        code = getattr(current, "provider_code", None)
+        if code:
+            return code
+        pending.extend(getattr(current, "exceptions", None) or ())
+        pending.extend((current.__cause__, current.__context__))
+    return None
 
 
 def preserve_control_failure(error: BaseException) -> BaseException | None:

@@ -200,6 +200,30 @@ function renderWorkspace(
       if (path.endsWith("/team"))
         return Response.json({ staff: [], assignments: [] });
       if (path.endsWith("/work-brief")) return Response.json({ brief: null });
+      if (path.endsWith("/waiting"))
+        return Response.json({ items: [], total: 0 });
+      if (path.endsWith("/document-groups"))
+        return Response.json({
+          grouped: true,
+          total: 1,
+          problems: 0,
+          groups: [
+            {
+              name: "Drawings",
+              documents: [
+                {
+                  artifact_id: artifact.id,
+                  name: artifact.name,
+                  label: "Drainage layout",
+                  pages: 4,
+                  kind: "pdf",
+                  problem: "",
+                  moved_by_engineer: false,
+                },
+              ],
+            },
+          ],
+        });
       if (path.endsWith("/evidence/source-1"))
         return Response.json({
           id: "source-1",
@@ -256,7 +280,7 @@ it("opens an addressed calculation in Reviews and preserves the Manager draft", 
   );
 });
 
-it("starts with the workspace launcher and opens the team without losing the Manager draft", async () => {
+it("starts on the plan and opens the team without losing the Manager draft", async () => {
   const user = userEvent.setup();
   renderWorkspace();
   expect(
@@ -265,7 +289,7 @@ it("starts with the workspace launcher and opens the team without losing the Man
   expect(
     screen.queryByRole("region", { name: "Tender team" }),
   ).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: /^Team/ }));
+  await user.click(screen.getByRole("tab", { name: "Team" }));
   expect(await screen.findByText(/No staff yet/)).toBeInTheDocument();
   expect(
     screen.queryByRole("region", { name: "Current document" }),
@@ -278,7 +302,7 @@ it("starts with the workspace launcher and opens the team without losing the Man
 it("opens the document list", async () => {
   const user = userEvent.setup();
   renderWorkspace();
-  await user.click(screen.getByRole("button", { name: /^Documents/ }));
+  await user.click(screen.getByRole("tab", { name: "Documents" }));
   expect(
     screen.getByRole("region", { name: "Workspace documents" }),
   ).toHaveTextContent("Drainage plan.pdf");
@@ -306,26 +330,6 @@ it("opens the requested source ahead of its parent result on a collapsed deep li
   );
 });
 
-it("returns to and focuses the Manager when requesting plan changes from an expanded workspace", async () => {
-  const user = userEvent.setup();
-  renderWorkspace({ recordView: "plan-review", recordId: "plan-1" });
-  await user.click(screen.getByRole("button", { name: "Expand workspace" }));
-  await user.click(
-    await screen.findByRole("button", { name: "Request changes" }),
-  );
-  expect(
-    screen.getByRole("textbox", { name: "Message to Tender Manager" }),
-  ).toBeVisible();
-  expect(
-    screen.getByRole("button", { name: "Show workspace" }),
-  ).toBeInTheDocument();
-  await waitFor(() =>
-    expect(
-      screen.getByRole("textbox", { name: "Message to Tender Manager" }),
-    ).toHaveFocus(),
-  );
-});
-
 it("clears visited documents and transient Manager state when changing Tender", async () => {
   const user = userEvent.setup();
   const view = renderWorkspace();
@@ -333,7 +337,7 @@ it("clears visited documents and transient Manager state when changing Tender", 
     screen.getByRole("textbox", { name: "Message to Tender Manager" }),
     " in Tender one",
   );
-  await user.click(screen.getByRole("button", { name: /^Documents/ }));
+  await user.click(screen.getByRole("tab", { name: "Documents" }));
   expect(screen.getByRole("tab", { name: "Documents" })).toBeInTheDocument();
   view.rerenderWorkspace({
     overview: {
@@ -342,9 +346,11 @@ it("clears visited documents and transient Manager state when changing Tender", 
     },
     artifacts: [],
   });
-  expect(
-    screen.queryByRole("tab", { name: "Documents" }),
-  ).not.toBeInTheDocument();
+  // A different Tender starts again on its own plan.
+  expect(screen.getByRole("tab", { name: "Plan" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   expect(
     screen.getByRole("textbox", { name: "Message to Tender Manager" }),
   ).toHaveValue("Keep this instruction");

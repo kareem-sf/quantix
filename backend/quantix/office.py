@@ -48,12 +48,35 @@ Evidence
   was fully read. When searches keep returning passages you have seen, read the document or report the gap.
 - Show the arithmetic for quantities and prices and re-read every number from its source. BOQ quantities are
   the default; takeoffs and quantity changes are proposals.
+- Long record work (a whole BOQ, many takeoff lines or requirements) is staged with propose in batches as you
+  read, never saved up for the end. Page images are only for checking what text cannot show.
+- What is saved is what tender_records_now and the records say now; trust it over your brief and earlier
+  messages, including for progress questions. Records staged in an earlier job listed in
+  earlier_jobs_that_did_not_finish were never saved, even if your plan or brief says they were staged: redo
+  that work, and never tell the engineer something is waiting for them unless the records show it.
+
+Working notes
+- The engineer watches your work live. Before each set of tool calls, write one or two short first-person
+  sentences in plain English saying what you are about to do and why, e.g. "I'll read the visit schedule for
+  the date, then check the clarifications in case it moved." Say what you found when it changes your next step.
+  No note is needed before the final answer, and notes are never the answer.
 
 Answer
 - A greeting or a progress question gets a short reply without tools.
+- The engineer mainly talks to you and you run the whole job with the team. When a decision or answer is
+  truly the engineer's, end your turn with question: one short question and 2 to 4 choices, each a complete
+  answer they can pick without typing, the best one first with recommended=true and a short detail saying
+  why or what it costs. Do not also ask it in summary. Decide yourself whatever the documents settle.
+- Records you propose are listed under your reply for the engineer to accept or reject there. Never send the
+  engineer to review screens or pages.
+- Speak to the engineer directly. In summary, notes, questions and your brief, call them "you" and never "the
+  engineer" ("You approved the baseline", not "The engineer has approved the baseline").
 - summary is what the engineer reads: plain construction-engineering language in the engineer's language, with
-  unknowns stated. findings are cited requirements, risks, observations and exclusions, plus questions and
-  assumptions.
+  unknowns stated. Name documents, pages and clauses. Never mention evidence items or IDs, record IDs,
+  versions, extraction, indexing, OCR, hashes, tools, workers, providers or models. findings are cited requirements, risks, observations and exclusions, plus questions and
+  assumptions. Each one is something the engineer must act on or know about the tender itself; progress
+  ("pages 8-9 loaded", "half the page staged") and notes about how a file was read go in summary, never in
+  findings.
 - Records the engineer reviews later (a work plan, takeoff lines, BOQ rows, quantities, unit rates, market
   prices, web findings, quote drafts, submission requirements, project map items, a programme, draft
   documents) are made with propose. Call proposal_format first for that kind's fields and rules.
@@ -69,13 +92,16 @@ Quantity takeoff
 Team
 - For work that needs a specialist or parallel effort: list_team, hire_staff when nobody fits (profiles come
   from this tender's needs; there is no starter roster), then assign_work with a brief a professional can act on
-  alone. Assigned work runs after your turn and comes back next turn in team_updates; answer staff questions
-  with answer_staff. A colleague's findings are not your reading. Do small work yourself, and ask the engineer
+  alone. Assigned work starts only when your turn ends and shares this job's remaining AI steps, so after handing
+  work over, stage what you have and end the turn promptly; work handed over in a turn that runs out of steps
+  never starts. Results come back next turn in team_updates; answer staff questions with answer_staff. A colleague's findings are not your reading. Do small work yourself, and ask the engineer
   when a judgment is theirs.
 
 Progress and records
-- manager_work_brief is your saved progress. For work spanning several steps or turns keep it current with
-  save_work_brief when a unit of work finishes or the approach changes, not for a single question. Save long
+- manager_work_brief is your live plan, shown to the engineer beside the chat. For any real engineering job
+  (more than answering one question), save_work_brief before you start work, with the steps you will take and
+  who owns each (you, or a staff member by name). Update each step's state and note as the work moves: what
+  was found, or why it is blocked. Ask the engineer with question in your answer, not in the brief. Save long
   tables, comparisons and calculation sheets with save_work_product and list their IDs in the brief. Check the
   brief and list_work_products before repeating work.
 - inspect_tender_records holds older findings, decisions, tasks and messages. list_reusable_notes holds approved
@@ -86,6 +112,79 @@ Progress and records
 
 Never expose credentials or file-system paths.
 """
+
+
+def _unfinished_jobs(context: OfficeContext) -> list[dict]:
+    """Recent Manager jobs that stopped before saving, newest first.
+
+    Whatever the plan or brief says they did, records they staged were not saved.
+    Without this the Manager trusts its own notes; a later job may have redone the
+    work, which tender_records_now and the records show.
+    """
+
+    unfinished = []
+    with context.repo.db.connect() as conn:
+        for row in conn.execute(
+            "SELECT id,status,error,instruction,created_at FROM runs WHERE tender_id=? AND kind='manager' "
+            "AND id<>? ORDER BY created_at DESC LIMIT 10",
+            (context.tender_id, context.run_id),
+        ):
+            if row["status"] in {"failed", "interrupted", "cancelled"} and len(unfinished) < 4:
+                unfinished.append(
+                    {
+                        "request": safe_text(row["instruction"], 300),
+                        "outcome": row["status"],
+                        "started": row["created_at"],
+                        "reason": safe_text(row["error"] or "", 300),
+                        "staged_records_saved": False,
+                    }
+                )
+    return unfinished
+
+
+def _records_now(context: OfficeContext) -> dict:
+    """What is saved now: pricing, requirements, drafts and exports, whatever the
+    brief, earlier messages or an unfinished job say."""
+
+    from .estimates import EstimateService
+    from .outputs import OutputService
+    from .submissions import SubmissionService
+    from .tender_requirements import RequirementService
+
+    repo, tender_id = context.repo, context.tender_id
+    estimates = EstimateService(repo)
+    estimate = estimates.view(tender_id)
+    items = estimate["items"]
+    requirements = RequirementService(repo).list(tender_id, limit=100)
+    return {
+        "boq_rows": {
+            "accepted": sum(bool(item.get("confirmed")) for item in items),
+            "waiting_for_engineer": sum(not item.get("confirmed") for item in items),
+            "priced": sum(item.get("line_ex_vat") is not None for item in items),
+        },
+        "rate_proposals_waiting_for_engineer": sum(
+            proposal.get("status") == "proposed"
+            for proposal in estimates.list_rate_proposals(tender_id)
+        ),
+        "estimate_totals": [
+            {key: total.get(key) for key in ("currency", "total_ex_vat", "total_inc_vat")}
+            for total in estimate["totals"]
+        ],
+        "estimate_complete": estimate["complete"],
+        "estimate_blocking_reasons": estimate["blocking_reasons"],
+        "submission_requirements": [
+            {
+                "title": safe_text(row.get("title"), 200),
+                "approval": row.get("status"),
+                "review": row.get("review_status"),
+            }
+            for row in requirements[:30]
+        ],
+        "draft_documents": [
+            safe_text(output.get("filename"), 200) for output in OutputService(repo).list(tender_id)
+        ][:20],
+        "approved_local_exports": len(SubmissionService(repo).list(tender_id)),
+    }
 
 
 def _prompt(
@@ -123,6 +222,9 @@ def _prompt(
         "registered_and_extracted_coverage": overview.get("coverage", {}),
         "areas": [safe_text(area, 200) for area in overview.get("areas", [])][:100],
         "boq_count": overview.get("boq_count", 0),
+        # Saved records as they are now, whatever earlier notes say was staged.
+        "tender_records_now": _records_now(context),
+        "earlier_jobs_that_did_not_finish": _unfinished_jobs(context),
         "recent_findings": [
             {
                 **{key: safe_text(row.get(key), 300) for key in ("id", "title", "kind", "state")},
@@ -146,7 +248,21 @@ def _prompt(
         if plan
         else None,
         "prior_conversation_not_source_evidence": [
-            {"role": row["role"], "content": safe_text(row["content"], 2000)} for row in messages
+            {
+                "role": row["role"],
+                "content": safe_text(row["content"], 2000),
+                **(
+                    {
+                        "asked_engineer": safe_text(row["question"]["text"], 300),
+                        "suggested_answers": [
+                            safe_text(choice["label"], 120) for choice in row["question"]["choices"]
+                        ],
+                    }
+                    if row.get("question")
+                    else {}
+                ),
+            }
+            for row in messages
         ],
         "engineer_request": engineer_request,
         "standing_engineer_preferences": preferences,
@@ -346,6 +462,13 @@ def publish_prepared(repo: "Repository", prepared: PreparedOfficeResult) -> dict
         source_ids=output.source_ids,
         run_id=context.run_id,
     )
+    if output.question is not None:
+        context.repo.event(
+            context.run_id,
+            "engineer_question",
+            output.question.text,
+            output.question.model_dump(mode="json"),
+        )
     context.repo.event(
         context.run_id,
         "analysis_proposed",
@@ -389,6 +512,97 @@ def publish_prepared(repo: "Repository", prepared: PreparedOfficeResult) -> dict
 
 
 MAX_MANAGER_TURNS = 6
+
+
+_STAGED_WORDS = {
+    "plan": "a work plan",
+    "takeoff": "takeoff lines",
+    "boq_item_proposals": "BOQ rows",
+    "quantity_proposals": "quantities",
+    "unit_rate_proposals": "rates",
+    "price_proposals": "market prices",
+    "web_findings": "web findings",
+    "quote_drafts": "supplier quote requests",
+    "submission_requirements": "submission requirements",
+    "project_map_nodes": "project map items",
+    "programme_proposal": "a programme",
+    "draft_documents": "draft documents",
+}
+
+
+def _stop_in_words(reason: str) -> str:
+    text = reason.lower()
+    if "ai steps allowed" in text or "request allowance" in text or "work limit" in text:
+        return "it used all the AI steps allowed for one job"
+    if "output limit" in text or "token limit" in text:
+        return "a reply was too long for the AI's output limit"
+    if "allowance" in text or "budget" in text:
+        return "the spending limit for this tender was reached"
+    if "timed out" in text or "provider" in text:
+        return "the AI service had a problem"
+    return "the AI could not finish a step"
+
+
+def salvage_staged(context: OfficeContext, research: ResearchRecord, reason: str):
+    """Keep the records a job had already staged when it stops part-way.
+
+    The engineer gets them for review under a short reply that says the job
+    stopped, with the choice to carry on. Without staged records nothing is kept.
+    """
+
+    staged = {kind: value for kind, value in context.proposals.items() if value}
+    if not staged:
+        return None
+    # Work the engineer stopped keeps nothing new; only an unplanned stop is saved.
+    if context.repo.get_run(context.run_id)["status"] not in {"queued", "running"}:
+        return None
+    counts = ", ".join(
+        _STAGED_WORDS.get(kind, kind.replace("_", " "))
+        if not isinstance(value, list)
+        else f"{len(value)} {_STAGED_WORDS.get(kind, kind.replace('_', ' '))}"
+        for kind, value in staged.items()
+    )
+    answer = ManagerAnswer(
+        summary=(
+            f"I stopped before finishing this job because {_stop_in_words(reason)}. "
+            f"What I had prepared so far is saved below for your review: {counts}."
+        ),
+        question={
+            "text": "Shall I carry on from where I stopped?",
+            "choices": [
+                {
+                    "label": "Carry on from where you stopped",
+                    "detail": "Keep what is saved and do the rest of the job.",
+                    "recommended": True,
+                },
+                {
+                    "label": "Stop here for now",
+                    "detail": "Nothing more runs until you ask.",
+                },
+            ],
+        },
+    )
+    try:
+        output = compose(answer, context)
+        # Only the staged records are checked: a job cut short cannot also be
+        # asked to have finished its working brief.
+        validate_proposals(output, context, research.sources)
+        research.validate(output)
+    except (KeyError, ValueError) as error:
+        context.repo.event(
+            context.run_id,
+            "partial_result_not_saved",
+            "The job stopped part-way and its staged records could not be kept.",
+            {"kinds": sorted(staged), "reason": str(error)[:500]},
+        )
+        return None
+    context.repo.event(
+        context.run_id,
+        "partial_result_saved",
+        "The job stopped part-way; its staged records were kept for review.",
+        {"kinds": sorted(staged)},
+    )
+    return output
 
 
 async def run_manager(repo, tender_id, run_id, instruction):
@@ -472,12 +686,29 @@ async def run_manager(repo, tender_id, run_id, instruction):
     repo.event(run_id, "analysis_started", "Tender evidence analysis started.")
     team_updates: list[dict] = []
     for _ in range(MAX_MANAGER_TURNS):
-        output = await turn(instruction, team_updates)
+        try:
+            output = await turn(instruction, team_updates)
+        except ValueError as error:
+            # A job that stops part-way keeps the records it had already staged.
+            salvaged = salvage_staged(context, research, str(error))
+            if salvaged is None:
+                raise
+            output = salvaged
+            break
         finished = await run_queued(repo, tender_id, run_id)
         if not finished:
             break
         usage_parts.extend(assignment.usage for assignment in finished)
         team_updates = [outcome_view(repo, assignment) for assignment in finished]
+    # Work handed over in a turn that ended the job never runs; say so instead of
+    # leaving it queued for good.
+    # A colleague waiting on a question keeps waiting for the Manager's next job.
+    TeamService(repo).cancel_run(
+        tender_id,
+        run_id,
+        "Not started: the Tender Manager's job ended before this work ran.",
+        statuses=("queued",),
+    )
     usage = {
         key: sum(part.get(key, 0) or 0 for part in usage_parts)
         for key in (

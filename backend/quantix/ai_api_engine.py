@@ -23,6 +23,7 @@ from .ai_api_errors import (
     DirectBudgetError,
     DirectProviderError,
     preserve_control_failure,
+    provider_code,
     provider_failure,
 )
 from .ai_api_provider import model_for_route, supplied_summary_supported
@@ -36,9 +37,17 @@ from .run_activity import (
     register_activity_secrets,
 )
 
+
+def _setup_only(connection: dict) -> bool:
+    """A setup check sends a fixed sample, so the provider's own words are safe."""
+
+    return bool(connection.get("_setup_check"))
+
+
 CHECK_INPUT_ALLOWANCE_BYTES = 16384
 CHECK_MAX_OUTPUT_TOKENS = 1024
-CHECK_MAX_REQUESTS = 2
+# Two requests to call the check tool and answer, and one to correct the answer.
+CHECK_MAX_REQUESTS = 3
 CHECK_DEADLINE_SECONDS = 90
 # Corrections a model may make to a proposal that failed the publication checks.
 OUTPUT_CORRECTIONS = 2
@@ -47,6 +56,14 @@ OUTPUT_CORRECTIONS = 2
 HISTORY_TOOL_CHARS = 60000
 HISTORY_KEEP_RECENT_STEPS = 2
 TRIMMED_NOTE = "[Earlier tool output removed to keep requests small.]"
+# Page images are the heaviest part of a request, and every step re-sends them.
+# Only the newest few are kept; older ones become a note the model can act on.
+HISTORY_KEEP_IMAGES = 3
+HISTORY_IMAGE_BYTES = 3_000_000
+IMAGE_TRIMMED_NOTE = (
+    "[A page image viewed earlier was removed to keep requests small. "
+    "Look at the page again if you still need it.]"
+)
 _EVIDENCE_ID = re.compile(r'"id":\s*"([0-9a-f]{32})"')
 
 try:
@@ -86,6 +103,49 @@ def _source_urls(value, destination: dict[str, dict]) -> None:
             _source_urls(child, destination)
 
 
+def trim_history_images(messages: list) -> list:
+    """Keep only the newest page images in the history sent with each request.
+
+    A run that looks at many drawing or BOQ pages would otherwise grow past the
+    provider's request size limit and fail part-way through.
+    """
+
+    from pydantic_ai.messages import BinaryContent, ModelRequest, UserPromptPart
+
+    kept = 0
+    kept_bytes = 0
+    replaced: dict[int, list] = {}
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if not isinstance(message, ModelRequest):
+            continue
+        for position, part in enumerate(message.parts):
+            if not isinstance(part, UserPromptPart) or isinstance(part.content, str):
+                continue
+            content = list(part.content)
+            changed = False
+            for offset, item in enumerate(content):
+                if not (isinstance(item, BinaryContent) and item.is_image):
+                    continue
+                size = len(item.data)
+                if kept < HISTORY_KEEP_IMAGES and kept_bytes + size <= HISTORY_IMAGE_BYTES:
+                    kept += 1
+                    kept_bytes += size
+                    continue
+                content[offset] = IMAGE_TRIMMED_NOTE
+                changed = True
+            if changed:
+                replaced.setdefault(index, list(message.parts))[position] = dataclasses.replace(
+                    part, content=content
+                )
+    if not replaced:
+        return messages
+    return [
+        dataclasses.replace(message, parts=replaced[index]) if index in replaced else message
+        for index, message in enumerate(messages)
+    ]
+
+
 def trim_tool_history(messages: list, context=None) -> list:
     """Replace older tool output with a note once the history grows large.
 
@@ -96,6 +156,7 @@ def trim_tool_history(messages: list, context=None) -> list:
 
     from pydantic_ai.messages import ModelRequest, ToolReturnPart
 
+    messages = trim_history_images(messages)
     returns = [
         (index, position)
         for index, message in enumerate(messages)
@@ -135,6 +196,112 @@ def trim_tool_history(messages: list, context=None) -> list:
         dataclasses.replace(message, parts=replaced[index]) if index in replaced else message
         for index, message in enumerate(messages)
     ]
+
+
+WRAP_UP_NOTE = "Quantix request allowance:"
+WRAP_UP_MARGIN = 4
+# Resends of a reply the provider broke off part-way through.
+STREAM_BREAK_RETRIES = 2
+OUTPUT_LIMIT_NOTE = (
+    "Quantix: your last reply ran past its output limit before it finished, so it was discarded. "
+    "Keep your thinking short, stage at most 10 records per propose call, and carry on from where you were."
+)
+
+
+def model_failure_kind(error: BaseException) -> str:
+    """A short, content-free name for why the model run gave up."""
+
+    from pydantic_ai.exceptions import IncompleteToolCall, UnexpectedModelBehavior
+
+    pending, seen = [error], set()
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, IncompleteToolCall):
+            return "output_limit"
+        if isinstance(current, UnexpectedModelBehavior):
+            text = str(current)
+            if "token limit" in text:
+                return "output_limit"
+            if "exceeded max retries count" in text:
+                return "tool_retries"
+            if "output retries" in text:
+                return "output_retries"
+            return "model_behavior"
+        pending.extend(getattr(current, "exceptions", None) or ())
+        pending.extend([current.__cause__, current.__context__])
+    return "other"
+
+
+def with_output_limit_note(history: list) -> list:
+    """The interrupted request again, with a note that the reply must be shorter."""
+
+    from pydantic_ai.messages import UserPromptPart
+
+    last = history[-1]
+    return [
+        *history[:-1],
+        dataclasses.replace(last, parts=[*last.parts, UserPromptPart(OUTPUT_LIMIT_NOTE)]),
+    ]
+
+
+# Requests kept for the final answer: tools are withheld once this few remain.
+FINAL_ANSWER_REQUESTS = 2
+
+
+def warn_request_allowance(messages: list, max_requests: int) -> list:
+    """Tell the model to finish before the run's request allowance runs out.
+
+    Without this the run stops mid-work at the limit and nothing is published.
+    """
+
+    from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart
+
+    start = max(
+        (
+            index
+            for index, message in enumerate(messages)
+            if isinstance(message, ModelRequest)
+            and any(
+                isinstance(part, UserPromptPart) and not str(part.content).startswith(WRAP_UP_NOTE)
+                for part in message.parts
+            )
+        ),
+        default=0,
+    )
+    used = sum(isinstance(message, ModelResponse) for message in messages[start:])
+    left = max_requests - used
+    if left > WRAP_UP_MARGIN or not messages or not isinstance(messages[-1], ModelRequest):
+        return messages
+    note = (
+        f"{WRAP_UP_NOTE} {left} AI request(s) remain in this run. Stop exploring now: make no "
+        "further reads or searches, and give your final answer from what you have already "
+        "found, saying clearly what is still unchecked."
+    )
+    last = messages[-1]
+    return [
+        *messages[:-1],
+        dataclasses.replace(last, parts=[*last.parts, UserPromptPart(content=note)]),
+    ]
+
+
+def _contains(error: BaseException, kind: type[BaseException]) -> bool:
+    """Whether an error, its exception-group members or its causes include ``kind``."""
+
+    seen: set[int] = set()
+    pending = [error]
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, kind):
+            return True
+        pending.extend(getattr(current, "exceptions", None) or ())
+        pending.extend((current.__cause__, current.__context__))
+    return False
 
 
 def response_usage(response) -> dict:
@@ -186,11 +353,37 @@ def public_summary(part, connection, model_id=""):
     return part.content
 
 
+def visible_thinking(part, connection, model_id=""):
+    """The thinking an engineer may read: a documented summary, else the raw
+    reasoning text the provider chose to send (e.g. DeepSeek reasoning_content).
+    Encrypted reasoning and signatures are never exposed."""
+
+    summary = public_summary(part, connection, model_id)
+    if summary:
+        return summary
+    content = getattr(part, "content", None)
+    return content if isinstance(content, str) and content.strip() else None
+
+
+def _note_text(part):
+    """Plain prose the AI wrote beside its tool calls, not structured output."""
+
+    content = getattr(part, "content", None)
+    if not isinstance(content, str):
+        return None
+    stripped = content.strip()
+    if not stripped or stripped[0] in "{[" or stripped.startswith("```"):
+        return None
+    return content
+
+
 class DraftStreamEvents:
     """Project supplied stream parts into complete, explicitly tentative text.
 
-    Only known user-facing output fields are exposed. Partial JSON, local tool
-    arguments, signatures and raw reasoning stay inside the provider loop.
+    Exposed: known user-facing output fields, the AI's own notes written beside
+    its tool calls, and thinking the provider sent in plain text. Partial JSON,
+    local tool arguments, signatures and encrypted reasoning stay inside the
+    provider loop.
     """
 
     def __init__(self, context, connection, output_type, *, request_operation=current_operation):
@@ -235,11 +428,11 @@ class DraftStreamEvents:
             self.context.repo.event(
                 self.context.run_id,
                 kind,
-                "AI response draft" if kind == "assistant_text_delta" else "AI reasoning summary",
+                _EVENT_LABELS[kind],
                 values,
             )
             if self.request_id:
-                category = "draft" if kind == "assistant_text_delta" else "reasoning_summary"
+                category = _EVENT_CATEGORIES[kind]
                 key = (category, section_id)
                 operation = self.sections.get(key)
                 payload = {
@@ -251,7 +444,7 @@ class DraftStreamEvents:
                 if operation is None:
                     operation = self.recorder.start(
                         category,
-                        "AI response draft" if category == "draft" else "AI reasoning summary",
+                        _EVENT_LABELS[kind],
                         payload,
                         parent_operation_id=self.request_id,
                         phase="completed" if complete else "started",
@@ -262,7 +455,7 @@ class DraftStreamEvents:
                         operation,
                         category,
                         "completed" if complete else "delta",
-                        "AI response draft" if category == "draft" else "AI reasoning summary",
+                        _EVENT_LABELS[kind],
                         payload,
                     )
         self.total_chars += len(text)
@@ -316,6 +509,8 @@ class DraftStreamEvents:
         last_flush = time.monotonic()
         summaries = {}
         summary_last_flush = time.monotonic()
+        notes = {}
+        note_last_flush = time.monotonic()
         native_operations = {}
         native_seen = set()
 
@@ -380,13 +575,15 @@ class DraftStreamEvents:
                 # provider's summary events. Raw reasoning lives separately in
                 # provider_details and encrypted content in signature.
                 elif isinstance(part, ThinkingPart):
-                    summary = public_summary(
+                    summary = visible_thinking(
                         part, self.connection, self.connection.get("_activity_model_id", "")
                     )
                     if summary and summary != summaries.get(index):
+                        # Thinking is saved in readable chunks, not per token:
+                        # hundreds of tiny events crowd out the real steps.
                         if (
-                            len(summary) - len(summaries.get(index, "")) >= 256
-                            or time.monotonic() - summary_last_flush >= 0.2
+                            len(summary) - len(summaries.get(index, "")) >= 1200
+                            or time.monotonic() - summary_last_flush >= 1.5
                             or isinstance(event, PartEndEvent)
                         ):
                             # Legacy stream receives snapshots; activity stores
@@ -401,19 +598,40 @@ class DraftStreamEvents:
                                 self._save("assistant_reasoning_summary", summary, section_id=index)
                             summaries[index] = summary
                             summary_last_flush = time.monotonic()
+                elif isinstance(part, TextPart) and self.paths:
+                    # With structured output, prose is the AI's note about
+                    # what it is doing next, never the answer itself.
+                    note = _note_text(part)
+                    if note and note != notes.get(index) and note.startswith(notes.get(index, "")):
+                        if (
+                            len(note) - len(notes.get(index, "")) >= 200
+                            or time.monotonic() - note_last_flush >= 0.6
+                            or isinstance(event, PartEndEvent)
+                        ):
+                            self._save(
+                                "assistant_note",
+                                note[len(notes.get(index, "")) :],
+                                section_id=index,
+                            )
+                            notes[index] = note
+                            note_last_flush = time.monotonic()
             if len(pending) >= 256 or time.monotonic() - last_flush >= 0.2:
                 flush()
         flush()
         if self.request_id:
             for index, part in parts.items():
                 if isinstance(part, ThinkingPart):
-                    summary = public_summary(
+                    summary = visible_thinking(
                         part, self.connection, self.connection.get("_activity_model_id", "")
                     )
                     if summary:
                         self._save(
                             "assistant_reasoning_summary", summary, section_id=index, complete=True
                         )
+                elif isinstance(part, TextPart) and index != output_index and self.paths:
+                    note = _note_text(part)
+                    if note and ("note", index) in self.sections:
+                        self._save("assistant_note", note, section_id=index, complete=True)
             if previous:
                 operation = self.sections.get(("draft", output_index))
                 if operation:
@@ -429,6 +647,18 @@ class DraftStreamEvents:
                             "delta": False,
                         },
                     )
+
+
+_EVENT_LABELS = {
+    "assistant_text_delta": "AI response draft",
+    "assistant_reasoning_summary": "AI reasoning summary",
+    "assistant_note": "AI note",
+}
+_EVENT_CATEGORIES = {
+    "assistant_text_delta": "draft",
+    "assistant_reasoning_summary": "reasoning_summary",
+    "assistant_note": "note",
+}
 
 
 def _tool_return(value):
@@ -754,7 +984,7 @@ class MeteredModel(WrapperModel):
         except (DirectAPIError, DirectProviderError, InterruptedError, ActivityRecordingError):
             raise
         except Exception as error:
-            raise provider_failure(error) from None
+            raise provider_failure(error, reveal=_setup_only(self.connection)) from None
         return await self._finalize_response(response, reserved, input_bytes, expanded_context)
 
     @asynccontextmanager
@@ -814,7 +1044,7 @@ class MeteredModel(WrapperModel):
         except (DirectAPIError, DirectProviderError, InterruptedError, ActivityRecordingError):
             raise
         except Exception as error:
-            raise provider_failure(error) from None
+            raise provider_failure(error, reveal=_setup_only(self.connection)) from None
 
     async def _finalize_response(
         self, response, reserved, input_bytes, expanded_context, *, force_incomplete=False
@@ -942,7 +1172,8 @@ async def _run_model(
     """Run one direct model loop and return validated output and attribution."""
 
     from pydantic_ai import Agent, ModelRetry, Tool
-    from pydantic_ai.capabilities import NativeTool, ProcessHistory
+    from pydantic_ai.capabilities import NativeTool, PrepareTools, ProcessHistory
+    from pydantic_ai.messages import ModelRequest, ModelResponse
     from pydantic_ai.usage import UsageLimits
 
     from .ai_generation import (
@@ -1052,6 +1283,26 @@ async def _run_model(
         # Only the static part is the system instruction; the changing request and
         # context travel in the user message, so the cached prefix stays identical.
         static, marker, turn_context = instruction.partition(TURN_CONTEXT_MARKER)
+        # The history sent with the latest request, so a reply the provider
+        # breaks off mid-stream can be requested again without redoing tools.
+        sent_history: list = []
+
+        def remember(messages):
+            sent_history[:] = messages
+            return messages
+
+        # The request allowance of the current attempt. Near its end the tools
+        # are withheld, so the last requests can only return the answer from
+        # what was already found instead of stopping mid-work with nothing.
+        attempt_limit = [max_requests]
+
+        def limit_tools(ctx, tool_defs):
+            remaining = attempt_limit[0] - ctx.usage.requests
+            # A tiny allowance still gets its tools on the first request.
+            if ctx.usage.requests and remaining <= FINAL_ANSWER_REQUESTS:
+                return []
+            return tool_defs
+
         agent = Agent(
             wrapped,
             instructions=static if marker else instruction,
@@ -1063,16 +1314,19 @@ async def _run_model(
             tools=tools,
             capabilities=[
                 *native,
-                ProcessHistory(lambda messages: trim_tool_history(messages, context)),
+                ProcessHistory(lambda messages: trim_tool_history(remember(messages), context)),
+                ProcessHistory(lambda messages: warn_request_allowance(messages, max_requests)),
+                PrepareTools(limit_tools),
             ],
             model_settings=binding.settings,
-            # One correction per tool call: a recoverable complaint about the
-            # model's own arguments is worth a retry, a loop is not.
-            retries=1,
+            # Three corrections per tool call: a recoverable complaint about the
+            # model's own arguments is worth retrying (a long batch of records can
+            # need a second and third try), a loop is not.
+            retries=5,
             name="Quantix Tender Office",
         )
         agent.instrument = False
-        from pydantic_ai.exceptions import UnexpectedModelBehavior
+        from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
 
         rejections: list[str] = []
         if validate_output is not None:
@@ -1088,7 +1342,7 @@ async def _run_model(
                     reason = str(error.args[0] if error.args else error)[:1200]
                     rejections.append(reason)
                     raise ModelRetry(
-                        f"The proposal was not accepted: {reason} Correct it and return the complete proposal again."
+                        f"That result was not accepted: {reason} Correct it and return the complete result again."
                     ) from None
                 return data
 
@@ -1104,27 +1358,89 @@ async def _run_model(
                 if context is not None and not check_mode and streaming is not False
                 else None
             )
-            execution = agent.run(
-                (
-                    f"{turn_context}\n\nCarry out this request and return the complete structured proposal."
-                    if marker
-                    else "Carry out the supplied instruction and return the complete structured proposal."
-                ),
-                deps=context,
-                event_stream_handler=stream_events.handle if stream_events is not None else None,
-                usage_limits=UsageLimits(
-                    request_limit=max_requests,
-                    tool_calls_limit=min(1000, max_requests * 10),
-                ),
+            prompt = (
+                f"{turn_context}\n\nCarry out this request and return the complete structured proposal."
+                if marker
+                else "Carry out the supplied instruction and return the complete structured proposal."
             )
-            result = await execution
+            history = None
+            for attempt in range(STREAM_BREAK_RETRIES + 1):
+                used = sum(isinstance(message, ModelResponse) for message in history or ())
+                attempt_limit[0] = max(1, max_requests - used)
+                try:
+                    result = await agent.run(
+                        prompt if history is None else None,
+                        message_history=history,
+                        deps=context,
+                        event_stream_handler=stream_events.handle
+                        if stream_events is not None
+                        else None,
+                        usage_limits=UsageLimits(
+                            request_limit=max(1, max_requests - used),
+                            tool_calls_limit=min(1000, max_requests * 10),
+                        ),
+                    )
+                    break
+                except DirectProviderError as error:
+                    # Only a reply the provider broke off part-way is resent;
+                    # the saved history ends with the interrupted request.
+                    if (
+                        attempt == STREAM_BREAK_RETRIES
+                        or not (
+                            provider_code(error)
+                            or getattr(error, "timed_out", False)
+                            or getattr(error, "transient", False)
+                        )
+                        or not sent_history
+                        or not isinstance(sent_history[-1], ModelRequest)
+                    ):
+                        raise
+                    history = list(sent_history)
+                    record(
+                        "direct_api_stream_retry",
+                        outcome="retrying",
+                        provider_code=provider_code(error)
+                        or ("timeout" if getattr(error, "timed_out", False) else "server_error"),
+                    )
+                    await asyncio.sleep(2 * (attempt + 1))
+                except Exception as error:
+                    # A reply that ran out of output room part-way through a tool
+                    # call is resent with a note to keep it short.
+                    from pydantic_ai.exceptions import IncompleteToolCall
+
+                    if isinstance(error, DirectProviderError) or (
+                        model_failure_kind(error) != "output_limit"
+                    ):
+                        raise
+                    if (
+                        attempt == STREAM_BREAK_RETRIES
+                        or not sent_history
+                        or not isinstance(sent_history[-1], ModelRequest)
+                    ):
+                        raise IncompleteToolCall("output limit") from None
+                    history = with_output_limit_note(list(sent_history))
+                    record("direct_api_output_limit_retry", outcome="retrying")
+
         except asyncio.CancelledError:
             raise
         except (DirectAPIError, DirectProviderError, InterruptedError, ActivityRecordingError):
             raise
-        except UnexpectedModelBehavior:
+        except UsageLimitExceeded:
+            raise DirectAPIError(
+                f"The Tender Manager used all {max_requests} AI steps allowed for one job before it "
+                "finished. Continue to let it pick up from here, or ask a narrower question."
+            ) from None
+        except UnexpectedModelBehavior as error:
             # Exhausted model retries are the model's failure, never the
             # provider's credentials or endpoint.
+            kind = model_failure_kind(error)
+            record("direct_api_model_gave_up", outcome="failed", kind=kind)
+            if kind == "output_limit":
+                raise DirectAPIError(
+                    "The AI's reply was longer than its output limit, even after it was told to "
+                    "shorten it. Continue to try again, ask for a smaller part of the work, or raise "
+                    "the output limit for this tender in Settings."
+                ) from None
             if rejections:
                 raise DirectAPIError(
                     f"The AI could not correct its proposal. {rejections[-1][:600]} Its result was not published."
@@ -1136,7 +1452,18 @@ async def _run_model(
             preserved = preserve_control_failure(error)
             if preserved is not None:
                 raise preserved
-            raise provider_failure(error) from None
+            if _contains(error, UsageLimitExceeded):
+                # Stream task groups wrap the limit in an exception group.
+                if check_mode:
+                    raise DirectAPIError(
+                        "This AI did not finish the short connection check. Choose another model on "
+                        "this account, or check it again."
+                    ) from None
+                raise DirectAPIError(
+                    f"The Tender Manager used all {max_requests} AI steps allowed for one job before "
+                    "it finished. Continue to let it pick up from here, or ask a narrower question."
+                ) from None
+            raise provider_failure(error, reveal=_setup_only(connection)) from None
         finally:
             bridge.closed = True
     try:
@@ -1235,6 +1562,7 @@ async def run_model(
             model=route.get("model_id"),
             duration_ms=int((time.monotonic() - started) * 1000),
             run_id=context.run_id if context is not None else None,
+            provider_code=provider_code(error),
         )
         raise
     record(

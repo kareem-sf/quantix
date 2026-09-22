@@ -19,6 +19,8 @@ type Props = {
   onSource: (selection: SourceSelection) => void;
   selectedId?: string | null;
   onSelect?: (id: string | null) => void;
+  /** Show only this BOQ row's proposals, inside its row review. */
+  itemId?: string;
 };
 
 function object(value: unknown): Record<string, unknown> | null {
@@ -45,7 +47,7 @@ function productText(value: bigint) {
   const fraction = digits.slice(-12).replace(/0+$/, "");
   return `${digits.slice(0, -12)}${fraction ? `.${fraction}` : ""}`;
 }
-function proposedRate(proposal: Schema<"RateProposalRecord">) {
+export function proposedRate(proposal: Schema<"RateProposalRecord">) {
   return (
     proposal.payload.unit_rate ??
     productText(
@@ -101,9 +103,16 @@ function ProposalWorkspace({
   onSource,
   selectedId,
   onSelect,
+  itemId,
 }: Props) {
   const path = `${tenderPath(tenderId)}/estimate/rate-proposals`;
-  const proposals = useResource<Schema<"RateProposalRecord">[]>(path);
+  const resource = useResource<Schema<"RateProposalRecord">[]>(path);
+  const proposals = {
+    ...resource,
+    data: resource.data?.filter(
+      (proposal) => !itemId || proposal.item_id === itemId,
+    ),
+  };
   const [localSelected, setLocalSelected] = useState<string | null>(null);
   const selected = selectedId === undefined ? localSelected : selectedId;
   const setSelected = (id: string | null) => {
@@ -117,14 +126,18 @@ function ProposalWorkspace({
       className="rate-proposals"
       aria-labelledby="rate-proposals-heading"
     >
-      <h2 id="rate-proposals-heading">Rate proposals</h2>
-      <p className="muted">
-        Review proposed prices and their source conditions before applying them
-        to the estimate.
-      </p>
+      <h2 id="rate-proposals-heading">
+        {itemId ? "Proposed rates" : "Rate proposals"}
+      </h2>
+      {itemId ? null : (
+        <p className="muted">
+          Review proposed prices and their source conditions before applying
+          them to the estimate.
+        </p>
+      )}
       <ErrorNotice error={proposals.error} />
       {proposals.isPending ? <Loading>Loading rate proposals…</Loading> : null}
-      {proposals.data?.length === 0 ? (
+      {proposals.data?.length === 0 && !itemId ? (
         <p className="rate-proposal-empty">
           No rate proposals are recorded for this Tender.
         </p>
@@ -319,23 +332,6 @@ function ProposalReview({
         tenderId={tenderId}
         onSource={onSource}
       />
-      <details className="rate-proposal-basis">
-        <summary>Exact item and source basis when proposed</summary>
-        <p className="field-help">
-          This saved basis includes the original item values, approved
-          quantities and linked source versions. Approval is checked against it
-          again by the service.
-        </p>
-        <pre>{JSON.stringify(proposal.basis, null, 2)}</pre>
-        <p>Basis fingerprint</p>
-        <code>{proposal.basis_fingerprint}</code>
-        {proposal.approved_basis_fingerprint ? (
-          <>
-            <p>Installed basis fingerprint</p>
-            <code>{proposal.approved_basis_fingerprint}</code>
-          </>
-        ) : null}
-      </details>
       {mayApprove ? (
         <form
           className="rate-proposal-decision"

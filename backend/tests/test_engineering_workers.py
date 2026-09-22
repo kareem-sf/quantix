@@ -130,6 +130,48 @@ async def test_saved_work_product_rejects_unread_sources(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_citing_an_unread_tender_source_is_the_models_to_correct(tmp_path):
+    """A real passage not read in this run is named so the AI can read it; the job goes on."""
+    import hashlib
+
+    from quantix.ai_tools import ToolArgumentError
+    from quantix.engineering_tools import engineering_tools
+    from quantix.office_tools import OfficeContext
+    from quantix.tool_policy import ToolFenceError, dispatch
+
+    repo = Repository(tmp_path)
+    tender = repo.create_tender("Synthetic unread source")
+    text = "Fire alarm control panel: Edwards EST4."
+    artifact, _ = repo.register_artifact(
+        tender["id"],
+        "Systems.pdf",
+        hashlib.sha256(text.encode()).hexdigest(),
+        len(text),
+        {"kind": "pdf", "status": "extracted", "segments": [{"locator": "page:1", "text": text}]},
+    )
+    source_id = repo.artifact_evidence(tender["id"], artifact["id"])[0]["id"]
+    run = repo.create_run(tender["id"], "manager", "Save the evidence table")
+    ctx = OfficeContext(repo, tender["id"], run["id"])
+    tool = next(item for item in engineering_tools() if item.name == "save_work_product")
+    draft = {
+        "kind": "note",
+        "title": "Fire alarm make",
+        "content": "Edwards EST4.",
+        "source_refs": [source_id],
+    }
+    with pytest.raises(ToolArgumentError, match=source_id):
+        await tool.invoke(ctx, draft, invocation_id="save-unread")
+    repo.update_run(run["id"], status="running")
+    with pytest.raises(ToolFenceError) as refused:
+        await dispatch("direct", tool, ctx, draft, invocation_id="save-unread-2")
+    assert refused.value.recoverable
+
+    ctx.seen_sources.add(source_id)
+    saved = json.loads(await tool.invoke(ctx, draft, invocation_id="save-read"))
+    assert saved["title"] == "Fire alarm make"
+
+
+@pytest.mark.asyncio
 async def test_stopping_before_write_admission_prevents_calculation(tmp_path, monkeypatch):
     from contextlib import contextmanager
 
@@ -156,3 +198,59 @@ async def test_stopping_before_write_admission_prevents_calculation(tmp_path, mo
             invocation_id="stopped",
         )
     assert not any(event["kind"] == "calculation_completed" for event in repo.run_events(run["id"]))
+
+
+@pytest.mark.asyncio
+async def test_a_calculation_missing_an_input_says_which_inputs_it_needs(tmp_path):
+    from quantix.ai_tools import ToolArgumentError
+    from quantix.engineering_tools import engineering_tools
+    from quantix.office_tools import OfficeContext
+    from quantix.repository import Repository
+
+    repo = Repository(tmp_path)
+    tender = repo.create_tender("Calculator inputs")
+    run = repo.create_run(tender["id"], "manager", "Measure")
+    context = OfficeContext(repo, tender["id"], run["id"])
+    tool = next(item for item in engineering_tools() if item.name == "calculate_engineering")
+    with pytest.raises(
+        ToolArgumentError, match="needs inputs.quantity, inputs.factor; missing inputs.factor"
+    ):
+        await tool.invoke(
+            context,
+            {"method": "product", "inputs": {"quantity": "12"}},
+            invocation_id="calc-missing",
+        )
+
+
+@pytest.mark.asyncio
+async def test_precision_given_as_decimal_places_is_understood_and_a_bad_one_can_be_corrected(
+    tmp_path,
+):
+    from quantix.ai_tools import ToolArgumentError
+    from quantix.engineering_tools import engineering_tools
+    from quantix.office_tools import OfficeContext
+
+    repo = Repository(tmp_path)
+    tender = repo.create_tender("Synthetic precision")
+    run = repo.create_run(tender["id"], "manager", "Price the concrete")
+    ctx = OfficeContext(repo, tender["id"], run["id"])
+    tool = next(item for item in engineering_tools() if item.name == "calculate_engineering")
+    result = json.loads(
+        await tool.invoke(
+            ctx,
+            {
+                "method": "product",
+                "inputs": {"quantity": "410", "factor": "565.555"},
+                "precision": "2",
+            },
+            invocation_id="places",
+        )
+    )
+    assert result["outputs"]["product"] == "231877.55"
+    # A wrong value goes back to the model to fix instead of ending the job.
+    with pytest.raises(ToolArgumentError, match="rounding step"):
+        await tool.invoke(
+            ctx,
+            {"method": "product", "inputs": {"quantity": "1", "factor": "2"}, "precision": "0.5"},
+            invocation_id="bad",
+        )

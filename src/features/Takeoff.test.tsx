@@ -1,8 +1,8 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ApiContext, createApi, type Schema } from "../api";
-import { Takeoff } from "./Takeoff";
+import { TakeoffRow } from "./Takeoff";
 
 function line(
   id: string,
@@ -38,7 +38,8 @@ function line(
   };
 }
 
-function renderTakeoff() {
+it("records the engineer's review of a drawing line with a note", async () => {
+  const user = userEvent.setup();
   const posts: Array<{ path: string; body: unknown }> = [];
   const api = createApi(
     { base_url: "http://localhost/api", token: "test" },
@@ -46,89 +47,38 @@ function renderTakeoff() {
       const path = new URL(String(address)).pathname;
       if (options?.method === "POST") {
         posts.push({ path, body: JSON.parse(String(options.body)) });
-        return Response.json(
-          path.endsWith("/messages") ? { outcome: "immediate" } : {},
-        );
+        return Response.json({});
       }
-      if (path.endsWith("/takeoff"))
-        return Response.json([
-          line("differs", {}),
-          line("missing", {
+      throw new Error(`Unexpected request: ${path}`);
+    },
+  );
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <ApiContext.Provider value={api}>
+        <TakeoffRow
+          tenderId="one"
+          line={line("missing", {
             description: "Precast manholes",
             unit: "nr",
             quantity: "3",
             boq_item_id: null,
             boq: null,
             comparison: "not_in_boq",
-            difference: null,
-            difference_percent: null,
-          }),
-          line("matched", {
-            description: "Ground beam",
-            comparison: "matches",
-            quantity: "12.5",
-          }),
-        ]);
-      throw new Error(`Unexpected request: ${path}`);
-    },
-  );
-  render(
-    <QueryClientProvider
-      client={
-        new QueryClient({ defaultOptions: { queries: { retry: false } } })
-      }
-    >
-      <ApiContext.Provider value={api}>
-        <Takeoff tenderId="one" onSource={vi.fn()} />
+          })}
+          onSource={vi.fn()}
+        />
       </ApiContext.Provider>
     </QueryClientProvider>,
   );
-  return posts;
-}
-
-it("shows what needs a decision first and compares drawing and BOQ quantities", async () => {
-  const user = userEvent.setup();
-  renderTakeoff();
-  const list = await screen.findByRole("list", { name: "Takeoff lines" });
-  expect(within(list).getByText("Pad footings concrete")).toBeVisible();
-  expect(within(list).getByText("Precast manholes")).toBeVisible();
-  expect(within(list).queryByText("Ground beam")).not.toBeInTheDocument();
-  expect(within(list).getByText("BOQ 12.5 m3 (+12.0%)")).toBeVisible();
-  await user.click(screen.getByRole("button", { name: /Missing from BOQ/ }));
-  expect(
-    within(screen.getByRole("list", { name: "Takeoff lines" })).queryByText(
-      "Pad footings concrete",
-    ),
-  ).not.toBeInTheDocument();
-});
-
-it("records the engineer's review with a note", async () => {
-  const user = userEvent.setup();
-  const posts = renderTakeoff();
-  await user.click(await screen.findByText("Precast manholes"));
-  const row = screen.getByText("Precast manholes").closest("details")!;
+  await user.click(screen.getByText("Precast manholes"));
   await user.type(
-    within(row).getByLabelText("Your note (optional)"),
+    screen.getByLabelText("Your note (optional)"),
     "Raise as a clarification",
   );
-  await user.click(within(row).getByRole("button", { name: "Accept" }));
+  await user.click(screen.getByRole("button", { name: "Accept" }));
   await waitFor(() => expect(posts).toHaveLength(1));
   expect(posts[0]).toEqual({
     path: "/api/tenders/one/takeoff/missing/review",
     body: { decision: "accepted", note: "Raise as a clarification" },
   });
-});
-
-it("asks the Tender Manager for a takeoff", async () => {
-  const user = userEvent.setup();
-  const posts = renderTakeoff();
-  await user.click(
-    await screen.findByRole("button", { name: "Ask for a new takeoff" }),
-  );
-  await waitFor(() => expect(posts).toHaveLength(1));
-  expect(posts[0].path).toBe("/api/tenders/one/messages");
-  expect(String((posts[0].body as { content: string }).content)).toMatch(
-    /quantity takeoff/,
-  );
-  expect(await screen.findByText(/Sent to the Tender Manager/)).toBeVisible();
 });

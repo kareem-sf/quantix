@@ -7,6 +7,7 @@ endpoint; SDK environment discovery and retry defaults are not used.
 
 from __future__ import annotations
 
+import re
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -205,7 +206,50 @@ def supplied_summary_supported(connection: dict, model_id: str = "") -> bool:
     )
 
 
-def _openai_profile(provider: str, protocol: str, route: dict):
+# What a reply must carry for Quantix to use it. Anything else a gateway adds is
+# its own record, not part of the answer.
+REQUIRED_COMPLETION_FIELDS = frozenset({"choices", "usage", "model", "id", "created", "object"})
+
+
+def compatible_chat_model():
+    """A chat model that accepts replies carrying a gateway's own extra fields.
+
+    OpenAI-compatible providers decorate their replies: Runware returns
+    ``metadata.weight_versions`` as a list where the OpenAI schema types
+    ``metadata`` as text, and the whole reply is then refused. Pydantic AI
+    publishes ``_validate_completion`` for exactly this. Only fields Quantix
+    never reads are dropped; a reply missing anything real fails as before.
+    """
+
+    from pydantic import ValidationError
+    from pydantic_ai.models.openai import OpenAIChatModel
+
+    class CompatibleChatModel(OpenAIChatModel):
+        def _validate_completion(self, response):
+            try:
+                return super()._validate_completion(response)
+            except ValidationError as error:
+                names = {
+                    str(item["loc"][0])
+                    for item in error.errors()
+                    if item.get("loc") and isinstance(item["loc"][0], str)
+                }
+                if not names or names & REQUIRED_COMPLETION_FIELDS:
+                    raise
+                for name in names:
+                    if name in type(response).model_fields:
+                        setattr(response, name, None)
+                    elif isinstance(getattr(response, "__pydantic_extra__", None), dict):
+                        response.__pydantic_extra__.pop(name, None)
+                from .diagnostics import record
+
+                record("provider_reply_field_ignored", fields=sorted(names))
+                return super()._validate_completion(response)
+
+    return CompatibleChatModel
+
+
+def _openai_profile(provider: str, protocol: str, route: dict, capabilities: dict | None = None):
     """Use an explicit compatibility profile for unknown BYOK model names.
 
     Pydantic AI's OpenAI profile helper intentionally uses model-family
@@ -235,20 +279,31 @@ def _openai_profile(provider: str, protocol: str, route: dict):
         )
     # BYOK compatibility is deliberately conservative.  A check may establish
     # that tools and structured tool output work, but the catalog cannot claim
-    # native JSON schema, JSON mode, reasoning or hosted tools in advance.
+    # native JSON schema or JSON mode in advance.  Hosted search is carried only
+    # where the saved model record says the provider offers it.
+    from pydantic_ai.native_tools import WebSearchTool
+
+    searches = (capabilities or {}).get("web_search") is True
     return OpenAIModelProfile(
         supports_tools=True,
         supports_json_schema_output=False,
         supports_json_object_output=False,
         supports_inline_system_prompts=True,
         openai_system_prompt_role="system",
-        supported_native_tools=frozenset(),
+        openai_chat_supports_web_search=searches,
+        supported_native_tools=frozenset({WebSearchTool}) if searches else frozenset(),
+        # Forcing a tool call on every turn stops the model writing its short
+        # working note beside its tool calls, which the engineer reads live.
+        # With "auto" a reply that forgets the final tool is asked to use it.
+        openai_supports_tool_choice_required=False,
     )
 
 
-def _model_profile(provider: str, protocol: str, route: dict, model_name: str):
+def _model_profile(
+    provider: str, protocol: str, route: dict, model_name: str, capabilities: dict | None = None
+):
     if protocol in {"openai_chat", "openai_responses"}:
-        return _openai_profile(provider, protocol, route)
+        return _openai_profile(provider, protocol, route, capabilities)
     if protocol == "anthropic":
         from pydantic_ai.providers.anthropic import AnthropicProvider
 
@@ -304,19 +359,31 @@ def canonical_model_id(provider_id: str, protocol: str, model_name: str) -> str:
     return _resolve_exact_alias(provider_id, model_name)
 
 
+def _same_letters(value: str) -> str:
+    """The model's name with its punctuation removed, for gateway comparisons."""
+
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
 def same_reported_model(provider_id: str, protocol: str, requested: str, actual: str) -> bool:
     """Whether a provider's reported model is the requested one.
 
     OpenAI-compatible gateways often report the model with its vendor
-    namespace ("deepseek/deepseek-v4.1-flash" for "deepseek-v4.1-flash").
-    Only that namespace may differ; any other difference is a different model.
+    namespace ("deepseek/deepseek-v4.1-flash" for "deepseek-v4.1-flash") or
+    with their own punctuation ("openai:gpt@5.4" for "openai-gpt-5-4"). Only
+    that may differ; any other difference is a different model. A first-party
+    provider is held to its exact published identifier.
     """
 
     wanted = canonical_model_id(provider_id, protocol, requested)
     reported = canonical_model_id(provider_id, protocol, actual)
     if wanted == reported:
         return True
-    if provider_id != "custom" or "/" in wanted:
+    if provider_id != "custom":
+        return False
+    if _same_letters(wanted) == _same_letters(reported):
+        return True
+    if "/" in wanted:
         return False
     namespace, _, name = reported.rpartition("/")
     return bool(namespace) and "/" not in namespace and name == wanted
@@ -340,6 +407,7 @@ async def model_for_route(route: dict, connection: dict, credentials: dict[str, 
         raise DirectAPIError("This connection uses an unsupported direct API protocol.")
     base_url = _base_url(connection)
     settings = build_model_settings(route, connection)
+    capabilities = (connection.get("_model") or {}).get("capabilities") or {}
     async with AsyncExitStack() as stack:
         try:
             import httpx2
@@ -360,7 +428,7 @@ async def model_for_route(route: dict, connection: dict, credentials: dict[str, 
         if protocol in {"openai_chat", "openai_responses"}:
             try:
                 from openai import AsyncOpenAI
-                from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
+                from pydantic_ai.models.openai import OpenAIResponsesModel
                 from pydantic_ai.providers.openai import OpenAIProvider
             except ImportError as error:
                 raise DirectDependencyError(
@@ -381,8 +449,10 @@ async def model_for_route(route: dict, connection: dict, credentials: dict[str, 
             client.organization = None
             client.project = None
             provider = OpenAIProvider(openai_client=client)
-            profile = _model_profile(provider_id, protocol, route, model_name)
-            model_type = OpenAIResponsesModel if protocol == "openai_responses" else OpenAIChatModel
+            profile = _model_profile(provider_id, protocol, route, model_name, capabilities)
+            model_type = (
+                OpenAIResponsesModel if protocol == "openai_responses" else compatible_chat_model()
+            )
             yield APIModelBinding(
                 model_type(model_name, provider=provider, profile=profile), settings, client
             )
@@ -406,7 +476,7 @@ async def model_for_route(route: dict, connection: dict, credentials: dict[str, 
             )
             model_name = await _resolve_anthropic_model(client, model_name)
             provider = AnthropicProvider(anthropic_client=client)
-            profile = _model_profile(provider_id, protocol, route, model_name)
+            profile = _model_profile(provider_id, protocol, route, model_name, capabilities)
             yield APIModelBinding(
                 AnthropicModel(model_name, provider=provider, profile=profile), settings, client
             )
@@ -438,7 +508,7 @@ async def model_for_route(route: dict, connection: dict, credentials: dict[str, 
         stack.callback(client.close)
         stack.push_async_callback(client.aio.aclose)
         provider = GoogleProvider(client=client)
-        profile = _model_profile(provider_id, protocol, route, model_name)
+        profile = _model_profile(provider_id, protocol, route, model_name, capabilities)
         yield APIModelBinding(
             GoogleModel(model_name, provider=provider, profile=profile), settings, client
         )

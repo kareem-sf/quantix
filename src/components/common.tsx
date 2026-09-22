@@ -168,7 +168,7 @@ export function Modal({
           )}
         >
           <SheetHeader className="border-b pe-12">
-            <SheetTitle dir="auto">{title}</SheetTitle>
+            <SheetTitle>{title}</SheetTitle>
           </SheetHeader>
           <div className={cn("flex-1 p-4", legacy && "legacy-screen")}>
             {children}
@@ -185,7 +185,7 @@ export function Modal({
         )}
       >
         <DialogHeader className="pe-8">
-          <DialogTitle dir="auto">{title}</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
         {children}
       </DialogContent>

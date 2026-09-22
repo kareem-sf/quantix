@@ -18,7 +18,7 @@ from .storage import runtime_tmp_dir
 MAX_FILES = 10000
 MAX_PACKAGE_BYTES = 2 * 1024**3
 MAX_FILE_BYTES = 256 * 1024**2
-EXTRACTION_VERSION = "3"
+EXTRACTION_VERSION = "4"
 
 
 @dataclass

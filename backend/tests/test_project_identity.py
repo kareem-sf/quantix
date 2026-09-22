@@ -99,7 +99,7 @@ async def _start(manager, tender_id):
 def test_named_tender_is_never_renamed_or_identified_by_import(client, tmp_path, monkeypatch):
     from quantix.jobs import JobManager
 
-    monkeypatch.setattr(JobManager, "_ai_ready", lambda *_: "No AI is chosen for this Tender.")
+    monkeypatch.setattr(JobManager, "ai_ready", lambda *_: "No AI is chosen for this Tender.")
     tender = client.post("/api/tenders", json={"name": "Foundations"}).json()
     assert tender["name_source"] == "engineer"
     run = client.post(
@@ -340,3 +340,22 @@ async def test_subscription_route_reserves_without_a_usd_allowance(tmp_path, mon
     meter = BudgetMeter(policy, tender["id"], run["id"], route)
     meter.connection = meter.connection | {"billing": "subscription"}
     assert await meter.before_request(1000, 1000)
+
+
+def test_grouping_request_without_ai_gives_the_plain_reason(client, tmp_path):
+    tender = client.post("/api/tenders", json={}).json()
+    run = client.post(
+        f"/api/tenders/{tender['id']}/imports", json={"source_path": str(_package(tmp_path))}
+    ).json()
+    assert _wait(client, run)["status"] == "completed"
+    analysis = next(
+        r for r in client.app.state.repo.list_runs(tender["id"]) if r["kind"] == "analysis"
+    )
+    _wait(client, analysis)
+    before = len(client.app.state.repo.list_runs(tender["id"]))
+
+    response = client.post(f"/api/tenders/{tender['id']}/analysis")
+
+    assert response.status_code in {400, 409}
+    assert "AI" in response.json()["detail"]
+    assert len(client.app.state.repo.list_runs(tender["id"])) == before

@@ -113,6 +113,9 @@ class RunChatStream:
                         "id": f"reasoning:{assignment_id if is_staff else run_id}",
                         "data": {"text": data["text"][:_TEXT_LIMIT], "preview_only": True, **actor},
                     }
+                elif event["kind"] == "assistant_note":
+                    # Notes reach the client through their activity event.
+                    continue
                 else:
                     # Arbitrary event payloads can contain private SDK/account
                     # details. Only the existing public activity message crosses.

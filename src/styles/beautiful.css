@@ -1,0 +1,125 @@
+/* Motion and small shared styles for the components adapted from Beautiful UI
+   (beautifului.dev, MIT). Colours come from the Quantix theme in brand.css;
+   reference sources are in docs/design/beautiful-ui. */
+
+:root {
+  --bui-ease: cubic-bezier(0.23, 1, 0.32, 1);
+  --success: #1f8a5b;
+  --success-tint: color-mix(in oklch, var(--success) 12%, transparent);
+  --warning-ink: #9a6400;
+  --warning-tint: color-mix(in oklch, #e5a315 16%, transparent);
+  --destructive-tint: color-mix(in oklch, var(--destructive) 10%, transparent);
+}
+
+.dark {
+  --success: #4cc38a;
+  --warning-ink: #f2c45c;
+}
+
+@keyframes bui-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes bui-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes bui-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes bui-shimmer-text {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@keyframes bui-pixel-on {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+  40% {
+    opacity: 0.9;
+  }
+}
+
+@layer utilities {
+  .bui-fade-in {
+    animation: bui-fade-in 300ms ease-out both;
+  }
+  .bui-fade-up {
+    animation: bui-fade-up 320ms var(--bui-ease) both;
+  }
+  .bui-pop-in {
+    animation: bui-pop-in 220ms var(--bui-ease) both;
+  }
+  /* Label text that shimmers while its work is live. */
+  .bui-shimmer {
+    background-image: linear-gradient(
+      90deg,
+      var(--muted-foreground) 35%,
+      var(--foreground) 50%,
+      var(--muted-foreground) 65%
+    );
+    background-size: 200% 100%;
+    background-clip: text;
+    color: transparent;
+    animation: bui-shimmer-text 1.4s linear infinite;
+  }
+  /* Height-animated disclosure: the grid row grows from 0fr to 1fr. */
+  .bui-collapse {
+    display: grid;
+    grid-template-rows: 0fr;
+    opacity: 0;
+    transition:
+      grid-template-rows 300ms var(--bui-ease),
+      opacity 300ms var(--bui-ease);
+  }
+  .bui-collapse[data-open="true"] {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+  .bui-collapse > * {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .bui-fade-in,
+    .bui-fade-up,
+    .bui-pop-in {
+      animation: none;
+    }
+    .bui-shimmer {
+      animation: none;
+      color: var(--foreground);
+      background: none;
+    }
+    .bui-collapse {
+      transition: none;
+    }
+  }
+}

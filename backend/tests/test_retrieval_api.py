@@ -12,6 +12,10 @@ def client(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr("keyring.get_password", lambda *_: None)
     app = importlib.import_module("quantix.api").create_app(tmp_path / "home", "test-session-token")
+    # Registering evidence starts meaning-search preparation in the background.
+    # Where the embedding model is already cached it can finish between two
+    # requests, so these tests of the not-ready envelope switch it off.
+    monkeypatch.setattr(app.state.repo, "on_retrieval_generation", None)
     with TestClient(app) as test_client:
         test_client.headers["Authorization"] = "Bearer test-session-token"
         yield test_client
@@ -54,8 +58,8 @@ def test_strict_meaning_and_combined_still_refuse_unavailable_indexes(client):
     combined = client.get(
         f"/api/tenders/{tender['id']}/search", params={"q": "reinforced", "mode": "combined"}
     )
-    assert meaning.status_code == 409
-    assert combined.status_code == 409
+    assert meaning.status_code == 409, meaning.text
+    assert combined.status_code == 409, combined.text
 
 
 def test_document_kind_query_reaches_the_server(client):

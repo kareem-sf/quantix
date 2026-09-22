@@ -27,7 +27,7 @@ def work_brief_tools(repo, tender_id: str, run_id: str, manager_id: str) -> list
         open_questions: list[BriefQuestion] | None = None,
         work_product_ids: list[str] | None = None,
     ) -> str:
-        """Save your working brief for multi-step work so the next turn can continue it: the requested outcome, checks that mean it is done, steps with their state, settled points with the source IDs you read, open questions with their owner, saved work-product IDs and the one next step. Each save replaces the whole brief; pass expected_version from manager_work_brief (0 when none is saved). It records progress only and approves nothing."""
+        """Save your working brief for multi-step work so the next turn can continue it: the requested outcome, checks that mean it is done, steps with their state and owner, settled points with the source IDs you read, open questions with their owner, saved work-product IDs and the one next step. Each save replaces the whole brief; pass expected_version from manager_work_brief (0 when none is saved). It records progress only and approves nothing."""
         context = ctx.context
         if (
             not isinstance(context, OfficeContext)

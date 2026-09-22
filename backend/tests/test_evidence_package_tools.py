@@ -123,8 +123,10 @@ async def test_revision_compare_and_impact_name_exact_changes_and_dependent_reco
         ),
     )
     context = _manager(repo, tender["id"])
-    with pytest.raises(ToolArgumentError, match="no earlier version"):
-        await _call(context, "compare_source_versions", {"artifact_id": first["id"]})
+    single = await _call(context, "compare_source_versions", {"artifact_id": first["id"]})
+    assert single["versions"] == 1 and single["changes"] == []
+    unchanged = await _call(context, "trace_change_impact", {"artifact_id": first["id"]})
+    assert unchanged["replaced_versions"] == [] and unchanged["affected_counts"] == {}
 
     second = _pdf(
         repo, tender["id"], ["Concrete grade C35/45.", "Cover 40 mm.", "", "Curing for 7 days."]

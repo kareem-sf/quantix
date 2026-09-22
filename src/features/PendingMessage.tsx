@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { rtlDir } from "@/lib/text-direction";
 
 export function PendingMessage({
   tenderId,
@@ -128,7 +129,6 @@ export function PendingMessage({
             <Textarea
               id={editorId}
               aria-label="Pending instruction"
-              dir="auto"
               rows={4}
               maxLength={20000}
               value={value}
@@ -156,8 +156,8 @@ export function PendingMessage({
         </form>
       ) : (
         <p
-          className="rounded-lg bg-muted/60 px-3 py-2 whitespace-pre-wrap"
-          dir="auto"
+          dir={rtlDir(pending.content)}
+          className="bidi-text rounded-lg bg-muted/60 px-3 py-2 whitespace-pre-wrap"
         >
           {pending.content}
         </p>

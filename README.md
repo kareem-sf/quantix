@@ -29,16 +29,19 @@ Quantix records sanitized technical events in `~/.quantix/logs`; **Settings → 
 
 ## Development
 
-Windows source setup needs Python 3.12, Node 24 and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/):
+Source setup needs Python 3.12, Node 24 and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) (including Rust). On Windows:
 
 ```powershell
 python -m venv backend/.venv
 backend/.venv/Scripts/python.exe -m pip install -c backend/requirements-dev.lock.txt -e './backend[dev]'
+backend/.venv/Scripts/python.exe -m pip install openai-codex==0.147.0 openai-codex-cli-bin==0.147.0
 npm ci
 npm run dev
 ```
 
-`npm run dev` starts the private service and interface at `http://127.0.0.1:1420`; `npm run tauri dev` or Start-Quantix.cmd opens the desktop window. On macOS/Linux create the environment with `python3.12 -m venv backend/.venv`, install with `backend/.venv/bin/python -m pip install -e './backend[dev]'`, then run `npm ci` and `sh Start-Quantix.sh`. Workspace paths and release recipes are in [desktop packaging](docs/desktop-packaging.md).
+The second `pip install` adds the official ChatGPT/Codex client that the subscription route and its tests use; CI installs the same versions. On macOS/Linux create the environment with `python3.12 -m venv backend/.venv`, install with `backend/.venv/bin/python -m pip install -e './backend[dev]'`, then run `npm ci` and `sh Start-Quantix.sh`.
+
+`npm run dev` starts the private service and the interface at `http://127.0.0.1:1420`; `npm run tauri dev` or Start-Quantix.cmd opens the desktop window. Both use the workspace in `~/.quantix`. There is no configuration file or environment variable to set: the service picks a free port and a fresh access token on each start and publishes them in `~/.quantix/runtime/connection.json`. AI accounts are added in the app, and their keys are kept in the operating system's credential store.
 
 | Command | What it does |
 | --- | --- |
@@ -46,6 +49,16 @@ npm run dev
 | `npm run test:ui` | Interface tests |
 | `npm run check` | Typecheck, Ruff and Clippy |
 | `npm run format:check` | Prettier and Ruff formatting |
+| `npm run verify` | `check` followed by both test suites |
+| `npm run build` | Typecheck and production build of the interface into `dist/` |
 | `npm run bindings` | Regenerate `src/bindings/api.ts` from the backend schemas |
 
-CI runs the backend and interface checks on every pull request. See [the specification](docs/spec.md), [architecture](docs/architecture.md), [API contracts](docs/contracts.md) and [progress](docs/progress.md).
+CI runs the backend and interface checks, including formatting, on every pull request. Run the backend and interface suites one after the other on a busy machine: a few timing-sensitive tests can fail when both run in parallel.
+
+## Build and deployment
+
+Quantix is a desktop application: a Tauri window over a local Python service that holds the database, the imported files and the AI connections. It cannot be served as a static website, because every screen depends on that local service. `npm run build` checks that the interface compiles for production; the desktop app loads it from `dist/`.
+
+Installers are built per operating system with `npm run package:service` and `npm run build:desktop`, or with the manual **Desktop packages** GitHub workflow. They are unsigned and have not yet been tested on a clean machine. The recipes and their limits are in [desktop packaging](docs/desktop-packaging.md).
+
+See [the specification](docs/spec.md), [architecture](docs/architecture.md), [API contracts](docs/contracts.md) and [progress](docs/progress.md).

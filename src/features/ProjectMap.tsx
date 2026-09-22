@@ -11,6 +11,7 @@ import {
 import { ErrorNotice, Loading, Modal, Status } from "../components/common";
 import { EvidencePicker } from "./EvidencePicker";
 import { Citations, type SourceSelection } from "./Sources";
+import { locatorLabel } from "@/lib/locator";
 
 type Node = Schema<"NodeRecord">;
 type NodeKind = Schema<"NodeInput">["kind"];
@@ -360,7 +361,7 @@ function ReviewRecord({
           ? "Whole document reviewed"
           : record.scope_type === "page"
             ? `Reviewed page ${record.page}`
-            : `Reviewed passage · ${record.locator}`}
+            : `Reviewed passage · ${locatorLabel(record.locator)}`}
       </p>
       <p className={record.is_current ? "field-help" : "map-warning"}>
         {record.is_current
@@ -393,9 +394,6 @@ function ReviewRecord({
             {reason}
           </p>
         ))}
-        <p className="map-source-identity">
-          Source hash: <code>{record.content_hash}</code>
-        </p>
         <time dateTime={record.created_at}>
           {new Date(record.created_at).toLocaleString()}
         </time>
@@ -622,10 +620,6 @@ function NodeDetail({
               <p key={source.source_id}>
                 {source.relative_path} · Version {source.version} ·{" "}
                 {source.locator}
-                <br />
-                File hash: <code>{source.content_hash}</code>
-                <br />
-                Source text hash: <code>{source.evidence_hash}</code>
               </p>
             ))}
           </details>
@@ -1250,7 +1244,7 @@ function ReviewPassage({
           <option value="">Choose the exact passage or range</option>
           {choices.map((source) => (
             <option key={source.id} value={source.id}>
-              {source.locator} · {source.text.slice(0, 100)}
+              {locatorLabel(source.locator)} · {source.text.slice(0, 100)}
             </option>
           ))}
         </select>

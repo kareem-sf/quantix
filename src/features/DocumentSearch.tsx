@@ -81,32 +81,30 @@ export function SearchPreparation({
 
   const title =
     status.data?.status === "empty"
-      ? "Add documents before indexing"
+      ? "Add documents first"
       : status.data?.status === "stale"
-        ? "The evidence index needs an update"
+        ? "Search needs an update"
         : status.data?.status === "limit_exceeded"
-          ? "The evidence index cannot cover this package yet"
+          ? "Search cannot cover this package yet"
           : status.data?.status === "failed"
-            ? "Meaning search could not be prepared"
+            ? "Search could not be prepared"
             : status.data?.status === "stopped"
-              ? "Meaning search preparation was stopped"
+              ? "Search preparation was stopped"
               : preparing
-                ? "Preparing meaning search"
-                : "Tender evidence is not indexed yet";
+                ? "Preparing search"
+                : "Documents are not ready to search yet";
 
   return (
     <div className="flex flex-col gap-3">
       <ErrorNotice error={status.error || error} />
-      {status.isPending ? (
-        <Loading>Checking the evidence index…</Loading>
-      ) : null}
+      {status.isPending ? <Loading>Checking search…</Loading> : null}
       {status.data?.ready ? (
         <p className="flex items-center gap-2 text-xs text-muted-foreground">
           <CircleCheck
             className="size-3.5 text-emerald-600 dark:text-emerald-400"
             aria-hidden="true"
           />
-          Tender evidence is indexed for meaning search.
+          Documents are ready to search.
         </p>
       ) : status.data ? (
         <Item variant="outline" className="bg-card">
@@ -135,7 +133,7 @@ export function SearchPreparation({
                 disabled={starting || unavailable}
                 onClick={() => void prepare()}
               >
-                {starting ? "Starting…" : "Index tender evidence"}
+                {starting ? "Starting…" : "Prepare search"}
               </Button>
             )}
           </ItemActions>

@@ -27,8 +27,9 @@ def knowledge_tools():
         limit: int,
     ) -> str:
         """List engineer-approved reusable guidance. These notes are not current Tender facts. Price/tax notes always require fresh research."""
-        if not 0 <= offset or not 1 <= limit <= 20:
-            raise ValueError("Read at most 20 reusable notes at a time using a nonnegative offset.")
+        # Serve an oversized or negative window as the nearest valid page;
+        # next_offset tells the model where to continue.
+        offset, limit = max(0, offset), min(max(1, limit), 20)
         notes = KnowledgeService(ctx.context.repo).list(
             category=category, offset=offset, limit=limit
         )
@@ -64,10 +65,9 @@ def knowledge_tools():
         ctx: ToolContext[OfficeContext], knowledge_id: str, offset: int = 0, limit: int = 8000
     ) -> str:
         """Inspect approved or withdrawn reusable guidance, with current provenance/revalidation flags and bounded full-text pages."""
-        if not 0 <= offset or not 1 <= limit <= 8000:
-            raise ValueError(
-                "Read up to 8,000 note characters at a time using a nonnegative offset."
-            )
+        # Serve an oversized or negative window as the nearest valid page;
+        # next_offset tells the model where to continue.
+        offset, limit = max(0, offset), min(max(1, limit), 8000)
         note = _clean(KnowledgeService(ctx.context.repo).get(knowledge_id))
         content = note["content"]
         note.update(

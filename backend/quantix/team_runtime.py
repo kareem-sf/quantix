@@ -12,6 +12,17 @@ from .team import TeamService
 from .team_models import Assignment, AssignmentResult, StaffOutput
 
 MAX_PARALLEL_STAFF = 3
+STAFF_MAX_STEPS = 10
+STAFF_MIN_STEPS = 3
+
+
+def manager_reserve(max_requests: int) -> int:
+    """Colleagues' AI steps come out of their Manager job's allowance. The Manager
+    keeps this many for reading their results and saving the job; each colleague
+    gets an equal share of the rest, up to STAFF_MAX_STEPS."""
+
+    return min(8, max_requests // 3)
+
 
 STAFF_INSTRUCTIONS = """You are a member of a construction tendering team, working on one assignment from the Tender Manager.
 Work in the professional role, specialisms and working style of your staff profile.
@@ -23,6 +34,8 @@ Evidence rules, which override everything else:
 - Never invent source IDs, quantities, prices, dates or completed work.
 
 How to work:
+- The engineer watches your work live. Before each set of tool calls, write one or two short first-person
+  sentences in plain English saying what you are about to do and why. Notes are never the result.
 - Start from the assignment brief and any documents it names; search or read further when you need to.
 - Show arithmetic for every quantity or calculation, and re-read each number from its source.
 - Stop when the expected result is met, or when you cannot continue without the Manager.
@@ -126,14 +139,25 @@ def _checks(context: OfficeContext):
     return check
 
 
-async def run_assignment(repo, tender_id: str, assignment_id: str) -> Assignment:
-    """Run one queued assignment to a result, a question or a recorded failure."""
+async def run_assignment(
+    repo, tender_id: str, assignment_id: str, max_requests: int | None = None
+) -> Assignment:
+    """Run one queued assignment to a result, a question or a recorded failure.
+
+    ``max_requests`` is this colleague's share of the job's AI steps.
+    """
 
     from .ai_policy import AIPolicyService
     from .ai_turn import run_turn
 
     team = TeamService(repo)
     assignment = team.start(tender_id, assignment_id)
+    if max_requests is not None and max_requests < STAFF_MIN_STEPS:
+        return team.fail(
+            assignment,
+            "Not enough AI steps were left in this job for this work. The Tender Manager can "
+            "do it, or hand it over again in its next job.",
+        )
     staff = team.get_staff(tender_id, assignment.staff_id)
     context = OfficeContext(
         repo, tender_id, assignment.run_id, actor_id=staff.id, assignment_id=assignment.id
@@ -164,6 +188,7 @@ async def run_assignment(repo, tender_id: str, assignment_id: str) -> Assignment
             validate_output=_checks(context),
             role=staff.role,
             metadata={"assignment_id": assignment.id, "staff_id": staff.id},
+            max_requests=max_requests,
         )
         output = StaffOutput.model_validate(response["output"])
         _checks(context)(output, response.get("web_sources", []))
@@ -175,9 +200,14 @@ async def run_assignment(repo, tender_id: str, assignment_id: str) -> Assignment
         )
         raise
     except Exception as error:
-        failed = team.fail(
-            team.get(tender_id, assignment.id), str(error) or "This work could not be completed."
-        )
+        detail = str(error) or "This work could not be completed."
+        if "ai steps allowed" in detail.lower() or "work limit" in detail.lower():
+            # The engine words its step limit for the Manager; say whose steps ran out.
+            detail = (
+                f"{staff.name} used all the AI steps set aside for this work before finishing. "
+                "The Tender Manager can hand the rest over again in its next job."
+            )
+        failed = team.fail(team.get(tender_id, assignment.id), detail)
         repo.event(
             assignment.run_id,
             "staff_failed",
@@ -239,6 +269,14 @@ async def run_queued(repo, tender_id: str, run_id: str) -> list[Assignment]:
     queued = team.queued(tender_id, run_id)
     if not queued:
         return []
+    from .ai_policy import AIPolicyService
+
+    policies = AIPolicyService(repo)
+    with repo.db.connect() as conn:
+        _, _, used = policies._totals(conn, tender_id, run_id)
+    allowance = int(policies.get(tender_id).get("max_requests") or 12)
+    available = allowance - used - manager_reserve(allowance)
+    steps = min(STAFF_MAX_STEPS, available // len(queued))
     connections = AIConnectionService(repo)
     parallel = asyncio.Semaphore(MAX_PARALLEL_STAFF)
     serial: dict[str, asyncio.Lock] = {}
@@ -252,7 +290,7 @@ async def run_queued(repo, tender_id: str, run_id: str) -> list[Assignment]:
         )
         async with parallel:
             async with lock:
-                return await run_assignment(repo, tender_id, assignment.id)
+                return await run_assignment(repo, tender_id, assignment.id, steps)
 
     return list(await asyncio.gather(*(one(assignment) for assignment in queued)))
 

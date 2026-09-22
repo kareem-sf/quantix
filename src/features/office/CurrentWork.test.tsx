@@ -17,11 +17,12 @@ const brief = {
   next_step: "Confirm whether pumping is included.",
   done_when: ["Both quotes compared on a delivered basis."],
   steps: [
-    { title: "Read supplier A terms", state: "done", note: "" },
+    { title: "Read supplier A terms", state: "done", note: "", owner: "" },
     {
       title: "Read supplier B terms",
       state: "blocked",
       note: "Quote is unreadable.",
+      owner: "",
     },
   ],
   settled: [

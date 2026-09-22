@@ -22,8 +22,9 @@ def project_tools():
         """Read source-linked project structure and explicit review scopes. Read the cited originals before using project facts; approval never implies all Tender documents were reviewed."""
         from .project_map import ProjectMapService
 
-        if offset < 0 or not 1 <= limit <= 30:
-            raise ValueError("Read 1 to 30 project-map items from a nonnegative offset.")
+        # Serve an oversized or negative window as the nearest valid page;
+        # next_offset tells the model where to continue.
+        offset, limit = max(0, offset), min(max(1, limit), 30)
         view = ProjectMapService(ctx.context.repo).view(ctx.context.tender_id)
         nodes, reviews = view["nodes"], view["review_scopes"]
         result = {
@@ -46,8 +47,9 @@ def project_tools():
         """Inspect submission requirements, linked documents, pending reviews and exceptions. Requirement approval and final release belong to the engineer."""
         from .tender_requirements import RequirementService
 
-        if offset < 0 or not 1 <= limit <= 20:
-            raise ValueError("Read 1 to 20 submission requirements from a nonnegative offset.")
+        # Serve an oversized or negative window as the nearest valid page;
+        # next_offset tells the model where to continue.
+        offset, limit = max(0, offset), min(max(1, limit), 20)
         rows = RequirementService(ctx.context.repo).list(
             ctx.context.tender_id, offset=offset, limit=limit
         )
@@ -64,8 +66,9 @@ def project_tools():
         """List saved draft outputs and their source references. Draft generation is not final release."""
         from .outputs import OutputService
 
-        if offset < 0 or not 1 <= limit <= 20:
-            raise ValueError("Read 1 to 20 generated documents from a nonnegative offset.")
+        # Serve an oversized or negative window as the nearest valid page;
+        # next_offset tells the model where to continue.
+        offset, limit = max(0, offset), min(max(1, limit), 20)
         rows = OutputService(ctx.context.repo).list(ctx.context.tender_id)
         result = {
             "outputs": rows[offset : offset + limit],

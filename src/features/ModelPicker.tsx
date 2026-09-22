@@ -49,11 +49,6 @@ export type ModelOption = {
 export const composerChip =
   "rounded-full bg-foreground/[0.04] shadow-[inset_0_0_0_1px_color-mix(in_oklch,var(--foreground)_8%,transparent)] hover:bg-foreground/[0.08] aria-expanded:bg-foreground/[0.08]";
 
-/** Tile colour for a provider that has no mark of its own. */
-const providerTones: Record<string, string> = {
-  custom: "bg-violet-600",
-};
-
 /**
  * An account's own provider logo, so the engineer recognises the service at a
  * glance. Providers without a drawn mark keep a coloured initial tile.
@@ -95,7 +90,7 @@ function ProviderBadge({
         scale.text,
         className,
       )}
-      surfaceClassName={providerTones[providerId] ?? "bg-primary"}
+      surfaceClassName="bg-primary"
     >
       {initial(account)}
     </Squircle>

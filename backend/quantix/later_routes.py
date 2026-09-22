@@ -10,14 +10,18 @@ from .calculation_models import CalculationRecord, CalculationRequest
 from .calculations import CalculationService
 from .company_library import CompanyLibraryService
 from .company_library_models import CompanyAsset, CompanyAssetDraft
+from .document_groups import DocumentGroupService, DocumentGroupsState, MoveDocumentRequest
 from .documents import MAX_PDF_PAGES
 from .execution_context import engineer_identity
 from .extraction_adapters import ExtractionService
 from .extraction_models import ReprocessRequest, ReprocessResult
+from .job_summaries import JobSummaryList, JobSummaryService
 from .staff_models import OfficeConflict
 from .tender_calendar import TenderCalendarService
 from .tender_profile import TenderProfileService
 from .tender_profile_models import CalendarEvent, CalendarEventDraft, ProfilePatch, TenderProfile
+from .tender_summaries import TenderSummaryList, TenderSummaryService
+from .waiting import WaitingService, WaitingState
 from .work_brief import WorkBriefService
 from .work_brief_models import WorkBriefState
 from .work_product_models import (
@@ -61,6 +65,28 @@ def create_router(repo) -> APIRouter:
     @router.post("/tenders/{tender_id}/calendar", response_model=CalendarEvent)
     def save_event(tender_id: str, command: CalendarEventDraft):
         return _call(lambda: calendar.save(engineer_identity(tender_id), command))
+
+    @router.get("/tender-summaries", response_model=TenderSummaryList)
+    def get_tender_summaries():
+        return _call(lambda: TenderSummaryService(repo).list())
+
+    @router.get("/tenders/{tender_id}/job-summaries", response_model=JobSummaryList)
+    def get_job_summaries(tender_id: str):
+        return _call(lambda: JobSummaryService(repo).list(tender_id))
+
+    @router.get("/tenders/{tender_id}/document-groups", response_model=DocumentGroupsState)
+    def get_document_groups(tender_id: str):
+        return _call(lambda: DocumentGroupService(repo).list(tender_id))
+
+    @router.put(
+        "/tenders/{tender_id}/documents/{artifact_id}/group", response_model=DocumentGroupsState
+    )
+    def move_document(tender_id: str, artifact_id: str, request: MoveDocumentRequest):
+        return _call(lambda: DocumentGroupService(repo).move(tender_id, artifact_id, request.group))
+
+    @router.get("/tenders/{tender_id}/waiting", response_model=WaitingState)
+    def get_waiting(tender_id: str):
+        return _call(lambda: WaitingService(repo).list(tender_id))
 
     @router.get("/tenders/{tender_id}/work-brief", response_model=WorkBriefState)
     def get_work_brief(tender_id: str):

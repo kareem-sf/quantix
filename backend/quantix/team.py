@@ -198,8 +198,10 @@ class TeamService:
     def fail(self, assignment: Assignment, detail: str, *, status: str = "failed") -> Assignment:
         return self._update(assignment, status, detail=detail[:1200])
 
-    def cancel_run(self, tender_id: str, run_id: str, detail: str) -> int:
-        stopped = [a for a in self.list(tender_id, run_id=run_id) if a.status in _OPEN]
+    def cancel_run(
+        self, tender_id: str, run_id: str, detail: str, *, statuses: tuple[str, ...] = _OPEN
+    ) -> int:
+        stopped = [a for a in self.list(tender_id, run_id=run_id) if a.status in statuses]
         for assignment in stopped:
             self._update(assignment, "cancelled", detail=detail)
         return len(stopped)

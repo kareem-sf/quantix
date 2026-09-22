@@ -397,7 +397,6 @@ function ManagerPersonalityForm({
                 required
                 rows={6}
                 maxLength={2000}
-                dir="auto"
                 aria-label="How should your Manager work with you?"
                 value={draft.value.personality.description}
                 onChange={(event) =>
@@ -429,7 +428,6 @@ function ManagerPersonalityForm({
                     <input
                       required
                       maxLength={120}
-                      dir="auto"
                       value={draft.value.display_name}
                       onChange={(event) => {
                         draft.setField("display_name", event.target.value);
@@ -444,7 +442,6 @@ function ManagerPersonalityForm({
                     <input
                       required
                       maxLength={200}
-                      dir="auto"
                       value={draft.value.title}
                       onChange={(event) => {
                         draft.setField("title", event.target.value);
@@ -461,7 +458,6 @@ function ManagerPersonalityForm({
                     required
                     rows={4}
                     maxLength={2000}
-                    dir="auto"
                     value={draft.value.persona}
                     onChange={(event) => {
                       draft.setField("persona", event.target.value);
@@ -489,7 +485,6 @@ function ManagerPersonalityForm({
                         required
                         rows={3}
                         maxLength={2000}
-                        dir="auto"
                         aria-label={label}
                         value={draft.value.personality[key]}
                         onChange={(event) =>
@@ -521,7 +516,6 @@ function ManagerPersonalityForm({
                       <textarea
                         rows={4}
                         maxLength={10019}
-                        dir="auto"
                         aria-label={label}
                         value={draft.value.personality[key]}
                         onChange={(event) =>
@@ -544,7 +538,6 @@ function ManagerPersonalityForm({
                     <textarea
                       rows={4}
                       maxLength={10019}
-                      dir="auto"
                       aria-label="Global working preferences"
                       value={draft.value.working_preferences}
                       onChange={(event) =>

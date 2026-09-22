@@ -80,3 +80,57 @@ it("allows explicit source review when an approved measured quantity resolves an
     screen.getByText("Supplied quantity could not be read."),
   ).toBeInTheDocument();
 });
+
+it("names the tax basis in plain words", () => {
+  const api = createApi(
+    { base_url: "http://localhost/api", token: "test" },
+    async () => Response.json({ artifact_name: "BOQ.xlsx", locator: "row 2" }),
+  );
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <ApiContext.Provider value={api}>
+        <EstimateEditor
+          tenderId="one"
+          item={
+            {
+              id: "row",
+              tender_id: "one",
+              artifact_id: "file",
+              source_id: "source",
+              document: "BOQ.xlsx",
+              sheet: "BOQ",
+              locator: "row 2",
+              description: "Excavation",
+              unit: "m3",
+              unit_cell: "C2",
+              quantity_cell: "D2",
+              quantity_candidates: { D2: "10" },
+              supplied_quantity: "10",
+              effective_quantity: "10",
+              quantity_basis: "supplied_boq",
+              confirmed: true,
+              issues: [],
+              unit_rate: "25.50",
+              rate_ex_vat: "25.50",
+              components: [],
+              currency: "SAR",
+              tax_basis: "excluding_vat",
+              vat_percent: null,
+              provenance: null,
+              line_ex_vat: "255.00",
+              line_inc_vat: null,
+              quantity_proposals: [],
+            } as Schema<"EstimateItem">
+          }
+          defaultCurrency="SAR"
+          onSource={() => {}}
+          onClose={() => {}}
+        />
+      </ApiContext.Provider>
+    </QueryClientProvider>,
+  );
+  expect(
+    screen.getByText("Excluding VAT", { selector: "dd" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("excluding vat")).not.toBeInTheDocument();
+});

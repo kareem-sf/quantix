@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ApiContext, createApi, type Schema } from "../api";
@@ -64,6 +64,17 @@ function renderTeam(managerRunId?: string) {
         });
       }
       if (path.endsWith("/work-brief")) return Response.json({ brief: null });
+      if (path.endsWith("/activity"))
+        return Response.json({
+          items: [],
+          has_more: false,
+          has_earlier: false,
+          reset_required: false,
+          run_status: "running",
+          run_detail: "",
+          run_updated_at: "",
+          history_key: "h",
+        });
       if (path.endsWith("/evidence/source-1"))
         return Response.json({
           id: "source-1",
@@ -124,48 +135,50 @@ function renderTeam(managerRunId?: string) {
   return posts;
 }
 
-it("shows every staff member, their work, questions and cited results", async () => {
+it("lists the Manager and every colleague with what they are doing or last did", async () => {
   const user = userEvent.setup();
   renderTeam();
-  const roster = await screen.findByRole("list", { name: "Staff" });
-  expect(within(roster).getByText("Samir Haddad")).toBeVisible();
-  expect(within(roster).getByText("1 open · 1 total")).toBeVisible();
-  const work = screen.getByRole("list", { name: "Assignments" });
-  expect(within(work).getByText("Is night work allowed?")).toBeVisible();
-  await user.click(within(work).getByText("Check the slab"));
-  expect(screen.getByText("Ground slab is C30/37, 250 mm.")).toBeVisible();
-  expect(
-    await screen.findByRole("button", { name: /Concrete spec.pdf/ }),
-  ).toBeVisible();
-  expect(screen.getByText("model-a · 2 requests · 1,000 tokens")).toBeVisible();
-});
-
-it("filters the work to one staff member", async () => {
-  const user = userEvent.setup();
-  renderTeam();
-  await user.click(await screen.findByRole("button", { name: /Samir Haddad/ }));
-  const work = screen.getByRole("list", { name: "Assignments" });
-  expect(
-    within(work).queryByText("Draft the programme"),
-  ).not.toBeInTheDocument();
-  expect(screen.getByText("Work for Samir Haddad")).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "Show all" }));
-  expect(within(work).getByText("Draft the programme")).toBeVisible();
-});
-
-it("steers the running Manager", async () => {
-  const user = userEvent.setup();
-  const posts = renderTeam("run-1");
-  await user.type(
-    await screen.findByLabelText("Steer the Manager while it works"),
-    "Use revision C drawings only",
+  const team = await screen.findByRole("list", { name: "Team" });
+  const rows = within(team).getAllByRole("listitem");
+  expect(rows[0]).toHaveTextContent("Tender Manager");
+  expect(rows[0]).toHaveTextContent("Ready for your next request");
+  expect(team).toHaveTextContent(
+    "Asked the Tender Manager: Is night work allowed?",
   );
-  await user.click(screen.getByRole("button", { name: "Send" }));
-  await waitFor(() => expect(posts).toHaveLength(1));
-  expect(posts[0].path).toBe("/api/tenders/one/runs/run-1/steering");
-  expect(posts[0].body).toMatchObject({
-    kind: "constraint",
-    content: "Use revision C drawings only",
+  expect(rows[1]).toHaveTextContent("Samir Haddad · Senior Quantity Surveyor");
+  expect(rows[1]).toHaveTextContent("Finished: Ground slab is C30/37, 250 mm.");
+  expect(screen.queryByText(/model-a|tokens|requests/)).not.toBeInTheDocument();
+
+  await user.click(
+    within(rows[1]).getByRole("button", { name: /Samir Haddad/ }),
+  );
+  const card = screen.getByRole("article", { name: "Samir Haddad" });
+  expect(
+    within(card).getByText("Fifteen years pricing public buildings."),
+  ).toBeVisible();
+  const work = within(card).getByRole("list", {
+    name: "Work for Samir Haddad",
   });
-  expect(await screen.findByText(/applies it at its next step/)).toBeVisible();
+  await user.click(within(work).getByText("Check the slab"));
+  expect(
+    within(card).getByText("Ground slab is C30/37, 250 mm."),
+  ).toBeVisible();
+  expect(
+    await within(card).findByRole("button", { name: /Concrete spec.pdf/ }),
+  ).toBeVisible();
+});
+
+it("keeps finished and stopped work behind Past work", async () => {
+  const user = userEvent.setup();
+  renderTeam();
+  const toggle = await screen.findByRole("button", { name: "Past work (1)" });
+  expect(
+    screen.queryByRole("list", { name: "Past work" }),
+  ).not.toBeInTheDocument();
+  await user.click(toggle);
+  expect(
+    within(screen.getByRole("list", { name: "Past work" })).getByText(
+      "Check the slab",
+    ),
+  ).toBeVisible();
 });

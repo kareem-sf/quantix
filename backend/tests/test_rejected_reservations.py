@@ -157,3 +157,38 @@ def test_startup_repair_releases_holds_left_by_rejected_runs(tmp_path):
         ).fetchall()
     assert [row[0] for row in decisions] == ["release_rejected"]
     assert json.dumps(rows[rejected_run["id"]])
+
+
+def test_a_stalled_reply_is_marked_for_one_resend_and_an_oversized_request_is_named():
+    stalled = provider_failure(TimeoutError("read timed out"))
+    assert getattr(stalled, "timed_out", False) is True
+
+    class TooLarge(Exception):
+        status_code = 413
+
+    oversized = provider_failure(TooLarge())
+    assert "too large" in str(oversized)
+    assert not getattr(oversized, "timed_out", False)
+
+
+def test_a_provider_error_inside_a_stream_exception_group_keeps_its_status():
+    class PaymentRequired(Exception):
+        status_code = 402
+
+    wrapped = ExceptionGroup("stream", [PaymentRequired()])
+    failure = provider_failure(wrapped)
+    assert getattr(failure, "status_code", None) == 402
+    assert "Check the credentials, endpoint, model and permissions" not in str(
+        failure
+    ) or "402" in str(failure)
+
+
+def test_a_provider_side_fault_is_resent_but_a_rejection_is_not():
+    class BadGateway(Exception):
+        status_code = 502
+
+    class BadRequest(Exception):
+        status_code = 400
+
+    assert getattr(provider_failure(BadGateway()), "transient", False) is True
+    assert getattr(provider_failure(BadRequest()), "transient", False) is False

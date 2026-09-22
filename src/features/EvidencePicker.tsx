@@ -4,6 +4,7 @@ import { X } from "lucide-react";
 import { tenderPath, useApi, type Schema } from "../api";
 import { ErrorNotice, Loading } from "../components/common";
 import { searchHits } from "./DocumentSearch";
+import { locatorLabel } from "@/lib/locator";
 
 export function EvidencePicker({
   tenderId,
@@ -75,13 +76,13 @@ export function EvidencePicker({
                     onChange([...selected, source.id]);
                     setLabels((current) => ({
                       ...current,
-                      [source.id]: `${source.artifact_name} · ${source.locator}`,
+                      [source.id]: `${source.artifact_name} · ${locatorLabel(source.locator)}`,
                     }));
                     setQuery("");
                   }}
                 >
                   <strong>
-                    {source.artifact_name} · {source.locator}
+                    {source.artifact_name} · {locatorLabel(source.locator)}
                   </strong>
                   <p>{source.text.slice(0, 240)}</p>
                 </button>

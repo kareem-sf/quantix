@@ -33,15 +33,21 @@ function TestWorkspace() {
   );
 }
 
-it("opens the team alongside documents and retains its draft when switching tabs", async () => {
+it("opens on the plan and keeps each tab's state when switching", async () => {
   const user = userEvent.setup();
   render(<TestWorkspace />);
-  await user.click(screen.getByRole("button", { name: /^Team/ }));
+  expect(screen.getByRole("tab", { name: "Plan" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  expect(
+    screen.queryByRole("region", { name: "Workspace launcher" }),
+  ).not.toBeInTheDocument();
+  await user.click(screen.getByRole("tab", { name: "Team" }));
   const draft = screen.getByRole("textbox", { name: "team draft" });
   await user.type(draft, " retained");
-  await user.click(screen.getByRole("button", { name: "Workspace home" }));
-  await user.click(screen.getByRole("button", { name: /Documents/ }));
-  await user.click(screen.getByRole("tab", { name: /Team/ }));
+  await user.click(screen.getByRole("tab", { name: "Documents" }));
+  await user.click(screen.getByRole("tab", { name: "Team" }));
   expect(screen.getByRole("textbox", { name: "team draft" })).toBe(draft);
   expect(draft).toHaveValue("Keep work retained");
 });
@@ -63,25 +69,20 @@ it("collapses and expands the full workspace without remounting the Manager draf
   expect(draft).toHaveValue("Keep my instruction edited");
 });
 
-it("keeps visited tab state, closes a tab, and returns to the launcher", async () => {
-  const user = userEvent.setup();
+it("always shows the four tabs, with no close or launcher controls", () => {
   render(<TestWorkspace />);
-  await user.click(screen.getByRole("button", { name: /^Documents/ }));
-  const draft = screen.getByRole("textbox", { name: "documents draft" });
-  await user.type(draft, " edited");
-  await user.click(screen.getByRole("button", { name: "Workspace home" }));
-  await user.click(screen.getByRole("button", { name: /^Team/ }));
-  await user.click(screen.getByRole("tab", { name: "Documents" }));
-  expect(screen.getByRole("textbox", { name: "documents draft" })).toBe(draft);
-  expect(draft).toHaveValue("Keep work edited");
-  await user.click(screen.getByRole("button", { name: "Close Documents tab" }));
+  expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+    "Plan",
+    "Team",
+    "Documents",
+    "Activity",
+  ]);
   expect(
-    screen.queryByRole("tab", { name: "Documents" }),
+    screen.queryByRole("button", { name: /Close .* tab/ }),
   ).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "Close Team tab" }));
   expect(
-    screen.getByRole("button", { name: /^Documents/ }),
-  ).toBeInTheDocument();
+    screen.queryByRole("button", { name: "Workspace home" }),
+  ).not.toBeInTheDocument();
 });
 
 it("opens context in an anchored popover and keeps keyboard shortcuts out of text inputs", async () => {
@@ -128,4 +129,19 @@ it("starts collapsed so the conversation owns the window until the pane is opene
   ).toBeInTheDocument();
   // Opening it on purpose is remembered for the next visit.
   expect(localStorage.getItem("quantix.right-workspace.v2")).toBe("split");
+});
+
+it("opens on the conversation in a narrow window and keeps the wide-window choice", () => {
+  localStorage.setItem("quantix.right-workspace.v2", "split");
+  const width = window.innerWidth;
+  window.innerWidth = 375;
+  try {
+    render(<TestWorkspace />);
+    expect(
+      screen.getByRole("button", { name: "Show workspace" }),
+    ).toBeInTheDocument();
+    expect(localStorage.getItem("quantix.right-workspace.v2")).toBe("split");
+  } finally {
+    window.innerWidth = width;
+  }
 });

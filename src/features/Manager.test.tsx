@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { vi } from "vitest";
 import userEvent from "@testing-library/user-event";
@@ -81,8 +82,115 @@ it("keeps an asynchronous manager failure visible after it leaves the active run
     </QueryClientProvider>,
   );
   expect(await screen.findByRole("alert")).toHaveTextContent(
-    "Provider unavailable",
+    "the AI service was unavailable",
   );
+});
+
+it("keeps a continued job's work log above its reply after it finishes", async () => {
+  const run = (id: string, status: string, created_at: string) => ({
+    id,
+    tender_id: "one",
+    kind: "manager",
+    instruction: "What is the next step?",
+    status,
+    progress: 0,
+    detail: "",
+    result: {},
+    usage: {},
+    error: status === "failed" ? "A Tender tool call was refused." : null,
+    created_at,
+    updated_at: created_at,
+  });
+  const message = (
+    id: string,
+    role: string,
+    run_id: string,
+    content: string,
+  ) => ({
+    id,
+    tender_id: "one",
+    role,
+    run_id,
+    content,
+    source_ids: [],
+    created_at:
+      role === "engineer" ? "2026-09-15T06:49:00Z" : "2026-09-15T07:13:00Z",
+    result_links: [],
+  });
+  const api = createApi(
+    { base_url: "http://localhost/api", token: "test" },
+    async (url) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("/runs"))
+        return Response.json([
+          run("continued", "completed", "2026-09-15T07:07:00Z"),
+          run("first", "failed", "2026-09-15T06:49:00Z"),
+        ]);
+      if (path.endsWith("/messages"))
+        return Response.json([
+          message("ask", "engineer", "first", "What is the next step?"),
+          message("reply", "manager", "continued", "The next step is pricing."),
+        ]);
+      if (path.includes("/runs/"))
+        return Response.json({
+          items: [],
+          run_status: path.includes("continued") ? "completed" : "failed",
+          next_before: null,
+        });
+      return Response.json(null);
+    },
+  );
+  const overview = {
+    tender: {
+      id: "one",
+      name: "Test tender",
+      status: "active",
+      revision: 1,
+      created_at: "",
+      updated_at: "",
+      name_source: "engineer",
+    },
+    artifact_count: 1,
+    evidence_count: 1,
+    coverage: {
+      registered: 1,
+      extracted: 1,
+      needs_attention: 0,
+      unsupported: 0,
+      failed: 0,
+    },
+    areas: [],
+    findings: [],
+    plan: null,
+    active_runs: [],
+    boq_count: 0,
+  } as Schema<"Overview">;
+  render(
+    <QueryClientProvider
+      client={
+        new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      }
+    >
+      <ApiContext.Provider value={api}>
+        <Manager
+          overview={overview}
+          artifacts={[]}
+          onImport={() => {}}
+          onSettings={() => {}}
+          onSource={() => {}}
+        />
+      </ApiContext.Provider>
+    </QueryClientProvider>,
+  );
+  const reply = await screen.findByText("The next step is pricing.");
+  await waitFor(() =>
+    expect(screen.getAllByRole("region", { name: "Work log" })).toHaveLength(2),
+  );
+  const logs = screen.getAllByRole("region", { name: "Work log" });
+  // The continued job's log comes right before the reply it wrote.
+  expect(
+    logs[1].compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
 });
 
 it("merges the newest page and concurrent replies without losing older history or its reading position", async () => {
@@ -456,16 +564,22 @@ it("attaches saved activity to its originating engineer instruction after comple
                 {
                   event_id: 1,
                   run_id: "completed-run",
-                  operation_id: null,
+                  operation_id: "tool-1",
                   parent_operation_id: null,
                   actor_id: "manager",
                   actor_label: "Tender Manager",
                   assignment_id: null,
                   category: "tool",
                   phase: "completed",
-                  message: "Foundation quantities checked",
+                  message: "Finished inspect_estimate.",
                   created_at: "2026-09-13T10:01:00Z",
-                  tool: null,
+                  tool: "inspect_estimate",
+                  fact: {
+                    kind: "check",
+                    line: "Checked the estimate",
+                    result: "Foundation quantities checked",
+                    state: "done",
+                  },
                   provider: null,
                   model: null,
                   preview: "",
@@ -539,8 +653,10 @@ it("attaches saved activity to its originating engineer instruction after comple
     instruction.compareDocumentPosition(event) &
       Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
-  // Finished work folds into one "How the Tender Manager worked" timeline.
+  // Finished work folds into one work log, summarised in one line.
+  const log = screen.getAllByRole("region", { name: "Work log" });
+  expect(log).toHaveLength(1);
   expect(
-    screen.getAllByRole("region", { name: "How the Tender Manager worked" }),
-  ).toHaveLength(1);
+    within(log[0]).getByRole("button", { name: /Worked for/ }),
+  ).toHaveAttribute("aria-expanded", "false");
 });

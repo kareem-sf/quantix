@@ -435,3 +435,52 @@ def test_cancellation_after_final_page_blocks_persistence(tmp_path, monkeypatch)
         )
     with repo.db.connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM extraction_versions").fetchone()[0] == 0
+
+
+def test_a_successful_re_read_clears_the_warnings_it_resolved(tmp_path, monkeypatch):
+    import json as _json
+
+    from quantix import tesseract_runtime
+    from quantix.db import dump
+    from quantix.extraction_adapters import _clear_resolved_warnings
+
+    repo = Repository(tmp_path)
+    tender = repo.create_tender("Warnings")
+    artifact, _ = repo.register_artifact(
+        tender["id"],
+        "Visit form.pdf",
+        "b" * 64,
+        10,
+        {"kind": "pdf", "status": "needs_attention", "segments": []},
+    )
+    warnings = [
+        {"code": "ocr_language_missing", "message": "Arabic reading isn't set up."},
+        {"code": "pdf_no_text", "message": "Page 2 had no text.", "locator": "page:2"},
+        {"code": "pdf_no_text", "message": "Page 3 had no text.", "locator": "page:3"},
+    ]
+    with repo.db.connect(write=True) as conn:
+        conn.execute(
+            "UPDATE artifacts SET warnings_json=?,status='needs_attention' WHERE id=?",
+            (dump(warnings), artifact["id"]),
+        )
+    monkeypatch.setattr(
+        tesseract_runtime, "tesseract_languages", lambda home=None: frozenset({"eng", "ara"})
+    )
+    segments = [{"page": 2, "state": "extracted", "text": "Now readable"}]
+    with repo.db.connect(write=True) as conn:
+        _clear_resolved_warnings(conn, artifact["id"], segments, tmp_path)
+        row = conn.execute(
+            "SELECT status,warnings_json FROM artifacts WHERE id=?", (artifact["id"],)
+        ).fetchone()
+    assert [w.get("locator") for w in _json.loads(row["warnings_json"])] == ["page:3"]
+    assert row["status"] == "needs_attention"
+
+    with repo.db.connect(write=True) as conn:
+        _clear_resolved_warnings(
+            conn, artifact["id"], [{"page": 3, "state": "extracted", "text": "Readable"}], tmp_path
+        )
+        row = conn.execute(
+            "SELECT status,warnings_json FROM artifacts WHERE id=?", (artifact["id"],)
+        ).fetchone()
+    assert _json.loads(row["warnings_json"]) == []
+    assert row["status"] == "extracted"

@@ -6,6 +6,7 @@
 @import "./typeset.css";
 @import "./styles/motion.css";
 @import "./styles/brand.css";
+@import "./styles/beautiful.css";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
@@ -154,6 +155,24 @@ html[data-theme-transition]::view-transition-new(root) {
   }
   body {
     @apply bg-background text-foreground;
+    /* Every line starts on the left, even when it begins with an Arabic word. */
+    text-align: left;
+  }
+  /* Mostly-Arabic text carries dir="rtl" (see lib/text-direction.ts) and
+     lines up on the right; everything else lines up on the left. */
+  :where([dir="rtl"]) {
+    text-align: right;
+  }
+  :where([dir="ltr"]) {
+    text-align: left;
+  }
+  /* Typed text and document quotes also order each line by its first letter. */
+  textarea,
+  :where(
+    .bidi-text,
+    .bidi-text :is(p, li, td, th, h1, h2, h3, h4, h5, h6, blockquote)
+  ) {
+    unicode-bidi: plaintext;
   }
   html {
     @apply font-sans;

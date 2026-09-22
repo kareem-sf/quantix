@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from . import message_wording
 from .clipped_fields import OptionalText, Text, TextList
 from .db import dump, now
 from .office_tools import redact_text, safe_text
@@ -39,9 +40,9 @@ BATCH_DOCUMENTS = 8
 
 STAGES = {
     "register": "Registering documents",
-    "recognise": "Recognising scanned pages",
-    "index": "Indexing tender evidence",
-    "structure": "Extracting BOQ, schedules and tables",
+    "recognise": "Reading scanned pages",
+    "index": "Preparing documents for search",
+    "structure": "Reading the BOQ, schedules and tables",
     "map": "Mapping the tender package",
 }
 
@@ -87,6 +88,11 @@ class DocumentBrief(BaseModel):
     title: OptionalText(200, description="The document's own title as written.")
     discipline: OptionalText(80, description="For example civil, structural, MEP.")
     brief: Text(600, description="Two or three sentences: what this document is and covers.")
+    label: OptionalText(
+        90,
+        description="A short plain-English label of what the file is, for example "
+        "'Electrical layouts and schedules' or 'Priced BOQ schedule (Arabic)'.",
+    )
     key_topics: TextList(80, 8)
     key_locations: TextList(
         120, 6, description="Where key content is, for example 'page 3: form of tender'."
@@ -101,6 +107,13 @@ class BriefBatch(BaseModel):
     briefs: list[DocumentBrief] = Field(max_length=BATCH_DOCUMENTS)
 
 
+class DocumentGroup(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Text(60, description="A group name an estimator would recognise for this package.")
+    document_ids: TextList(64, 200)
+
+
 class PackageOverview(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -110,6 +123,13 @@ class PackageOverview(BaseModel):
         300,
         10,
         description="Important documents or facts a tender package normally has but this one lacks.",
+    )
+    document_groups: list[DocumentGroup] = Field(
+        default_factory=list,
+        max_length=14,
+        description="Every document id sorted into exactly one group, with names chosen from what "
+        "this package's documents actually are (for example drawings by discipline, "
+        "specifications, bill of quantities, contract, clarifications, forms).",
     )
 
 
@@ -222,6 +242,7 @@ def _package_prompt(
 
     documents = [
         {
+            "id": brief["document_id"],
             "path": brief["relative_path"],
             "type": brief["document_type"],
             "title": brief.get("title"),
@@ -236,7 +257,8 @@ def _package_prompt(
         "alone. The project name is the project's own name as written in the documents, never a folder or "
         "file name unless no document names the project. List important gaps a tender package normally "
         "covers but this one does not appear to, such as a missing bill of quantities or submission "
-        "instructions.\n\n"
+        "instructions. Sort every document id into one group an estimator would recognise, naming the "
+        "groups from what these documents actually are.\n\n"
         + redact_text(
             json.dumps(
                 {
@@ -298,7 +320,12 @@ async def run_analysis(
     except InterruptedError:
         raise
     except Exception as error:  # noqa: BLE001 - reported to the engineer, later stages continue
-        finish("index", "failed", f"Meaning search could not be prepared: {safe_text(error, 300)}")
+        finish(
+            "index",
+            "failed",
+            "Search could not be prepared. Documents can still be read one by one.",
+            error=safe_text(error, 300),
+        )
 
     _stage(repo, run_id, "structure", "running")
     repo.update_run(run_id, progress=62)
@@ -311,7 +338,12 @@ async def run_analysis(
             boq_items=len(estimate["items"]),
         )
     except Exception as error:  # noqa: BLE001
-        finish("structure", "failed", f"BOQ extraction needs attention: {safe_text(error, 300)}")
+        finish(
+            "structure",
+            "failed",
+            "The BOQ could not be read automatically.",
+            error=safe_text(error, 300),
+        )
 
     if cancelled.is_set():
         raise InterruptedError("Analysis stopped at your request.")
@@ -356,7 +388,13 @@ async def run_analysis(
                 (BRIEF_VERSION, *keys.values()),
             )
         }
-    pending = [artifact for artifact in artifacts if keys[artifact["id"]] not in cached]
+    # Briefs saved before file labels existed are written again once, so every
+    # document gets its short English label.
+    pending = [
+        artifact
+        for artifact in artifacts
+        if keys[artifact["id"]] not in cached or "label" not in cached[keys[artifact["id"]]]
+    ]
     batches, batch, size = [], [], 0
     for artifact in pending:
         item = inputs[artifact["id"]]
@@ -438,7 +476,12 @@ async def run_analysis(
     except InterruptedError:
         raise
     except Exception as error:  # noqa: BLE001
-        finish("map", "failed", f"The package map could not be completed: {safe_text(error, 400)}")
+        finish(
+            "map",
+            "failed",
+            "The package overview could not be finished.",
+            error=safe_text(error, 400),
+        )
     return result
 
 
@@ -465,6 +508,15 @@ def apply_analysis(repo: "Repository", prepared: PreparedAnalysisResult) -> dict
         "documents": list(prepared.briefs.values()),
         "overview": prepared.overview.overview if prepared.overview else None,
         "gaps": prepared.overview.gaps if prepared.overview else [],
+        "groups": [
+            {
+                "name": group.name,
+                "document_ids": [
+                    identifier for identifier in group.document_ids if identifier in prepared.briefs
+                ],
+            }
+            for group in (prepared.overview.document_groups if prepared.overview else [])
+        ],
         "identity": prepared.overview.identity.model_dump(mode="json")
         if prepared.overview
         else None,
@@ -519,7 +571,7 @@ def summary_message(prepared: PreparedAnalysisResult, artifacts: list[dict]) -> 
         ]
         lines += [f"- {label}: {value}" for label, value in facts if value]
     else:
-        lines.append(f"I registered and indexed the tender package ({len(artifacts)} documents).")
+        lines.append(message_wording.registered(len(artifacts)))
     if prepared.briefs:
         counts = Counter(
             DOCUMENT_TYPE_LABELS.get(brief["document_type"], "other document")
@@ -547,7 +599,9 @@ def summary_message(prepared: PreparedAnalysisResult, artifacts: list[dict]) -> 
         lines.append("**Gaps to check:** " + "; ".join(prepared.overview.gaps[:5]))
     for key in ("index", "structure", "map"):
         stage = stages.get(key) or {}
-        if stage.get("state") in {"failed", "waiting"}:
-            lines.append(f"**{STAGES[key]}:** {stage.get('detail')}")
+        if stage.get("state") == "failed":
+            lines.append(message_wording.STAGE_FAILED[key])
+        elif stage.get("state") == "waiting":
+            lines.append(message_wording.stage_waiting(stage.get("detail") or ""))
     lines.append("Ask me anything about this tender, or tell me what to prepare first.")
     return "\n\n".join(lines)

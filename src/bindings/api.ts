@@ -367,6 +367,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tenders/{tender_id}/approvals/{kind}/{record_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Approval */
+        get: operations["approval_api_tenders__tender_id__approvals__kind___record_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tenders/{tender_id}/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide In Chat */
+        post: operations["decide_in_chat_api_tenders__tender_id__approvals_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tenders/{tender_id}/plans": {
         parameters: {
             query?: never;
@@ -548,6 +582,23 @@ export interface paths {
         put?: never;
         /** Resume */
         post: operations["resume_api_runs__run_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tenders/{tender_id}/analysis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Analyse Package */
+        post: operations["analyse_package_api_tenders__tender_id__analysis_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1899,6 +1950,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tender-summaries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Tender Summaries */
+        get: operations["get_tender_summaries_api_tender_summaries_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tenders/{tender_id}/job-summaries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Job Summaries */
+        get: operations["get_job_summaries_api_tenders__tender_id__job_summaries_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tenders/{tender_id}/document-groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Document Groups */
+        get: operations["get_document_groups_api_tenders__tender_id__document_groups_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tenders/{tender_id}/documents/{artifact_id}/group": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Move Document */
+        put: operations["move_document_api_tenders__tender_id__documents__artifact_id__group_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tenders/{tender_id}/waiting": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Waiting */
+        get: operations["get_waiting_api_tenders__tender_id__waiting_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tenders/{tender_id}/work-brief": {
         parameters: {
             query?: never;
@@ -2155,6 +2291,60 @@ export interface components {
             /** Page */
             page?: number | null;
         };
+        /** ApprovalDecision */
+        ApprovalDecision: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "finding" | "plan" | "requirement" | "boq_row" | "takeoff" | "quantity" | "rate";
+            /** Id */
+            id: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "accept" | "reject";
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+        };
+        /**
+         * ApprovalDetail
+         * @description One item in full, for reading before deciding.
+         */
+        ApprovalDetail: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "finding" | "plan" | "requirement" | "boq_row" | "takeoff" | "quantity" | "rate";
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "waiting" | "accepted" | "rejected" | "closed";
+            /**
+             * Can Reject
+             * @default true
+             */
+            can_reject: boolean;
+            /** Facts */
+            facts?: string[];
+            /** Source Ids */
+            source_ids?: string[];
+        };
         /** ApprovalRequest */
         ApprovalRequest: {
             /** Rationale */
@@ -2359,6 +2549,11 @@ export interface components {
              * @default
              */
             note: string;
+            /**
+             * Owner
+             * @default
+             */
+            owner: string;
         };
         /** BriefWorkProduct */
         BriefWorkProduct: {
@@ -2836,6 +3031,33 @@ export interface components {
             /** Backup Count */
             backup_count: number;
         };
+        /** DocumentGroupView */
+        DocumentGroupView: {
+            /** Name */
+            name: string;
+            /** Documents */
+            documents?: components["schemas"]["GroupedDocument"][];
+        };
+        /** DocumentGroupsState */
+        DocumentGroupsState: {
+            /** Groups */
+            groups?: components["schemas"]["DocumentGroupView"][];
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+            /**
+             * Problems
+             * @default 0
+             */
+            problems: number;
+            /**
+             * Grouped
+             * @default false
+             */
+            grouped: boolean;
+        };
         /** DraftInput */
         DraftInput: {
             /** To */
@@ -3083,6 +3305,35 @@ export interface components {
              */
             max_search_calls: number;
         };
+        /** GroupedDocument */
+        GroupedDocument: {
+            /** Artifact Id */
+            artifact_id: string;
+            /** Name */
+            name: string;
+            /**
+             * Label
+             * @default
+             */
+            label: string;
+            /** Pages */
+            pages?: number | null;
+            /**
+             * Kind
+             * @default
+             */
+            kind: string;
+            /**
+             * Problem
+             * @default
+             */
+            problem: string;
+            /**
+             * Moved By Engineer
+             * @default false
+             */
+            moved_by_engineer: boolean;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -3195,6 +3446,45 @@ export interface components {
             /** Vat Percent */
             vat_percent?: string | null;
             provenance?: components["schemas"]["RateSource"] | null;
+        };
+        /** JobSummary */
+        JobSummary: {
+            /** Run Id */
+            run_id: string;
+            /** Documents */
+            documents?: string[];
+            /**
+             * Searches
+             * @default 0
+             */
+            searches: number;
+            /**
+             * Page Views
+             * @default 0
+             */
+            page_views: number;
+            /**
+             * Staff Hired
+             * @default 0
+             */
+            staff_hired: number;
+            /** Colleagues Asked */
+            colleagues_asked?: string[];
+            /**
+             * Drafts Saved
+             * @default 0
+             */
+            drafts_saved: number;
+            /**
+             * Proposals
+             * @default 0
+             */
+            proposals: number;
+        };
+        /** JobSummaryList */
+        JobSummaryList: {
+            /** Jobs */
+            jobs?: components["schemas"]["JobSummary"][];
         };
         /** KnowledgeAudit */
         KnowledgeAudit: {
@@ -3484,6 +3774,51 @@ export interface components {
             created_at: string;
             /** Result Links */
             result_links?: components["schemas"]["ResultLink"][];
+            question?: components["schemas"]["MessageQuestion"] | null;
+            /** Approvals */
+            approvals?: components["schemas"]["MessageApproval"][];
+        };
+        /** MessageApproval */
+        MessageApproval: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "finding" | "plan" | "requirement" | "boq_row" | "takeoff" | "quantity" | "rate";
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "waiting" | "accepted" | "rejected" | "closed";
+            /**
+             * Can Reject
+             * @default true
+             */
+            can_reject: boolean;
+        };
+        /** MessageChoice */
+        MessageChoice: {
+            /** Label */
+            label: string;
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /**
+             * Recommended
+             * @default false
+             */
+            recommended: boolean;
         };
         /** MessagePage */
         MessagePage: {
@@ -3491,6 +3826,13 @@ export interface components {
             items: components["schemas"]["Message"][];
             /** Next Cursor */
             next_cursor?: string | null;
+        };
+        /** MessageQuestion */
+        MessageQuestion: {
+            /** Text */
+            text: string;
+            /** Choices */
+            choices: components["schemas"]["MessageChoice"][];
         };
         /** MessageRequest */
         MessageRequest: {
@@ -3562,6 +3904,11 @@ export interface components {
             source: "provider" | "manual" | "catalog";
             /** Updated At */
             updated_at: string;
+        };
+        /** MoveDocumentRequest */
+        MoveDocumentRequest: {
+            /** Group */
+            group: string;
         };
         /** MutationReceipt */
         MutationReceipt: {
@@ -4044,7 +4391,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "proposed" | "approved";
+            status: "proposed" | "approved" | "rejected";
             /** Is Current */
             is_current: boolean;
             /** Created At */
@@ -4813,6 +5160,10 @@ export interface components {
             source_ids?: string[];
             /** Artifact Refs */
             artifact_refs?: components["schemas"]["ActivityArtifactReference"][];
+            /** Fact */
+            fact?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** RunActivityDetail */
         RunActivityDetail: {
@@ -5302,7 +5653,10 @@ export interface components {
             row_reference: string;
             /** Source Excerpt */
             source_excerpt: string;
-            /** Description */
+            /**
+             * Description
+             * @default
+             */
             description: string;
             /** Unit */
             unit: string;
@@ -5767,6 +6121,42 @@ export interface components {
              */
             permitted_destinations: string[];
         };
+        /** TenderSummary */
+        TenderSummary: {
+            /** Tender Id */
+            tender_id: string;
+            /** Short Name */
+            short_name: string;
+            /** Full Name */
+            full_name: string;
+            /** Due */
+            due?: string | null;
+            /**
+             * Working
+             * @default false
+             */
+            working: boolean;
+            /**
+             * Waiting
+             * @default 0
+             */
+            waiting: number;
+            /**
+             * Documents
+             * @default 0
+             */
+            documents: number;
+            /**
+             * Document Problems
+             * @default 0
+             */
+            document_problems: number;
+        };
+        /** TenderSummaryList */
+        TenderSummaryList: {
+            /** Tenders */
+            tenders?: components["schemas"]["TenderSummary"][];
+        };
         /**
          * TenderThinking
          * @description How much the Tender Manager's AI thinks before answering.
@@ -5838,6 +6228,42 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** WaitingItem */
+        WaitingItem: {
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "plan" | "finding" | "quantities" | "rates" | "requirements" | "question";
+            /** Title */
+            title: string;
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /**
+             * Count
+             * @default 1
+             */
+            count: number;
+            /** Target View */
+            target_view: string;
+            /** Target Id */
+            target_id?: string | null;
+        };
+        /** WaitingState */
+        WaitingState: {
+            /** Items */
+            items?: components["schemas"]["WaitingItem"][];
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
         };
         /** WorkBrief */
         WorkBrief: {
@@ -6965,6 +7391,74 @@ export interface operations {
             };
         };
     };
+    approval_api_tenders__tender_id__approvals__kind___record_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tender_id: string;
+                kind: string;
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_in_chat_api_tenders__tender_id__approvals_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalDecision"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageApproval"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     plans_api_tenders__tender_id__plans_get: {
         parameters: {
             query?: never;
@@ -7287,6 +7781,37 @@ export interface operations {
             header?: never;
             path: {
                 run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    analyse_package_api_tenders__tender_id__analysis_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tender_id: string;
             };
             cookie?: never;
         };
@@ -10252,6 +10777,155 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CalendarEvent"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tender_summaries_api_tender_summaries_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenderSummaryList"];
+                };
+            };
+        };
+    };
+    get_job_summaries_api_tenders__tender_id__job_summaries_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobSummaryList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_document_groups_api_tenders__tender_id__document_groups_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentGroupsState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    move_document_api_tenders__tender_id__documents__artifact_id__group_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tender_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoveDocumentRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentGroupsState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_waiting_api_tenders__tender_id__waiting_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WaitingState"];
                 };
             };
             /** @description Validation Error */

@@ -106,14 +106,17 @@ function renderWorkbook({
   };
 }
 
-it("copies the full hash of the displayed source version", async () => {
-  const { user } = renderWorkbook({
+it("shows the file version without its internal hash", async () => {
+  renderWorkbook({
     evidence: () => Response.json([workbookRow("Main", 1)]),
   });
-  const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
-  await user.click(await screen.findByRole("button", { name: "Copy Hash" }));
-  expect(write).toHaveBeenCalledWith(workbook.content_hash);
-  expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+  expect(await screen.findByText("Main quantity row 1")).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "Copy Hash" }),
+  ).not.toBeInTheDocument();
+  expect(document.body.textContent).not.toContain(
+    workbook.content_hash.slice(0, 12),
+  );
 });
 
 it("renders the source viewer inline without modal focus trapping", async () => {

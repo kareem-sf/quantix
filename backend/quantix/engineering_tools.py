@@ -18,16 +18,37 @@ from .staff_models import OfficeConflict
 from .work_product_models import WorkProductDraft, WorkProductKind
 from .work_products import WorkProductService
 
+# The inputs each installed calculation method reads.
+_METHOD_INPUTS = {
+    "product": ("inputs.quantity", "inputs.factor"),
+    "emission_factor": ("inputs.quantity", "inputs.factor"),
+    "unit_calculation": ("inputs.quantity", "inputs.factor"),
+    "sum": ("inputs.values",),
+    "difference": ("inputs.left", "inputs.right"),
+    "add_units": ("inputs.left", "inputs.right", "units.left", "units.right"),
+    "convert_unit": ("inputs.value", "units.from", "units.to"),
+}
+
 
 def _sources(office, references):
+    # Citing a web page or a passage not read in this run is the model's to
+    # correct, so it is told which ones and can read them or drop them. A source
+    # outside the Tender is still refused by ensure_evidence_allowed.
+    unread = []
     for reference in references:
         if reference.startswith(("http://", "https://")):
-            raise ValueError(
+            raise ToolArgumentError(
                 "Cite Tender evidence IDs here. Web sources belong in proposed web findings."
             )
         office.ensure_evidence_allowed(reference, tool_id=None)
-        if reference not in office.seen_sources:
-            raise ValueError("Read each source before using it in a work product or calculation.")
+        if not office.has_seen_source(reference):
+            unread.append(reference)
+    if unread:
+        raise ToolArgumentError(
+            "Read each source in this run before citing it. Not read yet: "
+            + ", ".join(unread)
+            + ". Read them with read_source first, or leave them out of source_refs."
+        )
 
 
 def _work(ctx, capability, payload, action, event, *, source_refs=()):
@@ -104,9 +125,30 @@ def engineering_tools():
         precision: str = "0.01",
         source_refs: list[str] | None = None,
     ) -> str:
-        """Calculate product, sum, difference or add_units using decimal values and checked unit conversion. convert_unit takes inputs.value and units.from/units.to. Pass numbers as strings. This saves a draft without changing accepted quantities or prices."""
+        """Calculate product, sum, difference, add_units or convert_unit with decimal values and checked units. Inputs: product needs inputs.quantity and inputs.factor; sum needs inputs.values (a list); difference needs inputs.left and inputs.right; add_units needs inputs.left, inputs.right, units.left and units.right; convert_unit needs inputs.value, units.from and units.to. Pass numbers as strings. This saves a draft without changing accepted quantities or prices."""
+        needed = _METHOD_INPUTS.get(method)
+        if needed:
+            missing = [
+                name
+                for name in needed
+                if (units or {}).get(name.split(".", 1)[1]) is None
+                and name.startswith("units.")
+                or name.startswith("inputs.")
+                and inputs.get(name.split(".", 1)[1]) is None
+            ]
+            if missing:
+                raise ToolArgumentError(
+                    f"The {method} calculation needs {', '.join(needed)}; missing {', '.join(missing)}."
+                )
+        # Models often give the number of decimal places ("2") instead of the step.
+        if re.fullmatch(r"0|[2-9]|1[0-2]", precision.strip()):
+            places = int(precision)
+            precision = "1" if places == 0 else "0." + "0" * (places - 1) + "1"
         if not re.fullmatch(r"1|0\.0{0,11}1", precision):
-            raise ValueError("Choose decimal precision from 1 through 0.000000000001.")
+            raise ToolArgumentError(
+                'Give precision as the rounding step, for example "0.01" for two decimal places, '
+                'from "1" through "0.000000000001".'
+            )
         references = source_refs or []
         request = CalculationRequest(
             method_id=method,
@@ -217,8 +259,9 @@ def engineering_tools():
     ) -> str:
         """Read a specific saved work-product version and a bounded page of its rows. Inspect its cited sources separately before adopting its findings."""
         office = ctx.context
-        if offset < 0 or not 1 <= limit <= 100:
-            raise ValueError("Choose a non-negative row offset and a limit of 1–100.")
+        # Serve an oversized or negative window as the nearest valid page;
+        # next_offset tells the model where to continue.
+        offset, limit = max(0, offset), min(max(1, limit), 100)
         result = WorkProductService(office.repo).get(office.tender_id, product_id, version)
         for reference in result.source_refs:
             office.ensure_evidence_allowed(reference, tool_id=None)
@@ -239,8 +282,9 @@ def engineering_tools():
     ) -> str:
         """List saved work products newest first: ID, title, kind, current version and whether a source behind it changed. Use read_work_product for the content."""
         office = ctx.context
-        if offset < 0 or not 1 <= limit <= 50:
-            raise ToolArgumentError("Choose a non-negative offset and a limit of 1–50.")
+        # Serve an oversized or negative window as the nearest valid page;
+        # next_offset tells the model where to continue.
+        offset, limit = max(0, offset), min(max(1, limit), 50)
         page = WorkProductService(office.repo).list(office.tender_id, offset=offset, limit=limit)
         return dump(
             {

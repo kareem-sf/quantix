@@ -41,8 +41,11 @@ def test_every_provider_offers_its_documented_thinking_levels():
         "medium",
         "high",
     ]
-    # An OpenAI-compatible endpoint documents nothing, so nothing is assumed.
-    assert thinking_levels(_direct("custom", "openai_chat"), bare) == []
+    # An OpenAI-compatible endpoint documents nothing, so its efforts are there
+    # for the engineer to choose and Quantix never selects one by itself.
+    assert thinking_levels(_direct("custom", "openai_chat"), bare) == ["low", "medium", "high"]
+    assert recommended_level(_direct("custom", "openai_chat"), bare) is None
+    assert light_level(_direct("custom", "openai_chat"), bare) is None
 
     codex = {
         "provider_id": "codex",
@@ -328,3 +331,83 @@ def test_a_passage_is_resent_at_most_once_and_oversized_searches_are_capped(tmp_
     assert third["already_returned"] is True and "already sent again" in third["note"]
     hits = _call(context, "search_sources", {"query": "bid bond", "limit": 80, "exact": True}, "s1")
     assert len(hits) <= 20
+
+
+def test_only_the_newest_page_images_are_resent():
+    from pydantic_ai.messages import BinaryContent, UserPromptPart
+
+    from quantix.ai_api_engine import HISTORY_KEEP_IMAGES, IMAGE_TRIMMED_NOTE, trim_history_images
+
+    messages = []
+    for index in range(HISTORY_KEEP_IMAGES + 3):
+        messages.append(ModelResponse(parts=[TextPart(f"look at page {index + 1}")]))
+        messages.append(
+            ModelRequest(
+                parts=[
+                    UserPromptPart(
+                        [
+                            f"Page {index + 1}",
+                            BinaryContent(data=b"x" * 1000, media_type="image/png"),
+                        ]
+                    )
+                ]
+            )
+        )
+
+    trimmed = trim_history_images(messages)
+
+    images = [
+        item
+        for message in trimmed
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        for item in part.content
+        if isinstance(item, BinaryContent)
+    ]
+    notes = [
+        item
+        for message in trimmed
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        for item in part.content
+        if item == IMAGE_TRIMMED_NOTE
+    ]
+    assert len(images) == HISTORY_KEEP_IMAGES
+    assert len(notes) == 3
+    # The newest pages keep their images; the oldest become notes.
+    assert isinstance(trimmed[-1].parts[0].content[1], BinaryContent)
+    assert trimmed[1].parts[0].content[1] == IMAGE_TRIMMED_NOTE
+    assert trim_history_images(trimmed) is trimmed
+
+
+def test_a_reply_that_ran_out_of_room_is_resent_with_a_note_to_keep_it_short():
+    from pydantic_ai.messages import UserPromptPart
+
+    from quantix.ai_api_engine import OUTPUT_LIMIT_NOTE, with_output_limit_note
+
+    messages = _returns(100, 100)
+    resent = with_output_limit_note(messages)
+    assert resent[:-1] == messages[:-1]
+    last = resent[-1].parts
+    assert last[:-1] == list(messages[-1].parts)
+    assert isinstance(last[-1], UserPromptPart) and last[-1].content == OUTPUT_LIMIT_NOTE
+
+
+def test_model_failures_are_named_without_their_content():
+    from pydantic_ai.exceptions import IncompleteToolCall, UnexpectedModelBehavior
+
+    from quantix.ai_api_engine import model_failure_kind
+
+    thinking_only = UnexpectedModelBehavior(
+        "Model token limit (8192) exceeded before any response was generated."
+    )
+    assert model_failure_kind(thinking_only) == "output_limit"
+    assert model_failure_kind(IncompleteToolCall("cut off")) == "output_limit"
+    assert (
+        model_failure_kind(
+            UnexpectedModelBehavior("Tool 'propose' exceeded max retries count of 3.")
+        )
+        == "tool_retries"
+    )
+    assert model_failure_kind(ExceptionGroup("stream", [thinking_only])) == "output_limit"
+    assert model_failure_kind(ValueError("other")) == "other"

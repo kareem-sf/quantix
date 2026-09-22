@@ -58,12 +58,26 @@ class PriceProposal(Proposal):
     urls: list[str] = Field(min_length=1, max_length=10)
 
 
+class QuestionChoice(Proposal):
+    label: str = Field(min_length=1, max_length=120)
+    detail: str = Field(default="", max_length=240)
+    recommended: bool = False
+
+
+class EngineerQuestion(Proposal):
+    """One question for the engineer, answered by picking a suggestion or writing another."""
+
+    text: str = Field(min_length=1, max_length=300)
+    choices: list[QuestionChoice] = Field(min_length=2, max_length=4)
+
+
 class ManagerAnswer(Proposal):
     """What the Tender Manager returns at the end of a turn; records to review come from propose."""
 
     summary: str = Field(min_length=1, max_length=18000)
     source_ids: list[str] = Field(default_factory=list, max_length=100)
     findings: list[FindingProposal] = Field(default_factory=list, max_length=30)
+    question: EngineerQuestion | None = None
 
 
 class OfficeProposals(Proposal):
@@ -73,14 +87,15 @@ class OfficeProposals(Proposal):
     web_findings: list[WebFinding] = Field(default_factory=list, max_length=20)
     price_proposals: list[PriceProposal] = Field(default_factory=list, max_length=20)
     quote_drafts: list[DraftInput] = Field(default_factory=list, max_length=8)
-    unit_rate_proposals: list[UnitRateProposalInput] = Field(default_factory=list, max_length=20)
+    unit_rate_proposals: list[UnitRateProposalInput] = Field(default_factory=list, max_length=60)
     project_map_nodes: list[NodeInput] = Field(default_factory=list, max_length=30)
     submission_requirements: list[RequirementProposal] = Field(default_factory=list, max_length=30)
     programme_proposal: ConstructionProgramme | None = None
     takeoff: list[TakeoffLineProposal] = Field(default_factory=list, max_length=200)
     draft_documents: list[DraftDocumentProposal] = Field(default_factory=list, max_length=8)
     quantity_proposals: list[AgentQuantityProposal] = Field(default_factory=list, max_length=30)
-    boq_item_proposals: list[SourceBoqProposal] = Field(default_factory=list, max_length=50)
+    # A whole BOQ runs to hundreds of rows; each round the engineer reviews is one job.
+    boq_item_proposals: list[SourceBoqProposal] = Field(default_factory=list, max_length=150)
 
 
 class OfficeOutput(ManagerAnswer, OfficeProposals):

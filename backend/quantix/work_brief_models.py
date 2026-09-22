@@ -19,6 +19,8 @@ class BriefStep(OfficeModel):
     title: str = Field(min_length=1, max_length=200)
     state: BriefStepState
     note: str = Field(default="", max_length=500)
+    # Who does this step: "Tender Manager" or a staff member's name.
+    owner: str = Field(default="", max_length=120)
 
 
 class BriefPoint(OfficeModel):

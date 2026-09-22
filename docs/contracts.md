@@ -88,6 +88,7 @@ The shared tool dispatcher (`tool_policy.dispatch`) records preparation, invocat
 
 - `GET /api/tenders/{tid}/runs/{rid}/activity?after=&before=&limit=&q=&actor_id=&category=&errors_only=` returns `RunActivityPage`. Cursors bind run, event ID and content fingerprint.
 - `GET /api/tenders/{tid}/runs/{rid}/activity/{event_id}?offset=&limit=` returns `RunActivityDetail` with paginated payload characters and redaction/unavailable fields.
+- `GET /api/tenders/{tid}/job-summaries` returns `JobSummaryList {jobs: [{run_id, documents, searches, page_views, staff_hired, colleagues_asked, drafts_saved, proposals}]}` for each run with finished tool facts, counted from the `fact` of `completed` events. Runs with no finished facts are omitted.
 - `GET /api/tenders/{tid}/runs/{rid}/chat-stream` observes events with AI SDK UI v7-compatible SSE. It cannot submit, retry, approve or cancel. Observer disconnect leaves work running.
 
 Model request capture retains the content Quantix controls, effective settings/tool definitions, public output and available usage. Account internals, authentication headers, credentials, reasoning signatures and encrypted blocks are excluded before persistence. Native request capture is labelled `Content supplied by Quantix` and does not claim to expose an original client's entire internal prompt.

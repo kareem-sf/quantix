@@ -5,6 +5,8 @@ export function SettingsRoute() {
   const location = useLocation();
   const navigate = useNavigate();
   const params = new URLSearchParams(location.search);
+  const origin = params.get("return") ?? "";
+  const tenderId = /^\/tenders\/([^/?#]+)/.exec(origin)?.[1];
 
   function update(patch: Record<string, string | null>) {
     const next = new URLSearchParams(location.search);
@@ -22,6 +24,7 @@ export function SettingsRoute() {
       <div className="mx-auto w-full max-w-5xl px-6 py-8">
         <Settings
           section={params.get("section") ?? undefined}
+          tenderId={tenderId ? decodeURIComponent(tenderId) : undefined}
           onSection={(section) => update({ section })}
           connectionId={params.get("connection") ?? undefined}
           onConnectionClose={() => update({ connection: null })}

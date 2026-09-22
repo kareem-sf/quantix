@@ -139,7 +139,7 @@ class JobManager:
             run = self._queue(tender_id, "analysis", "Analyzing tender package.")
         return self._schedule(run)
 
-    def _ai_ready(self, tender_id):
+    def ai_ready(self, tender_id):
         """True when the Tender's AI can be used now, otherwise the plain reason."""
 
         from .ai_policy import AIPolicyService
@@ -598,7 +598,7 @@ class JobManager:
                             tender_id,
                             identifier,
                             cancelled,
-                            ai_ready=lambda: self._ai_ready(tender_id),
+                            ai_ready=lambda: self.ai_ready(tender_id),
                         ),
                         timeout=3 * 60 * 60,
                     )

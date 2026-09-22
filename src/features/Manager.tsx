@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { FileText, ListChecks, Play, Sparkles, Square } from "lucide-react";
+import { FileText, Sparkles, Square } from "lucide-react";
 import {
   tenderPath,
   useApi,
@@ -35,12 +35,13 @@ import { cn } from "@/lib/utils";
 import { Composer } from "./Composer";
 import { ManagerMessage } from "./ManagerMessage";
 import { ModelPicker } from "./ModelPicker";
+import { ThinkingPicker } from "./ThinkingPicker";
+import { settingsPath } from "../app/settings-sections";
 import { PendingMessage } from "./PendingMessage";
-import { PlanReview } from "./PlanReview";
 import { RunRow } from "./RunRow";
 import { AnalysisStages } from "./AnalysisStages";
-import { ThinkingPicker } from "./ThinkingPicker";
-import { ManagerPlanning } from "./ManagerPlanning";
+import { WorkLog } from "./work-log/WorkLog";
+import { groupJobs } from "./activity/JobHistory";
 import type { SourceSelection } from "./Sources";
 import { parseRouteContext } from "../navigation/routes";
 
@@ -106,14 +107,13 @@ export function Manager({
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [historyError, setHistoryError] = useState<unknown>(null);
-  const [reviewPlanId, setReviewPlanId] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
+  const [aiPickerOpen, setAiPickerOpen] = useState(false);
   const [stopError, setStopError] = useState<unknown>(null);
   const [stopNotice, setStopNotice] = useState("");
   const [reviewDocumentsError, setReviewDocumentsError] =
     useState<unknown>(null);
   const [reviewingDocuments, setReviewingDocuments] = useState(false);
-  const [aiPickerOpen, setAiPickerOpen] = useState(false);
 
   useEffect(() => {
     const incoming = Array.isArray(messages.data)
@@ -133,14 +133,73 @@ export function Manager({
 
   const activeRuns = overview.active_runs;
   const runList = Array.isArray(runs.data) ? runs.data : [];
+  const runById = new Map(runList.map((run) => [run.id, run]));
+  // Every attempt at one request (the first run and each Continue after a
+  // stop) is shown under that request, in order.
+  const jobs = groupJobs(
+    runList.filter((run) => ["manager", "conversation"].includes(run.kind)),
+  );
+  const attemptsFrom = (runId: string) => {
+    const attempts = jobs.find((job) =>
+      job.attempts.some((attempt) => attempt.id === runId),
+    )?.attempts;
+    if (!attempts) return [runId];
+    return attempts
+      .slice(attempts.findIndex((attempt) => attempt.id === runId))
+      .map((attempt) => attempt.id);
+  };
   const attachedRunIds = new Set(
     history
       .filter((message) => message.role === "engineer" && message.run_id)
+      .flatMap((message) => attemptsFrom(message.run_id!)),
+  );
+  // A continued job has no instruction of its own, so its work log sits above
+  // the reply it produced instead of vanishing when it finishes.
+  const replyRunIds = new Set(
+    history
+      .filter(
+        (message) =>
+          message.role === "manager" &&
+          message.run_id &&
+          !attachedRunIds.has(message.run_id) &&
+          ["manager", "conversation"].includes(
+            runById.get(message.run_id)?.kind ?? "",
+          ),
+      )
       .map((message) => message.run_id!),
   );
+  const loggedRunIds = new Set([...attachedRunIds, ...replyRunIds]);
   // Registering and analysing a package show their stages instead of a generic line.
   const packageRun = activeRuns.find((run) =>
     ["import", "analysis"].includes(run.kind),
+  );
+  // A picked answer is the engineer's reply, sent like a typed message.
+  const sendReply = async (content: string) => {
+    const result = await api.post<Schema<"MessageSubmission">>(
+      `${tenderPath(tenderId)}/messages`,
+      {
+        content,
+        idempotency_key: `answer-${tenderId}-${Date.now()}`,
+      } satisfies Schema<"MessageRequest">,
+    );
+    await refresh();
+    return result;
+  };
+  const composeText = (text: string) =>
+    window.dispatchEvent(new CustomEvent("quantix:compose", { detail: text }));
+  const workLog = (runId: string, fallbackStart: string) => (
+    <WorkLog
+      tenderId={tenderId}
+      runId={runId}
+      run={runById.get(runId)}
+      startedAt={runById.get(runId)?.created_at ?? fallbackStart}
+      status={runById.get(runId)?.status}
+      onSource={onSource}
+      onRaiseLimit={raiseLimit}
+      current={
+        activeRuns.some((run) => run.id === runId) || latestRun?.id === runId
+      }
+    />
   );
   const latestRun = runList
     .filter((run) =>
@@ -175,6 +234,15 @@ export function Manager({
     if (onRepair) onRepair(target);
     else window.location.hash = target;
   };
+  // Spending limits live in Settings; the AI and its thinking are also chosen
+  // in the message box.
+  const raiseLimit = () =>
+    openTarget(
+      settingsPath(
+        "tender-ai",
+        `/tenders/${encodeURIComponent(tenderId)}/manager`,
+      ),
+    );
 
   const loadEarlier = useCallback(async () => {
     if (!nextCursor || loadingEarlier) return;
@@ -258,21 +326,6 @@ export function Manager({
     }
   }
 
-  function openPlanReview(planId: string) {
-    if (onRecord) onRecord("plan-review", planId);
-    else setReviewPlanId(planId);
-  }
-
-  if (reviewPlanId)
-    return (
-      <PlanReview
-        tenderId={tenderId}
-        planId={reviewPlanId}
-        onBack={() => setReviewPlanId(null)}
-        onSource={onSource}
-      />
-    );
-
   const conversationEmpty =
     !messages.isPending &&
     history.length === 0 &&
@@ -283,7 +336,7 @@ export function Manager({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex min-h-0 flex-1 flex-col">
-        {activeRuns.length || onCustomizeManager ? (
+        {onCustomizeManager ? (
           <header className="flex shrink-0 items-center justify-end gap-2 px-4 pt-3">
             {onCustomizeManager ? (
               <Button
@@ -294,18 +347,6 @@ export function Manager({
               >
                 <Sparkles data-icon="inline-start" />
                 Customize Manager
-              </Button>
-            ) : null}
-            {activeRuns.length ? (
-              <Button
-                type="button"
-                variant="destructive"
-                size="sm"
-                disabled={stopping}
-                onClick={() => void stopAllWork()}
-              >
-                <Square data-icon="inline-start" />
-                {stopping ? "Stopping…" : "Stop all work"}
               </Button>
             ) : null}
           </header>
@@ -347,7 +388,7 @@ export function Manager({
                   artifactCount={overview.artifact_count}
                   onDocuments={onDocuments}
                   onReviewDocuments={() => void reviewDocuments()}
-                  onChooseAI={() => setAiPickerOpen(true)}
+                  onChooseAI={raiseLimit}
                   ready={!!policyRecord?.manager}
                   disabled={reviewingDocuments || !!pending}
                   busy={activeRuns.length > 0}
@@ -399,12 +440,43 @@ export function Manager({
               {messages.isPending && !history.length ? (
                 <Loading>Loading conversation…</Loading>
               ) : null}
-              {history.map((message) => (
+              {history.map((message, index) => (
                 <Fragment key={message.id}>
+                  {message.role === "manager" &&
+                  message.run_id &&
+                  replyRunIds.has(message.run_id) &&
+                  history.find(
+                    (item) =>
+                      item.role === "manager" && item.run_id === message.run_id,
+                  )?.id === message.id
+                    ? workLog(message.run_id, message.created_at)
+                    : null}
                   <ManagerMessage
                     message={message}
                     tenderId={tenderId}
                     onSource={onSource}
+                    answer={
+                      message.question
+                        ? history
+                            .slice(index + 1)
+                            .find((item) => item.role === "engineer")?.content
+                        : undefined
+                    }
+                    onAnswer={
+                      message.question &&
+                      !history
+                        .slice(index + 1)
+                        .some((item) => item.role === "engineer") &&
+                      !pending
+                        ? sendReply
+                        : undefined
+                    }
+                    onAskChanges={composeText}
+                    onOpenApproval={
+                      onRecord
+                        ? (kind, id) => onRecord("approval", `${kind}:${id}`)
+                        : undefined
+                    }
                     onArtifact={
                       onRecord
                         ? (target) => {
@@ -415,10 +487,6 @@ export function Manager({
                               record.recordId &&
                               record.view &&
                               [
-                                "plan",
-                                "plan-review",
-                                "finding",
-                                "decisions",
                                 "output",
                                 "work-product",
                                 "calculation",
@@ -436,27 +504,13 @@ export function Manager({
                     (item) =>
                       item.role === "engineer" &&
                       item.run_id === message.run_id,
-                  )?.id === message.id ? (
-                    <ManagerPlanning
-                      tenderId={tenderId}
-                      runId={message.run_id}
-                      startedAt={
-                        runList.find((run) => run.id === message.run_id)
-                          ?.created_at ?? message.created_at
-                      }
-                      status={
-                        runList.find((run) => run.id === message.run_id)?.status
-                      }
-                      onSource={onSource}
-                      onRunDetails={() =>
-                        onRecord
-                          ? onRecord("run", message.run_id!)
-                          : openTarget(
-                              `/tenders/${encodeURIComponent(tenderId)}/work?view=run&record=${encodeURIComponent(message.run_id!)}`,
-                            )
-                      }
-                    />
-                  ) : null}
+                  )?.id === message.id
+                    ? attemptsFrom(message.run_id).map((runId) => (
+                        <Fragment key={runId}>
+                          {workLog(runId, message.created_at)}
+                        </Fragment>
+                      ))
+                    : null}
                 </Fragment>
               ))}
               {/* Work in progress is just the line below: the run card repeated
@@ -469,23 +523,18 @@ export function Manager({
                 .filter(
                   (run) =>
                     ["manager", "conversation"].includes(run.kind) &&
-                    !attachedRunIds.has(run.id),
+                    !loggedRunIds.has(run.id),
                 )
                 .map((run) => (
-                  <ManagerPlanning
+                  <WorkLog
                     key={run.id}
                     tenderId={tenderId}
                     runId={run.id}
+                    run={run}
                     status={run.status}
                     startedAt={run.created_at}
                     onSource={onSource}
-                    onRunDetails={() =>
-                      onRecord
-                        ? onRecord("run", run.id)
-                        : openTarget(
-                            `/tenders/${encodeURIComponent(tenderId)}/work?view=run&record=${encodeURIComponent(run.id)}`,
-                          )
-                    }
+                    onRaiseLimit={raiseLimit}
                   />
                 ))}
               {!activeRuns.length &&
@@ -493,19 +542,21 @@ export function Manager({
               ["failed", "cancelled", "interrupted"].includes(
                 latestRun.status,
               ) ? (
-                <RunRow run={latestRun} compact />
-              ) : null}
-              {overview.plan &&
-              !history.some((message) =>
-                message.result_links?.some(
-                  (link) =>
-                    link.kind === "plan" && link.id === overview.plan?.id,
-                ),
-              ) ? (
-                <PlanCard
-                  plan={overview.plan}
-                  onReview={() => openPlanReview(overview.plan!.id)}
-                />
+                ["manager", "conversation"].includes(latestRun.kind) ? (
+                  loggedRunIds.has(latestRun.id) ? null : (
+                    <WorkLog
+                      tenderId={tenderId}
+                      runId={latestRun.id}
+                      run={latestRun}
+                      status={latestRun.status}
+                      startedAt={latestRun.created_at}
+                      onSource={onSource}
+                      onRaiseLimit={raiseLimit}
+                    />
+                  )
+                ) : (
+                  <RunRow run={latestRun} compact />
+                )
               ) : null}
               {pending ? (
                 <PendingMessage
@@ -538,11 +589,7 @@ export function Manager({
                 open={aiPickerOpen}
                 onOpenChange={setAiPickerOpen}
                 onManageAccounts={onSettings}
-                onAdvanced={() =>
-                  openTarget(
-                    `/tenders/${encodeURIComponent(tenderId)}/work?view=ai`,
-                  )
-                }
+                onAdvanced={raiseLimit}
               />
               <ThinkingPicker
                 tenderId={tenderId}
@@ -551,6 +598,8 @@ export function Manager({
             </>
           }
           busy={activeRuns.length > 0}
+          onStop={() => void stopAllWork()}
+          stopping={stopping}
           hasPending={!!pending}
           onSend={async (content, idempotencyKey) => {
             const result = await api.post<Schema<"MessageSubmission">>(
@@ -637,37 +686,6 @@ function ImportSummary({
             <AnimatedBorder radius={8} />
           </Button>
         )}
-      </ItemActions>
-    </Item>
-  );
-}
-
-function PlanCard({
-  plan,
-  onReview,
-}: {
-  plan: Schema<"WorkPlan">;
-  onReview: () => void;
-}) {
-  return (
-    <Item variant="outline" className="bg-card">
-      <ItemMedia variant="icon" className="size-9 rounded-lg bg-muted">
-        <ListChecks />
-      </ItemMedia>
-      <ItemContent>
-        <ItemTitle>
-          <h3 className="text-sm font-medium">{plan.title}</h3>
-        </ItemTitle>
-        <ItemDescription>
-          {plan.tasks.length} tasks ·{" "}
-          {plan.status === "proposed" ? "Ready for your review" : plan.status}
-        </ItemDescription>
-      </ItemContent>
-      <ItemActions>
-        <Button type="button" size="sm" onClick={onReview}>
-          <Play data-icon="inline-start" />
-          Review plan
-        </Button>
       </ItemActions>
     </Item>
   );

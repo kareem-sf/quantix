@@ -25,8 +25,10 @@ import {
   WorkspaceActivity,
   WorkspaceContext,
   WorkspaceDocuments,
-  WorkspaceReviews,
 } from "./WorkspaceViews";
+import { PlanView } from "../plan/PlanView";
+import { ApprovalDetail } from "../chat/ApprovalDetail";
+import { settingsPath } from "../../app/settings-sections";
 
 export type TenderOfficeWorkspaceProps = {
   overview: Schema<"Overview">;
@@ -85,14 +87,14 @@ function TenderWorkspaceContent({
       openingDocumentList.current = false;
       open("documents");
     } else if (sourceKey) open("documents");
-    else if (resultKey) open("reviews");
+    else if (resultKey) open("plan");
   }, [sourceKey, resultKey, open]);
   function showSource(selection: SourceSelection) {
     open("documents");
     onSource(selection);
   }
   function showRecord(view: string, id: string) {
-    open("reviews");
+    open("plan");
     onRecord?.(view, id);
   }
   function reviewOverview() {
@@ -102,15 +104,6 @@ function TenderWorkspaceContent({
     openingDocumentList.current = Boolean(sourceKey);
     onCloseSource?.();
     open("documents");
-  }
-  function returnToConversation() {
-    reviewOverview();
-    workspace.hide();
-    requestAnimationFrame(() =>
-      chatRef.current
-        ?.querySelector<HTMLElement>('[aria-label="Message to Tender Manager"]')
-        ?.focus(),
-    );
   }
   const actions = [
     ...(onCustomizeManager
@@ -199,6 +192,9 @@ function TenderWorkspaceContent({
               onSelectionChange={onSourceSelectionChange ?? onSource}
               onImport={onImport}
               onRegister={onDocuments}
+              revision={overview.active_runs
+                .map((run) => `${run.id}:${run.status}`)
+                .join("|")}
             />
           );
         if (view === "team")
@@ -214,7 +210,20 @@ function TenderWorkspaceContent({
             />
           );
         if (view === "activity")
-          return <WorkspaceActivity tenderId={overview.tender.id} />;
+          return (
+            <WorkspaceActivity
+              tenderId={overview.tender.id}
+              onSource={showSource}
+              onRaiseLimit={() =>
+                onRepair?.(
+                  settingsPath(
+                    "tender-ai",
+                    tenderRoute(overview.tender.id, "manager"),
+                  ),
+                )
+              }
+            />
+          );
         if (selectedResult)
           return (
             <div className="flex flex-col gap-4">
@@ -222,12 +231,20 @@ function TenderWorkspaceContent({
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  aria-label="Back to reviews"
+                  aria-label="Back to the plan"
                   onClick={reviewOverview}
                 >
-                  <ArrowLeft />
+                  <ArrowLeft className="rtl:rotate-180" />
                 </Button>
-                <h2 className="text-sm font-medium">Saved result</h2>
+                <h2 className="text-sm font-medium">
+                  {selectedResult.view === "approval"
+                    ? "Needs your OK"
+                    : selectedResult.view === "work-product"
+                      ? "Saved draft"
+                      : selectedResult.view === "calculation"
+                        ? "Calculation"
+                        : "Document"}
+                </h2>
               </div>
               <ResultPane
                 key={`${selectedResult.view}:${selectedResult.id}`}
@@ -244,20 +261,7 @@ function TenderWorkspaceContent({
               />
             </div>
           );
-        return (
-          <WorkspaceReviews
-            overview={overview}
-            planId={
-              recordView === "plan" || recordView === "plan-review"
-                ? recordId
-                : undefined
-            }
-            focusedFinding={recordView === "finding" ? recordId : undefined}
-            onSource={showSource}
-            onPlan={(id) => showRecord("plan-review", id)}
-            onConversation={returnToConversation}
-          />
-        );
+        return <PlanView overview={overview} />;
       }}
     />
   );
@@ -280,6 +284,19 @@ function ResultPane({
   onSource: (source: SourceSelection) => void;
   onBack: () => void;
 }) {
+  if (view === "approval")
+    return (
+      <ApprovalDetail
+        tenderId={tenderId}
+        recordKey={recordId}
+        onSource={onSource}
+        onAskChanges={(text) =>
+          window.dispatchEvent(
+            new CustomEvent("quantix:compose", { detail: text }),
+          )
+        }
+      />
+    );
   if (view === "work-product")
     return (
       <WorkProductLibrary
@@ -343,9 +360,7 @@ function SavedOutputResult({
       <p className="text-xs text-muted-foreground">
         Work result · Draft document
       </p>
-      <h3 className="font-medium" dir="auto">
-        {output.filename}
-      </h3>
+      <h3 className="font-medium">{output.filename}</h3>
       <div className="flex flex-wrap items-center gap-1.5">
         <Status value={output.status} />
         <Badge variant="secondary" className="font-normal">
@@ -390,7 +405,10 @@ function SavedOutputResult({
 
 function isResultView(value: string | undefined) {
   return (
-    value === "work-product" || value === "calculation" || value === "output"
+    value === "work-product" ||
+    value === "calculation" ||
+    value === "output" ||
+    value === "approval"
   );
 }
 

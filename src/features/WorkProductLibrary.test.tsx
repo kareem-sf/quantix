@@ -252,6 +252,15 @@ it("opens immutable history, renders a bounded safe chart, and routes exact sour
           sanitized_content: "<strong>Saved as plain text</strong>",
           executed_scripts: 0,
         };
+      if (path.endsWith("/evidence/source-a"))
+        return {
+          id: "source-a",
+          artifact_id: "artifact-a",
+          artifact_name: "Specification.pdf",
+          relative_path: "Specification.pdf",
+          locator: "page 3",
+          page: 3,
+        };
       if (path.endsWith("/versions/2/rows?offset=0&limit=50"))
         return { items: rows, total: 60, missing: 0 };
       if (path.endsWith("/versions/2/rows?offset=50&limit=50"))
@@ -294,8 +303,9 @@ it("opens immutable history, renders a bounded safe chart, and routes exact sour
   ).toBeVisible();
   expect(document.querySelector("strong > strong")).not.toBeInTheDocument();
 
+  // Sources show the file and page, never an internal reference.
   await userEvent.click(
-    screen.getByRole("button", { name: "Open source source-a" }),
+    await screen.findByRole("button", { name: "Specification.pdf · page 3" }),
   );
   expect(onSource).toHaveBeenCalledWith("source-a");
 
@@ -310,7 +320,8 @@ it("opens immutable history, renders a bounded safe chart, and routes exact sour
   expect(
     screen.queryByRole("button", { name: "Load more rows" }),
   ).not.toBeInTheDocument();
-  await waitFor(() => expect(api.get).toHaveBeenCalledTimes(5));
+  // List, versions, detail, two row pages and the cited source.
+  await waitFor(() => expect(api.get).toHaveBeenCalledTimes(6));
 });
 
 it("loads the fifty-first product and version without replacing the current page", async () => {
@@ -433,6 +444,7 @@ it("falls back to a table for negative charts and preserves omitted row fields a
       product={{
         ...summary,
         method_refs: [],
+        source_refs: [],
         view_schema: { category_field: "item", value_field: "value" },
         rows: [],
         content: "",
@@ -446,10 +458,8 @@ it("falls back to a table for negative charts and preserves omitted row fields a
 
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
   expect(screen.getByRole("table")).toBeVisible();
-  expect(screen.getByText("More row data (JSON)")).toBeVisible();
-  expect(
-    screen.getByText(/additional or unsupported fields/),
-  ).toBeInTheDocument();
+  expect(screen.getByText("More row details")).toBeVisible();
+  expect(screen.getByText(/more fields are kept below/)).toBeInTheDocument();
   expect(screen.getByText(/kept as data/)).toBeInTheDocument();
 });
 

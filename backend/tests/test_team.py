@@ -108,6 +108,28 @@ async def test_manager_tools_hire_and_assign_and_refuse_staff_callers(office):
     )
     queued = TeamService(repo).queued(tender["id"], run["id"])
     assert [a.title for a in queued] == ["Slab check"]
+    with repo.atomic() as conn:
+        conn.execute(
+            "INSERT INTO ai_usage(id,run_id,tender_id,connection_id,model_id,data_json,created_at) "
+            "VALUES('used',?,?,?,?,?,'2026-09-15T00:00:00Z')",
+            (
+                run["id"],
+                tender["id"],
+                route["connection_id"],
+                route["model_id"],
+                '{"requests": 60}',
+            ),
+        )
+    with pytest.raises(ToolArgumentError, match="AI steps are left for colleagues in this job"):
+        await _tool(tools, "assign_work").invoke(
+            manager,
+            {
+                "staff_id": staff_id,
+                "title": "Formwork check",
+                "brief": "Check the formwork.",
+                "expected_result": "Formwork areas",
+            },
+        )
     assert (queued[0].connection_id, queued[0].model_id) == (
         route["connection_id"],
         route["model_id"],
@@ -352,3 +374,29 @@ async def test_manager_hires_assigns_and_reads_the_result_in_its_next_turn(offic
     assert manager_prompts[1]["team"][0]["name"] == "Samir Haddad"
     assert result.output.source_ids == [evidence["id"]]
     assert result.usage["requests"] == 4
+
+
+@pytest.mark.asyncio
+async def test_a_colleague_left_too_few_ai_steps_is_not_started(office):
+    from quantix.team_runtime import run_assignment
+
+    repo, tender, run, evidence, route = office
+    team = TeamService(repo)
+    member = team.hire(tender["id"], run["id"], _draft())
+    queued = team.assign(
+        tender["id"],
+        run["id"],
+        member.id,
+        title="Check slab",
+        brief="Check the slab.",
+        expected_result="Quantities",
+        source_ids=[],
+        route=route,
+    )
+    done = await run_assignment(repo, tender["id"], queued.id, max_requests=2)
+    assert done.status == "failed" and "Not enough AI steps" in done.detail
+    with repo.db.connect() as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM ai_usage WHERE run_id=?", (run["id"],)).fetchone()[0]
+            == 0
+        )

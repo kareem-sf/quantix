@@ -5,11 +5,33 @@ from .estimates import EstimateService
 
 def validate_quantity_proposals(output, context):
     """Require the actual read BOQ basis and supporting evidence from this run."""
-    from .source_boq import validate_source_row
+    from .source_boq import save_conflict, validate_source_row
 
-    for proposal in output.boq_item_proposals:
-        context.validate_sources([proposal.source_id])
-        validate_source_row(context.repo, context.tender_id, proposal.model_dump())
+    staged: dict[tuple[str, str], dict] = {}
+    if output.boq_item_proposals:
+        EstimateService(context.repo)  # makes sure the estimate tables exist
+    with context.repo.db.connect() as conn:
+        for proposal in output.boq_item_proposals:
+            try:
+                context.validate_sources([proposal.source_id])
+                checked, _, artifact = validate_source_row(
+                    context.repo, context.tender_id, proposal.model_dump()
+                )
+                # Everything the final save checks is checked now, while it can be fixed.
+                key = (checked.source_id, checked.row_reference.casefold())
+                written = checked.model_dump(mode="json")
+                if staged.setdefault(key, written) != written:
+                    raise ValueError(
+                        "Another staged row from the same passage uses this item number with different "
+                        "text. Give each row its own item number, or stage it once."
+                    )
+                problem = save_conflict(context.repo, conn, context.tender_id, checked, artifact)
+                if problem:
+                    raise ValueError(problem)
+            except (KeyError, ValueError) as error:
+                # Name the row, so one bad row in a batch is fixed without guessing.
+                message = error.args[0] if error.args else str(error)
+                raise type(error)(f"BOQ row {proposal.row_reference}: {message}") from None
     if not output.quantity_proposals:
         return
     service = EstimateService(context.repo)

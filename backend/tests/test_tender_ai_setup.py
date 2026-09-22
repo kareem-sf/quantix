@@ -105,7 +105,8 @@ def test_switching_accounts_keeps_the_approved_allowance(tmp_path):
     assert policy["specialist"]["connection_id"] == second["id"]
     assert policy["tender_budget_usd"] == 75
     assert policy["run_budget_usd"] == 75
-    assert set(policy["allowed_connection_ids"]) == {first["id"], second["id"]}
+    # Staff cannot be sent to the account the engineer moved away from.
+    assert policy["allowed_connection_ids"] == [second["id"]]
 
     # Switching back needs no new allowance either.
     assert _choose(client, tender["id"], first).status_code == 200
@@ -121,3 +122,42 @@ def test_switching_requires_the_model_access_check(tmp_path):
 
     with pytest.raises(ValueError, match="Check this AI model"):
         _choose(client, tender["id"], unchecked, budget=10)
+
+
+def test_switching_keeps_an_account_a_separate_specialist_route_uses(tmp_path):
+    repo = Repository(tmp_path)
+    tender = repo.create_tender("Synthetic tender")
+    first = _account(repo, "First")
+    second = _account(repo, "Second")
+    third = _account(repo, "Third")
+    client = _client(repo, _Setup(first, second, third))
+    assert _choose(client, tender["id"], first, budget=20).status_code == 200
+    policies = AIPolicyService(repo)
+    current = policies.get(tender["id"])
+    policies.update(
+        tender["id"],
+        {
+            **{
+                key: current[key]
+                for key in (
+                    "manager",
+                    "role_routes",
+                    "fallback_routes",
+                    "run_budget_usd",
+                    "tender_budget_usd",
+                    "max_requests",
+                    "provider_managed_extras",
+                )
+            },
+            "allowed_connection_ids": [first["id"], second["id"]],
+            "specialist": current["manager"] | {"connection_id": second["id"]},
+            "engineer_confirmed": True,
+            "rationale": "Engineer chose a separate specialist account.",
+        },
+    )
+
+    assert _choose(client, tender["id"], third).status_code == 200
+
+    policy = policies.get(tender["id"])
+    assert policy["specialist"]["connection_id"] == second["id"]
+    assert policy["allowed_connection_ids"] == [third["id"], second["id"]]

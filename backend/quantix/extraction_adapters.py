@@ -10,9 +10,45 @@ from pathlib import Path
 import pypdfium2 as pdfium
 
 from .db import dump, new_id, now
-from .documents import _pdf_lock
+from .documents import _pdf_lock, pdf_page_text, scrambled_text_layer
 from .extraction_models import ReprocessRequest, ReprocessResult
-from .extraction_publication import publish_extraction
+from .extraction_publication import publish_extraction, publishable, segment_locator
+
+
+def _clear_resolved_warnings(conn, artifact_id, segments, home):
+    """Drop warnings a successful re-read has resolved, so the register stops flagging them.
+
+    A page warning goes once that page is read again. The missing-Arabic warning
+    goes once Arabic recognition is installed. Anything else stays.
+    """
+    import json
+
+    from .tesseract_runtime import tesseract_languages
+
+    row = conn.execute(
+        "SELECT status,warnings_json FROM artifacts WHERE id=?", (artifact_id,)
+    ).fetchone()
+    if row is None:
+        return
+    warnings = json.loads(row["warnings_json"] or "[]")
+    read_again = {segment_locator(segment) for segment in segments if publishable(segment)}
+    arabic = "ara" in tesseract_languages(home)
+    kept = [
+        warning
+        for warning in warnings
+        if not (
+            (warning.get("locator") and warning["locator"] in read_again)
+            or (warning.get("code") == "ocr_language_missing" and arabic)
+        )
+    ]
+    if kept == warnings:
+        return
+    status = "extracted" if not kept and row["status"] == "needs_attention" else row["status"]
+    conn.execute(
+        "UPDATE artifacts SET warnings_json=?,status=? WHERE id=?",
+        (dump(kept), status, artifact_id),
+    )
+
 
 _SCHEMA = (
     """
@@ -96,7 +132,7 @@ class ExtractionService:
             try:
                 with _pdf_lock(cancelled), pdfium.PdfDocument(source) as document:
                     with closing(document[index]) as page, closing(page.get_textpage()) as textpage:
-                        text = textpage.get_text_bounded(errors="replace").replace("\r\n", "\n")
+                        text = pdf_page_text(textpage)
             except InterruptedError:
                 raise
             except Exception as error:
@@ -110,7 +146,8 @@ class ExtractionService:
                     }
                 )
                 continue
-            if text.strip():
+            # A scrambled text layer is read from the page image, like a scan.
+            if text.strip() and not scrambled_text_layer(text):
                 extracted += 1
                 segments.append(
                     {
@@ -258,6 +295,7 @@ class ExtractionService:
                         segments=segments,
                         stamp=stamp,
                     )
+                    _clear_resolved_warnings(conn, artifact["id"], segments, self.repo.home)
                     published_artifact_ids.append(artifact["id"])
                     published_evidence_ids.extend(item["id"] for item in outcome["published"])
                     retained_locators.extend(outcome["retained_locators"])

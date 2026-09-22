@@ -495,6 +495,7 @@ class DiagnosticWriter:
             "protocol",
             "model",
             "actual_model",
+            "provider_code",
             "component_version",
             "component_id",
             "connection_id",

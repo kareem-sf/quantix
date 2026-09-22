@@ -413,3 +413,68 @@ def test_validated_web_research_can_propose_supplier_contacts_but_not_invent_the
     assert result["quote_drafts"][0]["status"] == "draft"
     assert result["web_findings"][0]["urls"] == [url]
     assert result["web_sources"][0]["url"] == url
+
+
+@pytest.mark.asyncio
+async def test_a_rate_named_by_its_item_number_is_matched_to_the_row_read(tmp_path, monkeypatch):
+    from quantix.proposal_tools import proposal_tools
+
+    repo = Repository(tmp_path)
+    tid = repo.create_tender("Numbered BOQ")["id"]
+    source = b"Synthetic numbered BOQ"
+    digest = hashlib.sha256(source).hexdigest()
+    (repo.objects / digest).write_bytes(source)
+    repo.register_artifact(
+        tid,
+        "BOQ.xlsx",
+        digest,
+        len(source),
+        {
+            "kind": "spreadsheet",
+            "status": "extracted",
+            "segments": [
+                {
+                    "locator": f"sheet:BOQ/row:{row}",
+                    "text": text,
+                    "kind": "spreadsheet_row",
+                    "sheet": "BOQ",
+                    "metadata": {"cells": cells},
+                }
+                for row, text, cells in [
+                    (
+                        1,
+                        "Item Description Unit Qty",
+                        [
+                            cell("A1", "Item"),
+                            cell("B1", "Description"),
+                            cell("C1", "Unit"),
+                            cell("D1", "Qty"),
+                        ],
+                    ),
+                    (
+                        2,
+                        "1.1 Excavation m3 1240",
+                        [
+                            cell("A2", "1.1"),
+                            cell("B2", "Excavation in any material"),
+                            cell("C2", "m3"),
+                            cell("D2", 1240),
+                        ],
+                    ),
+                ]
+            ],
+        },
+    )
+    item = EstimateService(repo).refresh(tid)["items"][0]
+    assert item["row_reference"] == "1.1"
+    run = repo.create_run(tid, "manager", "Price the BOQ")
+    context = OfficeContext(repo, tid, run["id"])
+    await invoke_json_tool(context, "inspect_estimate", {"offset": 0, "limit": 10})
+    propose = next(tool for tool in proposal_tools() if tool.name == "propose")
+
+    await propose.invoke(
+        context,
+        {"kind": "unit_rate_proposals", "items": [{"item_id": "1.1", **proposal_payload()}]},
+    )
+
+    assert context.proposals["unit_rate_proposals"][0]["item_id"] == item["id"]

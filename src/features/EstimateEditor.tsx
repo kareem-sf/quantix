@@ -1,8 +1,8 @@
-import { useCallback, useState } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { tenderPath, useApi, useRefresh, type Schema } from "../api";
 import { ErrorNotice, Modal, Status } from "../components/common";
 import { Citations, type SourceSelection } from "./Sources";
-import { DecisionForm } from "./Work";
+import { DecisionForm } from "./DecisionForm";
 import { RateForm } from "./RateForm";
 import { QuantityForm } from "./QuantityForm";
 import { FieldError } from "../components/FieldError";
@@ -14,12 +14,15 @@ export function EstimateEditor({
   defaultCurrency,
   onSource,
   onClose,
+  children,
 }: {
   item: Schema<"EstimateItem">;
   tenderId: string;
   defaultCurrency: string;
   onSource: (source: SourceSelection) => void;
   onClose: () => void;
+  /** What the team proposed for this row: drawing takeoff and rates. */
+  children?: ReactNode;
 }) {
   const api = useApi(),
     refresh = useRefresh();
@@ -91,9 +94,11 @@ export function EstimateEditor({
           </dd>
           <dt>Tax basis</dt>
           <dd>
-            {item.tax_basis === "unknown"
-              ? "Not established"
-              : item.tax_basis.replaceAll("_", " ")}
+            {item.tax_basis === "including_vat"
+              ? "Including VAT"
+              : item.tax_basis === "excluding_vat"
+                ? "Excluding VAT"
+                : "Not established"}
             {item.vat_percent !== null ? ` · ${item.vat_percent}%` : ""}
           </dd>
           <dt>Source status</dt>
@@ -108,6 +113,7 @@ export function EstimateEditor({
             ))}
           </ul>
         ) : null}
+        {children}
         <details
           className="editor-section"
           open={sections.value.source}

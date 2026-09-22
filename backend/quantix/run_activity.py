@@ -75,6 +75,7 @@ class ActivityRecorder:
         parent_operation_id=None,
         capture_status="complete",
         unavailable_fields=None,
+        fact=None,
     ):
         operation_id = new_id()
         if not self.enabled:
@@ -108,6 +109,7 @@ class ActivityRecorder:
             metadata=metadata,
             capture_status=capture_status,
             unavailable_fields=unavailable_fields,
+            fact=fact,
         )
         return operation_id
 
@@ -125,6 +127,7 @@ class ActivityRecorder:
         elapsed_ms=None,
         capture_status="complete",
         unavailable_fields=None,
+        fact=None,
     ):
         if not self.enabled:
             return
@@ -138,6 +141,7 @@ class ActivityRecorder:
             elapsed_ms=elapsed_ms,
             capture_status=capture_status,
             unavailable_fields=unavailable_fields,
+            fact=fact,
         )
 
     def _write(self, *args, **kwargs):
@@ -181,6 +185,7 @@ class ActivityRecorder:
         capture_status,
         unavailable_fields=None,
         elapsed_ms=None,
+        fact=None,
     ):
         import json
 
@@ -253,6 +258,9 @@ class ActivityRecorder:
                 "source_ids": _source_ids(content),
                 "artifact_refs": _artifact_refs(content),
             }
+            if fact:
+                # The engineer-facing description of this step (activity_facts).
+                data["fact"], _, _ = sanitize(fact, secrets)
             event = conn.execute(
                 "INSERT INTO run_events(run_id,kind,message,data_json,created_at) VALUES(?,?,?,?,?)",
                 (self.run_id, "activity", safe_message, dump(data), stamp),

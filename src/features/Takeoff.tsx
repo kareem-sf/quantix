@@ -1,13 +1,7 @@
 import { useState } from "react";
-import { Check, ChevronDown, Ruler, X } from "lucide-react";
-import {
-  tenderPath,
-  useApi,
-  useRefresh,
-  useResource,
-  type Schema,
-} from "../api";
-import { ErrorNotice, Loading } from "../components/common";
+import { Check, ChevronDown, X } from "lucide-react";
+import { tenderPath, useApi, useRefresh, type Schema } from "../api";
+import { ErrorNotice } from "../components/common";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -16,7 +10,6 @@ import { Citations, type SourceSelection } from "./Sources";
 
 type Line = Schema<"TakeoffLine">;
 type Comparison = Line["comparison"];
-type Filter = "attention" | Comparison | "all";
 
 const comparisonText: Record<Comparison, string> = {
   matches: "Matches BOQ",
@@ -43,54 +36,17 @@ const methodText: Record<NonNullable<Line["method"]>, string> = {
   counted: "Counted on the drawing",
 };
 
-const filters: { id: Filter; label: string }[] = [
-  { id: "attention", label: "Needs a decision" },
-  { id: "differs", label: "Differs" },
-  { id: "not_in_boq", label: "Missing from BOQ" },
-  { id: "not_on_drawings", label: "Not on drawings" },
-  { id: "matches", label: "Matches" },
-  { id: "all", label: "All" },
-];
-
-const TAKEOFF_REQUEST =
+export const TAKEOFF_REQUEST =
   "Do a quantity takeoff from the drawings and check it against the BOQ. List quantities that differ, work on the drawings that the BOQ is missing, and BOQ items the drawings do not show.";
 
-function needsDecision(line: Line) {
-  return line.status === "proposed" && line.comparison !== "matches";
-}
-
-/** The team's quantity takeoff from the drawings, checked against the BOQ, for the engineer to review. */
-export function Takeoff({
-  tenderId,
-  onSource,
-}: {
-  tenderId: string;
-  onSource: (source: SourceSelection) => void;
-}) {
+/** Ask the Tender Manager for a takeoff from the drawings. */
+export function useTakeoffRequest(tenderId: string) {
   const api = useApi();
   const refresh = useRefresh();
-  const takeoff = useResource<Line[]>(`${tenderPath(tenderId)}/takeoff`, true);
-  const [filter, setFilter] = useState<Filter>("attention");
   const [asking, setAsking] = useState(false);
   const [asked, setAsked] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const lines = takeoff.data ?? [];
-
-  const count = (id: Filter) =>
-    id === "all"
-      ? lines.length
-      : id === "attention"
-        ? lines.filter(needsDecision).length
-        : lines.filter((line) => line.comparison === id).length;
-  const shown = lines.filter((line) =>
-    filter === "all"
-      ? true
-      : filter === "attention"
-        ? needsDecision(line)
-        : line.comparison === filter,
-  );
-
-  async function askForTakeoff() {
+  async function ask() {
     setAsking(true);
     setError(null);
     try {
@@ -109,93 +65,15 @@ export function Takeoff({
       setAsking(false);
     }
   }
-
-  return (
-    <section
-      aria-label="Quantity takeoff"
-      className="flex flex-col gap-4 @container"
-    >
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <h2 className="text-sm font-semibold tracking-tight">
-            Quantity takeoff
-          </h2>
-          <p className="text-xs text-muted-foreground">
-            Quantities the team took from the drawings, checked against the BOQ.
-          </p>
-        </div>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={asking}
-          onClick={() => void askForTakeoff()}
-        >
-          <Ruler data-icon="inline-start" />
-          {lines.length
-            ? "Ask for a new takeoff"
-            : "Ask the team for a takeoff"}
-        </Button>
-      </header>
-      {asked ? (
-        <p className="text-xs text-muted-foreground" role="status">
-          Sent to the Tender Manager. Lines appear here as the team saves them.
-        </p>
-      ) : null}
-      <ErrorNotice error={error || takeoff.error} />
-      {takeoff.isPending ? <Loading>Loading the takeoff…</Loading> : null}
-      {takeoff.data && !lines.length ? (
-        <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
-          No takeoff yet.
-        </p>
-      ) : null}
-      {lines.length ? (
-        <>
-          <div
-            className="flex flex-wrap gap-1.5"
-            role="group"
-            aria-label="Show takeoff lines"
-          >
-            {filters.map((item) => (
-              <Button
-                key={item.id}
-                size="xs"
-                variant={filter === item.id ? "secondary" : "ghost"}
-                aria-pressed={filter === item.id}
-                onClick={() => setFilter(item.id)}
-              >
-                {item.label}
-                <span className="text-muted-foreground">{count(item.id)}</span>
-              </Button>
-            ))}
-          </div>
-          {shown.length ? (
-            <ul className="flex flex-col gap-2" aria-label="Takeoff lines">
-              {shown.map((line) => (
-                <li key={line.id}>
-                  <TakeoffRow
-                    tenderId={tenderId}
-                    line={line}
-                    onSource={onSource}
-                  />
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              No lines in this view.
-            </p>
-          )}
-        </>
-      ) : null}
-    </section>
-  );
+  return { ask, asking, asked, error };
 }
 
 function quantity(value: string | null | undefined, unit: string) {
   return value == null ? "—" : `${value} ${unit}`;
 }
 
-function TakeoffRow({
+/** One drawing takeoff line, opened to review it with an optional note. */
+export function TakeoffRow({
   tenderId,
   line,
   onSource,
@@ -242,10 +120,8 @@ function TakeoffRow({
           )}
         />
         <span className="min-w-0 flex-1">
-          <span className="block font-medium" dir="auto">
-            {line.description}
-          </span>
-          <span className="block text-xs text-muted-foreground" dir="auto">
+          <span className="block font-medium">{line.description}</span>
+          <span className="block text-xs text-muted-foreground">
             {[comparisonText[line.comparison], line.location]
               .filter(Boolean)
               .join(" · ")}
@@ -278,7 +154,7 @@ function TakeoffRow({
       </summary>
       <div className="flex flex-col gap-3 px-3 pb-3 ps-8">
         {line.boq ? (
-          <p className="text-xs text-muted-foreground" dir="auto">
+          <p className="text-xs text-muted-foreground">
             BOQ item: {line.boq.description}
           </p>
         ) : null}
@@ -287,9 +163,7 @@ function TakeoffRow({
             {line.method ? methodText[line.method] : "Working"} · by{" "}
             {line.author}
           </span>
-          <p className="whitespace-pre-wrap" dir="auto">
-            {line.working}
-          </p>
+          <p className="whitespace-pre-wrap">{line.working}</p>
         </div>
         <Citations
           ids={line.source_ids}
@@ -299,7 +173,6 @@ function TakeoffRow({
         <label className="flex flex-col gap-1.5 text-xs text-muted-foreground">
           Your note (optional)
           <Textarea
-            dir="auto"
             rows={2}
             maxLength={2000}
             value={note}

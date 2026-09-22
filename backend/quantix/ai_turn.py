@@ -19,6 +19,7 @@ async def run_turn(
     validate_output=None,
     role: str = "Tender Manager",
     metadata: dict[str, Any] | None = None,
+    max_requests: int | None = None,
 ) -> dict:
     """Lease the route's account, run the agent loop and return the provider response.
 
@@ -44,6 +45,9 @@ async def run_turn(
         with repo.db.connect() as conn:
             _, _, used_requests = policies._totals(conn, tender_id, run_id)
         remaining = policy["max_requests"] - used_requests
+        if max_requests is not None:
+            # A colleague's share of the job's steps; its AI is told this limit.
+            remaining = min(remaining, max_requests)
         if remaining < 1:
             raise ValueError(
                 "The tender's AI request allowance for this work is used up. Review the saved progress before continuing."

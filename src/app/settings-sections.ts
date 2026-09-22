@@ -2,6 +2,7 @@ import {
   Archive,
   BookCheck,
   Bot,
+  Gauge,
   Info,
   KeyRound,
   Library,
@@ -13,6 +14,7 @@ import {
 
 export type SettingsSectionId =
   | "accounts"
+  | "tender-ai"
   | "preferences"
   | "manager"
   | "knowledge"
@@ -48,6 +50,13 @@ export const settingsSections: SettingsSectionDefinition[] = [
     label: "AI accounts",
     description: "API keys and eligible subscriptions",
     icon: KeyRound,
+    group: "office",
+  },
+  {
+    id: "tender-ai",
+    label: "Tender AI and spending",
+    description: "The AI each tender uses and what it may spend",
+    icon: Gauge,
     group: "office",
   },
   {

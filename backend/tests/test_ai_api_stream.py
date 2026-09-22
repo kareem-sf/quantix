@@ -503,3 +503,70 @@ async def test_staff_stream_keeps_trusted_assignment_identity(tmp_path):
         "assignment_id": "a" * 32,
         "actor_id": "b" * 32,
     }
+
+
+@pytest.mark.asyncio
+async def test_last_requests_withhold_tools_so_the_job_answers_instead_of_failing(
+    tmp_path, monkeypatch
+):
+    from pydantic_ai.messages import ToolReturnPart
+
+    from quantix.ai_tools import ToolContext, tool
+
+    repo = Repository(tmp_path)
+    tender = repo.create_tender("Synthetic allowance")
+    run = repo.create_run(tender["id"], "manager")
+    context = SimpleNamespace(repo=repo, tender_id=tender["id"], run_id=run["id"])
+
+    @tool
+    async def read_value(ctx: ToolContext[object], value: str) -> str:
+        return value
+
+    class Output(BaseModel):
+        summary: str
+
+    offered: list[list[str]] = []
+
+    async def chunks(messages, info):
+        offered.append([definition.name for definition in info.function_tools])
+        if info.function_tools:
+            reads = sum(
+                isinstance(part, ToolReturnPart)
+                for message in messages
+                for part in getattr(message, "parts", ())
+            )
+            yield {0: DeltaToolCall(name="read_value", json_args=f'{{"value": "v{reads}"}}')}
+        else:
+            yield {
+                0: DeltaToolCall(name=info.output_tools[0].name, json_args='{"summary":"Done."}')
+            }
+
+    @asynccontextmanager
+    async def binding(*args):
+        yield APIModelBinding(
+            FunctionModel(stream_function=chunks, model_name="synthetic-stream"),
+            {"max_tokens": 1024},
+            None,
+        )
+
+    monkeypatch.setattr("quantix.ai_api_engine.model_for_route", binding)
+    connection = {
+        **CONNECTION,
+        "_model": {"source": "provider", "capabilities": {"structured_output": True}},
+        "_execution_limits": {"max_requests": 4},
+    }
+    result = await run_model(
+        ROUTE,
+        connection,
+        {},
+        context,
+        "Synthetic instruction",
+        Output,
+        definitions=[read_value],
+        before_request=lambda *args: "reservation",
+        on_response=lambda *args: None,
+    )
+    assert result["output"].summary == "Done."
+    # Two requests could still use tools; the final two could only answer.
+    assert offered[:2] == [["read_value"], ["read_value"]]
+    assert offered[2] == []

@@ -4,7 +4,7 @@ import json
 import re
 from typing import Literal
 
-from .ai_tools import ToolContext
+from .ai_tools import ToolArgumentError, ToolContext
 from .correspondence import QuoteService
 from .db import record
 from .estimates import EstimateService
@@ -14,6 +14,11 @@ RecordType = Literal["findings", "decisions", "tasks", "runs", "messages", "take
 RECORD_TABLES = {name: name for name in ("findings", "decisions", "tasks", "runs", "messages")} | {
     "takeoff": "takeoff_lines"
 }
+
+
+def _page_of(locator) -> int | None:
+    match = re.search(r"(?:^|/)page:(\d+)", str(locator or ""))
+    return int(match.group(1)) if match else None
 
 
 def recipient_addresses(text):
@@ -90,7 +95,16 @@ def validate_business(output, context, web_sources):
         estimates = EstimateService(context.repo)
         for proposal in output.unit_rate_proposals:
             if proposal.item_id not in context.item_bases:
-                raise ValueError("The proposed rate's BOQ item was not read in this run.")
+                with context.repo.db.connect() as conn:
+                    found = conn.execute(
+                        "SELECT json_extract(data_json,'$.row_reference') FROM boq_items WHERE id=?",
+                        (proposal.item_id,),
+                    ).fetchone()
+                reference = found[0] if found and found[0] else proposal.item_id
+                raise ValueError(
+                    f"BOQ row {reference} was not read with inspect_estimate in this job. Call "
+                    f'inspect_estimate with row_references ["{reference}"] first, then propose its rate.'
+                )
             payload = proposal.model_dump(mode="json", exclude={"item_id"})
             _, basis = estimates.validate_rate(
                 context.tender_id, proposal.item_id, payload, context.item_bases[proposal.item_id]
@@ -130,15 +144,16 @@ def publish_business(output, context):
 
 def business_tools():
     def page(offset, limit):
-        if offset < 0 or not 1 <= limit <= 20:
-            raise ValueError("Use a nonnegative offset and a limit from 1 to 20.")
+        # Serve an oversized or negative window as the nearest valid page;
+        # next_offset tells the model where to continue.
+        return max(0, offset), min(max(1, limit), 20)
 
     @scoped_tool
     async def inspect_tender_records(
         ctx: ToolContext[OfficeContext], record_type: RecordType, offset: int, limit: int
     ) -> str:
         """List findings, decisions, tasks, runs, messages or saved takeoff lines. Use read_tender_record for complete records; summaries are not source evidence."""
-        page(offset, limit)
+        offset, limit = page(offset, limit)
         table = RECORD_TABLES[record_type]
         ctx.context.repo.get_tender(ctx.context.tender_id)
         if record_type == "takeoff":
@@ -227,8 +242,9 @@ def business_tools():
         limit: int = 8000,
     ) -> str:
         """Read full stored record JSON in bounded character pages. Follow next_offset; source references still need source-tool reading before citation."""
-        if offset < 0 or not 1 <= limit <= 12000:
-            raise ValueError("Use a nonnegative record offset and a limit from 1 to 12000.")
+        # Serve an oversized or negative window as the nearest valid page;
+        # next_offset tells the model where to continue.
+        offset, limit = max(0, offset), min(max(1, limit), 12000)
         table = RECORD_TABLES[record_type]
         with ctx.context.repo.db.connect() as conn:
             row = record(
@@ -239,7 +255,7 @@ def business_tools():
             )
         text = json.dumps(_redact_record(row), ensure_ascii=False)
         if offset > len(text):
-            raise ValueError("The requested offset is beyond this record.")
+            raise ToolArgumentError("The requested offset is beyond this record.")
         return json.dumps(
             {
                 "record_type": record_type,
@@ -255,27 +271,52 @@ def business_tools():
         )
 
     @scoped_tool
-    async def inspect_estimate(ctx: ToolContext[OfficeContext], offset: int, limit: int) -> str:
-        """Read current BOQ quantities, installed rates and incomplete pricing state. Rate proposals cannot alter these values."""
-        page(offset, limit)
+    async def inspect_estimate(
+        ctx: ToolContext[OfficeContext],
+        offset: int = 0,
+        limit: int = 20,
+        page_number: int | None = None,
+        row_references: list[str] | None = None,
+        unpriced_only: bool = False,
+    ) -> str:
+        """Read current BOQ rows: quantities, installed rates and incomplete pricing state. Narrow the rows with page_number (the source page), row_references (item numbers) or unpriced_only rather than paging through every row. Each source passage is shown once. Rate proposals cannot alter these values."""
+        offset, limit = page(offset, limit)
         estimates = EstimateService(ctx.context.repo)
         view = estimates.view(ctx.context.tender_id)
+        wanted = {str(reference).strip().casefold() for reference in row_references or []}
+        wanted.discard("")
+        rows = [
+            item
+            for item in view["items"]
+            if (page_number is None or _page_of(item.get("locator")) == page_number)
+            and (not wanted or str(item.get("row_reference") or "").casefold() in wanted)
+            and (not unpriced_only or item.get("line_ex_vat") is None)
+        ]
         selected = []
-        for item in view["items"][offset : offset + limit]:
+        shown: set[str] = set()
+        for item in rows[offset : offset + limit]:
             basis = estimates.rate_basis(ctx.context.tender_id, item["id"])
             ctx.context.stage_item_base(item["id"], basis["fingerprint"])
+            source = ctx.context.source(item["source_id"], tool_id="inspect_estimate")
+            if source["id"] in shown:
+                # The same page passage behind several rows is sent once.
+                source = {
+                    key: source[key] for key in ("id", "artifact_name", "locator", "page")
+                } | {"text": "Same passage as an earlier row above."}
+            shown.add(item["source_id"])
             selected.append(
                 {
-                    "item": item,
+                    "item": {key: value for key, value in item.items() if key != "source_proposal"},
                     "basis_fingerprint": basis["fingerprint"],
-                    "source": ctx.context.source(item["source_id"], tool_id="inspect_estimate"),
+                    "source": source,
                 }
             )
         result = {
             **{key: value for key, value in view.items() if key != "items"},
             "items": selected,
             "total_items": len(view["items"]),
-            "next_offset": offset + limit if offset + limit < len(view["items"]) else None,
+            "matching_items": len(rows),
+            "next_offset": offset + limit if offset + limit < len(rows) else None,
         }
         return json.dumps(_clean(result), ensure_ascii=False)
 
@@ -284,7 +325,7 @@ def business_tools():
         ctx: ToolContext[OfficeContext], offset: int, limit: int
     ) -> str:
         """Read this Tender's saved quotation request drafts. Quantix never sends them; the engineer sends each request from their own mail program."""
-        page(offset, limit)
+        offset, limit = page(offset, limit)
         rows = QuoteService(ctx.context.repo).list_drafts(ctx.context.tender_id)
         selected = []
         for row in rows[offset : offset + limit]:
@@ -321,7 +362,7 @@ def business_tools():
         ctx: ToolContext[OfficeContext], quote_id: str, offset: int, limit: int
     ) -> str:
         """Read supplier reply source evidence. Receipt is not acceptance of a rate; read remaining source IDs separately when a reply is long."""
-        page(offset, limit)
+        offset, limit = page(offset, limit)
         rows = QuoteService(ctx.context.repo).replies(ctx.context.tender_id, quote_id)
         selected = [
             {

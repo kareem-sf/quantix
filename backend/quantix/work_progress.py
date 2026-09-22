@@ -64,6 +64,12 @@ def require_current_brief(output, context):
     if context.is_staff:
         return
     with context.repo.db.connect() as conn:
+        # A job cut short keeps its staged records without a finished brief.
+        if conn.execute(
+            "SELECT 1 FROM run_events WHERE run_id=? AND kind='partial_result_saved' LIMIT 1",
+            (context.run_id,),
+        ).fetchone():
+            return
         saved_work = conn.execute(
             "SELECT 1 FROM run_events WHERE run_id=? AND kind IN ('saved_work_product','calculation_completed') LIMIT 1",
             (context.run_id,),

@@ -1,15 +1,12 @@
 import { useCallback, useEffect, type ReactNode } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { CloudOff, RefreshCcw } from "lucide-react";
-import { tenderPath, useResource, type Schema } from "../api";
+import { ApiError, tenderPath, useResource, type Schema } from "../api";
 import { ErrorNotice, Loading } from "../components/common";
-import { Estimate } from "../features/Estimate";
+import { Estimate, type EstimateView } from "../features/Estimate";
 import { Files } from "../features/Files";
 import { Outputs } from "../features/Outputs";
-import { Quotes } from "../features/Quotes";
-import { Takeoff } from "../features/Takeoff";
 import { SourceDrawer, type SourceSelection } from "../features/Sources";
-import { Work } from "../features/Work";
 import { TenderOfficeWorkspace } from "../features/office/TenderOfficeWorkspace";
 import {
   parseRouteContext,
@@ -29,7 +26,6 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { sectionForView, type TenderSection } from "./sections";
 
@@ -48,7 +44,8 @@ export function TenderWorkspace(props: TenderWorkspaceProps) {
   const location = useLocation();
   const context = parseRouteContext(`${location.pathname}${location.search}`);
   if (context.kind !== "tender") return <Navigate replace to="/" />;
-  if (context.section === "recents")
+  // Reviews and the old Work page are gone: decisions happen in the chat.
+  if (context.section === "recents" || context.section === "work")
     return <Navigate replace to={tenderRoute(context.tenderId, "manager")} />;
   return <TenderView key={context.tenderId} context={context} {...props} />;
 }
@@ -108,18 +105,11 @@ function TenderView({
   const closeSource = () => go(here);
   const openRecord = (view: string, recordId: string) =>
     go(
-      recordRoute(
-        tenderId,
-        section === "manager" &&
-          ["plan", "plan-review", "finding", "decisions"].includes(view)
-          ? "manager"
-          : sectionForView(view, section),
-        {
-          view,
-          recordId,
-          origin: here,
-        },
-      ),
+      recordRoute(tenderId, sectionForView(view, section), {
+        view,
+        recordId,
+        origin: here,
+      }),
     );
   const openSettings = () => go(settingsRoute(here));
   const openSettingsSection = (settingsSection: string) =>
@@ -137,6 +127,15 @@ function TenderView({
   else if (!compatible)
     body = <WorkspaceUpdate health={health} onSettings={openSettings} />;
   else if (overview.isPending) body = <Loading>Loading tender…</Loading>;
+  else if (overview.error instanceof ApiError && overview.error.status === 404)
+    body = (
+      <div className="flex flex-col items-start gap-3 p-6">
+        <p className="text-sm">This tender is not in Quantix any more.</p>
+        <Button variant="outline" onClick={() => go("/")}>
+          Back to tenders
+        </Button>
+      </div>
+    );
   else if (!overview.data)
     body = (
       <div className="flex flex-col items-start gap-3 p-6">
@@ -243,111 +242,47 @@ function SectionPage({
             onSource={onSource}
             meaningAvailable={capabilities.includes("meaning_search")}
             activeRuns={overview.active_runs}
-            onWork={() => onNavigate(tenderRoute(tenderId, "work"))}
+            onWork={() => onNavigate(tenderRoute(tenderId, "manager"))}
           />
         )}
       </Page>
     );
 
-  if (section === "work")
-    return (
-      <Page legacy={false}>
-        <Work
-          tenderId={tenderId}
-          onChanges={() => {
-            onNavigate(tenderRoute(tenderId, "manager"));
-            requestAnimationFrame(() =>
-              document
-                .querySelector<HTMLTextAreaElement>(
-                  '[aria-label="Message to Tender Manager"]',
-                )
-                ?.focus(),
-            );
-          }}
-          onSource={onSource}
-          onRecord={onRecord}
-          recordId={context.recordId}
-          recordView={context.view}
-          onView={onView}
-        />
-      </Page>
-    );
-
   if (section === "estimate") {
-    const view =
+    const view: EstimateView =
       context.view === "proposals" ||
       context.view === "quotes" ||
       context.view === "takeoff"
         ? context.view
         : "boq";
-    const views = [
-      {
-        id: "boq",
-        label: "BOQ",
-        available: capabilities.includes("estimates"),
-      },
-      {
-        id: "takeoff",
-        label: "Takeoff",
-        available: capabilities.includes("takeoff"),
-      },
-      {
-        id: "proposals",
-        label: "Proposals",
-        available: capabilities.includes("estimates"),
-      },
-      {
-        id: "quotes",
-        label: "Supplier quotations",
-        available: capabilities.includes("quotations"),
-      },
-    ] as const;
-    const active = views.find((item) => item.id === view)!;
-    const selectRecord = (recordId: string | null) =>
-      onNavigate(
-        recordId
-          ? recordRoute(tenderId, "estimate", { view, recordId })
-          : `${tenderRoute(tenderId, "estimate")}?view=${view}`,
-      );
     return (
-      <>
-        <Tabs
-          value={view}
-          onValueChange={(value) => onView(String(value))}
-          className="shrink-0 border-b px-4 py-1.5"
-        >
-          <TabsList variant="line" aria-label="Estimate views">
-            {views.map((item) => (
-              <TabsTrigger key={item.id} value={item.id}>
-                {item.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
-        <Page legacy={false}>
-          {!active.available ? (
-            <Unavailable what={active.label} />
-          ) : view === "takeoff" ? (
-            <Takeoff tenderId={tenderId} onSource={onSource} />
-          ) : view === "quotes" ? (
-            <Quotes
-              tenderId={tenderId}
-              onSource={onSource}
-              selectedId={context.recordId ?? null}
-              onSelect={selectRecord}
-            />
-          ) : (
-            <Estimate
-              tenderId={tenderId}
-              defaultCurrency={settings?.default_currency ?? ""}
-              onSource={onSource}
-              view={view}
-              selectedId={context.recordId ?? null}
-              onSelect={selectRecord}
-            />
-          )}
-        </Page>
-      </>
+      <Page legacy={false}>
+        {!capabilities.includes("estimates") ? (
+          <Unavailable what="Estimate" />
+        ) : (
+          <Estimate
+            tenderId={tenderId}
+            defaultCurrency={settings?.default_currency ?? ""}
+            onSource={onSource}
+            view={view}
+            selectedId={context.recordId ?? null}
+            onSelect={(recordId, recordView = "boq") =>
+              onNavigate(
+                recordId
+                  ? recordRoute(tenderId, "estimate", {
+                      view: recordView,
+                      recordId,
+                    })
+                  : `${tenderRoute(tenderId, "estimate")}?view=${recordView}`,
+              )
+            }
+            onView={onView}
+            takeoffAvailable={capabilities.includes("takeoff")}
+            quotesAvailable={capabilities.includes("quotations")}
+            onOpenManager={() => onNavigate(tenderRoute(tenderId, "manager"))}
+          />
+        )}
+      </Page>
     );
   }
 
@@ -367,6 +302,7 @@ function SectionPage({
           }
           onRepair={onNavigate}
           onSource={onSource}
+          onOpenManager={() => onNavigate(tenderRoute(tenderId, "manager"))}
         />
       ) : (
         <Unavailable what="Submission" />

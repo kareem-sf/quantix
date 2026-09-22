@@ -302,14 +302,6 @@ function ExportReview({
                   ? output.filename
                   : "Selected document"}
               </strong>
-              <p className="field-help">
-                File SHA-256:{" "}
-                <code>
-                  {typeof output.sha256 === "string"
-                    ? output.sha256
-                    : "Unavailable"}
-                </code>
-              </p>
             </li>
           ))}
         </ul>
@@ -325,10 +317,6 @@ function ExportReview({
             ))}
           </section>
         ) : null}
-        <details>
-          <summary>Review identity</summary>
-          <code>{preview.fingerprint}</code>
-        </details>
         {preview.blocking_reasons.length ? (
           <div className="submission-blockers">
             <strong>Resolve these items before final export</strong>
@@ -519,9 +507,6 @@ function ExportRecord({
         {record.acknowledged_gaps.map((gap) => (
           <p key={gap}>{gap}</p>
         ))}
-        <p>
-          Export SHA-256: <code>{record.sha256}</code>
-        </p>
       </details>
       <ErrorNotice error={error} />
       <button

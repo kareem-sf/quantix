@@ -12,7 +12,11 @@ _GROUPS = {
     ),
     "anthropic": ("anthropic", "Anthropic", "Connect an Anthropic API key."),
     "google": ("google", "Google", "Connect a Google Gemini API key."),
-    "custom": ("custom", "Custom", "Connect a company gateway or another supported AI server."),
+    "custom": (
+        "custom",
+        "Any other provider",
+        "Any AI service with an OpenAI-compatible API, including your company's own server.",
+    ),
 }
 _METHODS = {
     "xai": ("Use an xAI API key", "Uses your xAI API account and its billing settings."),
@@ -26,8 +30,8 @@ _METHODS = {
         "Uses your Google AI account; charges depend on its billing plan.",
     ),
     "custom": (
-        "Connect another AI service",
-        "Enter the address and access details supplied by that service.",
+        "Use an API key",
+        "Works with any AI service that speaks the OpenAI API. Enter its address and key.",
     ),
 }
 

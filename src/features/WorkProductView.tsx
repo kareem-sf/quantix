@@ -1,5 +1,7 @@
 import type { Schema } from "../api";
+import { RichText } from "@/components/rich-text";
 import { CalculationInspector } from "./CalculationInspector";
+import { Citations } from "./Sources";
 
 type Product = Schema<"WorkProductVersion">;
 type RowPage = Schema<"WorkProductRowPage">;
@@ -20,9 +22,11 @@ export function WorkProductView({
   return (
     <div className="flex flex-col gap-4">
       {product.sanitized_content ? (
-        <p className="whitespace-pre-wrap text-sm" dir="auto">
-          {product.sanitized_content}
-        </p>
+        <RichText
+          text={product.sanitized_content}
+          className="text-sm"
+          onSource={onSource}
+        />
       ) : null}
       {chart ? (
         <div className="flex flex-col gap-2">
@@ -46,46 +50,32 @@ export function WorkProductView({
       {product.source_refs?.length ? (
         <section className="flex flex-col gap-2" aria-label="Product sources">
           <h4 className="text-xs font-medium">Sources</h4>
-          <div className="flex flex-wrap gap-2">
-            {(product.source_refs ?? []).map((reference, index) => (
-              <button
-                type="button"
-                className="text-button"
-                key={reference}
-                aria-label={`Open source ${reference}`}
-                onClick={() => onSource(reference)}
-              >
-                Source {index + 1}
-              </button>
-            ))}
-          </div>
+          <Citations
+            ids={product.source_refs ?? []}
+            tenderId={tenderId}
+            onOpen={(source) => {
+              if ("sourceId" in source && source.sourceId)
+                onSource(source.sourceId);
+            }}
+          />
         </section>
       ) : null}
-      <details className="text-xs">
-        <summary className="cursor-pointer">Exact version proof</summary>
-        <dl className="mt-2 grid gap-1">
-          <Proof label="Version ID" value={product.id} />
-          <Proof label="Content SHA-256" value={product.sha256} />
-          <Proof label="Basis" value={product.basis} />
-          <Proof label="Author" value={product.author} />
-          <Proof
-            label="Source references"
-            value={(product.source_refs ?? []).join(" · ") || "None"}
-          />
-          <Proof
-            label="Method references"
-            value={(product.method_refs ?? []).join(" · ") || "None"}
-          />
-          {(product.method_refs ?? []).map((reference, index) => (
+      {product.method_refs?.length ? (
+        <section
+          className="flex flex-col gap-1 text-xs"
+          aria-label="Calculations"
+        >
+          <h4 className="font-medium">How the numbers were worked out</h4>
+          {product.method_refs.map((reference, index) => (
             <CalculationInspector
               key={reference}
               tenderId={tenderId}
               calculationId={reference}
-              label={`Method reference ${index + 1}`}
+              label={`Calculation ${index + 1}`}
             />
           ))}
-        </dl>
-      </details>
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -152,11 +142,11 @@ function RawRows({
 }) {
   return (
     <details className="text-xs">
-      <summary className="cursor-pointer">More row data (JSON)</summary>
+      <summary className="cursor-pointer">More row details</summary>
       <p className="mt-1 text-muted-foreground">
         {omitted
-          ? `${omitted} additional or unsupported fields are preserved below.`
-          : "Nested values are preserved below."}
+          ? `${omitted} more fields are kept below.`
+          : "Grouped values are kept below."}
       </p>
       <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap rounded bg-muted p-2">
         {JSON.stringify(rows, null, 2)}
@@ -253,16 +243,5 @@ function isScalar(value: unknown) {
     typeof value === "string" ||
     typeof value === "number" ||
     typeof value === "boolean"
-  );
-}
-
-function Proof({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd>
-        <code className="wrap-anywhere">{value}</code>
-      </dd>
-    </div>
   );
 }

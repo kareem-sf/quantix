@@ -340,11 +340,17 @@ class OfficeContext:
         return result
 
     def validate_sources(self, source_ids: list[str]) -> None:
+        unread = [
+            evidence_id for evidence_id in source_ids if not self.has_seen_source(evidence_id)
+        ]
+        if unread:
+            raise ValueError(
+                "The response cites evidence that was not read in this Tender run: "
+                + ", ".join(unread[:10])
+                + ". Cite only document passage IDs you read in this job (read_source, search "
+                "results, or source.id of estimate rows); BOQ row, rate and record IDs are not sources."
+            )
         for evidence_id in source_ids:
-            if not self.has_seen_source(evidence_id):
-                raise ValueError(
-                    "The response cites evidence that was not read in this Tender run."
-                )
             evidence = self.ensure_evidence_allowed(evidence_id, tool_id=None)
             artifact = self.ensure_artifact_allowed(evidence["artifact_id"])
             if not artifact["is_current"]:
