@@ -1,15 +1,8 @@
 import pytest
+from conftest import TOKEN
 from fastapi.testclient import TestClient
 
 from quantix.api.app import create_app
-
-TOKEN = "test-token"
-
-
-@pytest.fixture
-def client(tmp_path):
-    with TestClient(create_app(tmp_path, TOKEN), headers={"Authorization": f"Bearer {TOKEN}"}) as c:
-        yield c
 
 
 def test_health_needs_no_token(tmp_path):
@@ -31,7 +24,10 @@ def test_create_list_and_get(client):
     assert first.json()["due_date"] == "2026-10-14"
     second = client.post("/tenders", json={"name": "Riyadh Warehouse"}).json()
 
-    assert [t["name"] for t in client.get("/tenders").json()] == ["Riyadh Warehouse", "Al Noor School"]
+    listed = client.get("/tenders").json()
+    assert {t["name"] for t in listed} == {"Riyadh Warehouse", "Al Noor School"}
+    created = [t["created_at"] for t in listed]
+    assert created == sorted(created, reverse=True)
     assert client.get(f"/tenders/{second['id']}").json() == second
 
 

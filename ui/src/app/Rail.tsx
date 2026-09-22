@@ -43,6 +43,13 @@ export function Rail() {
           )}
         </div>
       ))}
+      <div className="grow" />
+      <NavLink
+        to="/settings"
+        className={({ isActive }) => `rounded-md px-2 py-[7px] ${isActive ? "font-semibold" : "text-ink-2 hover:text-ink"}`}
+      >
+        Settings
+      </NavLink>
     </nav>
   );
 }

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 
-from quantix.api import tenders
+from quantix.api import ai, tenders
 from quantix.core.db import open_database
 
 
@@ -22,10 +22,12 @@ def create_app(home: Path, token: str) -> FastAPI:
         app.state.sessions.kw["bind"].dispose()
 
     app = FastAPI(title="Quantix", version="0.1.0", lifespan=lifespan)
+    app.state.home = home
 
     @app.get("/health", tags=["service"])
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
     app.include_router(tenders.router, dependencies=[Depends(require_token)])
+    app.include_router(ai.router, dependencies=[Depends(require_token)])
     return app
