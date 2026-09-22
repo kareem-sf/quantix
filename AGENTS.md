@@ -24,8 +24,9 @@ stays in the loop and approves at every gate. The specification is `docs/spec.md
   next action. Every number is one click from its source. No provider, model or token details in the work areas.
 - **Nothing hard-coded about standards.** The office reads the tender's method of measurement, currency and tax,
   and the engineer approves them.
-- **Data.** Everything Quantix manages lives under `~/.quantix`. Keys go in the OS credential store. Never commit
-  customer documents, keys, extracted content or databases. Preserve supplied files unchanged.
+- **Data.** Everything Quantix manages lives under `~/.quantix`: AI connections and keys in `auth.json`, office
+  settings in `settings.json`, tender records in the database. Never commit customer documents, keys, extracted
+  content or databases. Preserve supplied files unchanged.
 - **AI connections.** API keys for Anthropic, OpenAI, Google, xAI and one OpenAI-compatible endpoint; ChatGPT/Codex
   and Grok subscriptions only through their official clients. Never copy subscription tokens into API credentials.
 - **Simple.** A modular monolith. Prefer maintained libraries and documented APIs; validate them before relying on

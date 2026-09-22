@@ -1,4 +1,5 @@
 import { Navigate, Outlet, type RouteObject } from "react-router";
+import { Settings } from "../settings/Settings";
 import { NewTender } from "../tenders/NewTender";
 import { Overview } from "../tenders/Overview";
 import { useTenders } from "../tenders/queries";
@@ -29,6 +30,7 @@ export const routes: RouteObject[] = [
       { path: "/", element: <Home /> },
       { path: "/new", element: <NewTender /> },
       { path: "/tenders/:tenderId", element: <Overview /> },
+      { path: "/settings", element: <Settings /> },
     ],
   },
 ];

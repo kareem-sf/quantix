@@ -26,4 +26,17 @@ The design was approved.
 - **Toolchain:** TypeScript stays on 5.9, because `openapi-typescript` needs the compiler API that TypeScript 7 does
   not have yet.
 
-Next: AI connections.
+## 23 September 2026: AI connections
+
+- The rebuild became `main` (PR #157). Legacy folders, worktrees, branches and obsolete Dependabot PRs were removed.
+- **Where keys live:** AI connections, their keys and model checks are in `~/.quantix/auth.json`. Office settings
+  (the office mode, and which connection and model the office uses) are in `~/.quantix/settings.json`. The
+  engineer chose plain files over the OS credential store.
+- **Connections:** Anthropic, OpenAI, Google, xAI and an OpenAI-compatible address. A key is kept only after the
+  service lists its models. A model check proves tool use: the model must hand back a one-off code through a tool
+  call. The office may only use a model that passed its check.
+- **Screen:** Settings has the office mode, the connections (add, choose a model, check, remove) and the office's AI.
+- **Checks:** 18 service tests and 11 UI tests. In the browser, a fake key was sent to Anthropic's real API and
+  came back as "The key was refused", with nothing stored.
+
+Next: documents (import a tender package, read PDF, Excel and Word, OCR, search, viewer).
