@@ -12,13 +12,10 @@
     },
     {
       "name": "quantix-verify",
-      "runtimeExecutable": "npm",
+      "runtimeExecutable": "cmd",
       "runtimeArgs": [
-        "run",
-        "dev",
-        "--",
-        "--port",
-        "1421"
+        "/c",
+        "set QUANTIX_HOME=%TEMP%\\quantix-verify-home&& npm run dev -- --port 1421"
       ],
       "port": 1421
     }

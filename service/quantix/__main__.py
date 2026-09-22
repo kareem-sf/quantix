@@ -1,4 +1,6 @@
-"""Run the service on loopback: python -m quantix --port 8765, with the access token in QUANTIX_TOKEN."""
+"""Run the service on loopback: python -m quantix --port 8765, with the access token in QUANTIX_TOKEN.
+
+The data home is ~/.quantix, or QUANTIX_HOME when set (for example, a scratch folder for testing)."""
 
 import argparse
 import os
@@ -16,7 +18,8 @@ def main() -> None:
     token = os.environ.get("QUANTIX_TOKEN")
     if not token:
         raise SystemExit("QUANTIX_TOKEN must be set.")
-    app = create_app(Path.home() / ".quantix", token)
+    home = Path(os.environ.get("QUANTIX_HOME") or Path.home() / ".quantix")
+    app = create_app(home, token)
     uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
 
 

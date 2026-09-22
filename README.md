@@ -26,7 +26,7 @@ On macOS or Linux, create the environment with `python3.12 -m venv service/.venv
 
 `npm run dev` starts the interface at `http://localhost:1420`. The dev server also starts the service on a free
 local port with a fresh access token, and forwards `/api` to it. `npm run tauri dev` opens the same interface in
-the desktop window.
+the desktop window. Set `QUANTIX_HOME` to use another data folder, for example a scratch folder for testing.
 
 | Command | What it does |
 | --- | --- |
