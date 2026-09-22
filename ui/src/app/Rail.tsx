@@ -2,6 +2,11 @@ import { Link, NavLink, useParams } from "react-router";
 import { dueShort } from "../tenders/due";
 import { useTenders } from "../tenders/queries";
 
+const STAGES = [
+  ["Overview", ""],
+  ["Documents", "/documents"],
+] as const;
+
 export function Rail() {
   const { tenderId } = useParams();
   const tenders = useTenders();
@@ -30,17 +35,19 @@ export function Rail() {
             <span className={tender.id === tenderId ? "font-medium" : ""}>{tender.name}</span>
             <span className="text-xs text-ink-3">{dueShort(tender.due_date)}</span>
           </Link>
-          {tender.id === tenderId && (
-            <NavLink
-              to={`/tenders/${tender.id}`}
-              end
-              className={({ isActive }) =>
-                `rounded-md py-1.5 pr-2 pl-5 ${isActive ? "bg-white font-semibold shadow-[0_0_0_1px_var(--color-line)]" : "text-ink-2"}`
-              }
-            >
-              Overview
-            </NavLink>
-          )}
+          {tender.id === tenderId &&
+            STAGES.map(([label, path]) => (
+              <NavLink
+                key={label}
+                to={`/tenders/${tender.id}${path}`}
+                end
+                className={({ isActive }) =>
+                  `rounded-md py-1.5 pr-2 pl-5 ${isActive ? "bg-white font-semibold shadow-[0_0_0_1px_var(--color-line)]" : "text-ink-2"}`
+                }
+              >
+                {label}
+              </NavLink>
+            ))}
         </div>
       ))}
       <div className="grow" />

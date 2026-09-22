@@ -39,4 +39,25 @@ The design was approved.
 - **Checks:** 18 service tests and 11 UI tests. In the browser, a fake key was sent to Anthropic's real API and
   came back as "The key was refused", with nothing stored.
 
-Next: documents (import a tender package, read PDF, Excel and Word, OCR, search, viewer).
+## 23 September 2026: documents
+
+- **Adding a package:** choose a folder or individual files. The service keeps copies under
+  `~/.quantix/tenders/<id>/files`, named by their content hash, so a copy is never moved or overwritten. The same
+  file again is ignored; a changed file replaces the older copy, which is kept and marked "replaced".
+- **Reading, in the background:** PDF text page by page; Excel one page per sheet, with cell references; Word in
+  pages of about 3,000 characters. DWG, DOC and XLS files are listed with a plain reason why they can't be read.
+  Scanned pages are marked as having no text, and the office reads them from the page image; OCR was left out to
+  keep things simple.
+- **Arabic:** lines are rebuilt from where each character is drawn (PDFium's loose boxes), so words read right to
+  left whatever order the PDF stores them in. English and number runs stay left to right, marks stay with their
+  letter, and "%1" reads "1%". A synthetic PDF made with real text shaping is a test fixture: PDFium's raw text is
+  backwards, Quantix's is correct.
+- **Search:** SQLite full-text search over every page, ignoring Arabic vowel marks and letter variants. Snippets
+  show the document's own words.
+- **Screens:** Documents (folder groups, search, a page viewer with rendered PDF pages, Open original) and the
+  Overview's package summary.
+- **`QUANTIX_HOME`:** points the service at a scratch data folder, for testing without touching real data.
+- **Checks:** 30 service tests and 15 UI tests. A browser run on a scratch data folder: 4 files read, an Arabic
+  search found the right page, a PDF page rendered, and a sheet showed as text.
+
+Next: the office runtime (Manager, hired staff, team room, direct messages, gates).

@@ -41,9 +41,7 @@ class ConnectionCreate(BaseModel):
 
     @model_validator(mode="after")
     def needs_address(self) -> "ConnectionCreate":
-        if self.provider == "openai_compatible" and not (self.base_url or "").startswith(
-            ("http://", "https://")
-        ):
+        if self.provider == "openai_compatible" and not (self.base_url or "").startswith(("http://", "https://")):
             raise ValueError("An OpenAI-compatible service needs its address, starting with https://")
         return self
 

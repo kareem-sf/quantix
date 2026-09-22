@@ -4,8 +4,9 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 
-from quantix.api import ai, tenders
+from quantix.api import ai, documents, tenders
 from quantix.core.db import open_database
+from quantix.documents.library import Reader
 
 
 def create_app(home: Path, token: str) -> FastAPI:
@@ -18,7 +19,10 @@ def create_app(home: Path, token: str) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.sessions = open_database(home)
+        app.state.reader = Reader(home, app.state.sessions)
+        app.state.reader.start()
         yield
+        app.state.reader.stop()
         app.state.sessions.kw["bind"].dispose()
 
     app = FastAPI(title="Quantix", version="0.1.0", lifespan=lifespan)
@@ -30,4 +34,5 @@ def create_app(home: Path, token: str) -> FastAPI:
 
     app.include_router(tenders.router, dependencies=[Depends(require_token)])
     app.include_router(ai.router, dependencies=[Depends(require_token)])
+    app.include_router(documents.router, dependencies=[Depends(require_token)])
     return app
