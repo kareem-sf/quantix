@@ -60,7 +60,7 @@ export function Documents() {
           <AddDocuments tenderId={tenderId} />
         </div>
       </section>
-      <main className="flex min-w-0 grow flex-col bg-subtle px-7 py-5">
+      <section aria-label="Viewer" className="flex min-w-0 grow flex-col bg-subtle px-7 py-5">
         {selected ? (
           <Viewer
             document={selected}
@@ -70,7 +70,7 @@ export function Documents() {
         ) : (
           <p className="m-auto text-ink-3">Choose a document to read it here.</p>
         )}
-      </main>
+      </section>
     </div>
   );
 }
