@@ -1,0 +1,11 @@
+[package]
+name = "quantix-desktop"
+version = "0.1.0"
+description = "Quantix desktop window"
+edition = "2024"
+
+[build-dependencies]
+tauri-build = { version = "2.5", features = [] }
+
+[dependencies]
+tauri = { version = "2.9", features = [] }

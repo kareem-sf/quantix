@@ -1,6 +1,0 @@
-mcp==2.1.1
-pydantic==2.13.5
-jsonschema==4.26.0
-platformdirs==4.11.7
-openai-codex==0.147.0
-openai-codex-cli-bin==0.147.0

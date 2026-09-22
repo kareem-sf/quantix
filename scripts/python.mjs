@@ -1,21 +1,21 @@
-import { spawn } from "node:child_process";
+// Run the service's virtual-environment Python with the given arguments, from the repository root.
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import path from "node:path";
 
-const executable = fileURLToPath(
-  new URL(
-    process.platform === "win32"
-      ? "../backend/.venv/Scripts/python.exe"
-      : "../backend/.venv/bin/python",
-    import.meta.url,
-  ),
-);
-const child = spawn(executable, process.argv.slice(2), { stdio: "inherit" });
-child.on("error", (error) => {
-  console.error(
-    `The Quantix Python environment could not start: ${error.message}`,
-  );
-  process.exitCode = 1;
-});
-child.on("exit", (code) => {
-  process.exitCode = code ?? 1;
-});
+export const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+export function servicePython() {
+  const venv = path.join(root, "service", ".venv");
+  const python = process.platform === "win32" ? path.join(venv, "Scripts", "python.exe") : path.join(venv, "bin", "python");
+  if (!existsSync(python)) {
+    throw new Error(`No service environment at ${venv}. See README.md to create it.`);
+  }
+  return python;
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const result = spawnSync(servicePython(), process.argv.slice(2), { cwd: root, stdio: "inherit" });
+  process.exit(result.status ?? 1);
+}

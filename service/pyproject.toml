@@ -1,0 +1,39 @@
+[project]
+name = "quantix"
+version = "0.1.0"
+description = "Quantix tendering office service"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.141",
+    "uvicorn>=0.53",
+    "sqlalchemy>=2.0.54",
+    "alembic>=1.20",
+    "pydantic>=2.13",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1",
+    "httpx2>=2.13",
+    "ruff>=0.16",
+]
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["quantix*"]
+
+[tool.setuptools.package-data]
+"quantix.migrations" = ["script.py.mako", "versions/*.py"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

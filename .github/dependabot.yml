@@ -9,7 +9,7 @@ updates:
         update-types: [minor, patch]
 
   - package-ecosystem: pip
-    directory: /backend
+    directory: /service
     schedule:
       interval: weekly
     groups:
@@ -17,7 +17,7 @@ updates:
         update-types: [minor, patch]
 
   - package-ecosystem: cargo
-    directory: /src-tauri
+    directory: /desktop
     schedule:
       interval: weekly
     groups:

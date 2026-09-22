@@ -1,0 +1,1 @@
+"""Quantix tendering office service."""

@@ -1,39 +1,100 @@
-# Quantix product specification
+# Quantix specification
 
-Quantix is a local tendering team for an individual construction engineer on Windows, macOS or Linux. The Tender Manager leads a team of AI staff that does the tender work: it reads the package, takes off and checks quantities, prices, plans and drafts. The engineer reviews, approves and steers. Material assumptions, quantity changes, commercial decisions and release are always the engineer's.
+Quantix is a tendering office for a construction engineer. It covers what RIB Candy's Estimating, Quantity
+Take-Off and Subcontract adjudication modules do, but the work is done by AI staff: a Tender Manager heads a team
+it hires for each tender. The engineer reviews, decides and steers.
 
-Current as of 14 September 2026. Interfaces are in [contracts](contracts.md); decisions in [architecture](architecture.md); status in [progress](progress.md).
+Written 23 September 2026 from interviews with the product owner.
 
-## The team
+## Who it is for
 
-- One Tender Manager per Tender conversation, with a personality the engineer customises.
-- Staff are hired by the Manager for the actual work, with generated names, roles, specialisms, backgrounds and working styles. There is no default roster and no fixed role list.
-- The Manager assigns work, answers staff questions and combines their results. Staff work in parallel on API accounts and one at a time on a subscription client.
-- The engineer sees every staff member, assignment, question, result and usage in the Team tab, and can steer the running Manager.
-- Work runs under the Tender's approved AI account, request allowance and spending limits. There is no per-assignment approval.
+A construction engineer or estimator preparing tenders. They think in BOQ items, drawings, rates and quotes. They
+live in spreadsheets and PDFs, work under deadline, and must be able to defend every number. They want the team
+to do the work, not a tool to operate.
 
-## Required capabilities
+## Experience principles
 
-1. Preserve complete original packages, paths, hashes, revisions, duplicate relationships and individual exceptions. Read PDF, DOCX, XLSX and XLSM with exact source locations, formulas/cached values and visual page access. Identify DOC/DWG and report an explicit coverage exception where they cannot be read.
-2. Build persistent project knowledge: evidence, buildings/areas/disciplines, document links, requirements, findings, assumptions, decisions, work and review history. Exact and meaning search retrieve source material; summaries do not replace evidence. Track registered, extracted, analysed and reviewed coverage separately.
-3. The Manager proposes a project-specific plan; approval starts it. Every fact cites evidence read in the run. Findings, plans, quantities, rates, requirements and drafts are proposals until the engineer decides.
-4. Use BOQ quantities by default. **Quantity takeoff is agentic:** vision-capable staff take quantities from the drawings, Quantix compares each line with the BOQ, and the engineer reviews quantities that differ, work the BOQ is missing and BOQ items the drawings do not show. There is no manual measuring canvas. Takeoff results are never presented as checked quantities.
-5. Estimate with dated sources and rate build-ups. Keep observed prices separate from estimates, with units, geography, currency, tax basis and conditions. Totals including or excluding VAT need an established tax treatment. Unknowns stay visible.
-6. Prepare supplier quotation requests as drafts the engineer sends from their own mail program, and record replies. Produce BOQs, cost build-ups, comparisons, technical documents, programmes, registers and client-format BOQ copies as drafts; final export is a separate engineer decision.
-7. Keep source data and working records locally under `~/.quantix`. Reuse preferences and explicitly approved knowledge across Tenders, with revalidation of dated information. Keep private content out of logs and source control.
-8. Provide a plain-language, Manager-led interface with inspectable documents, team work, estimates and submissions, clear progress and errors, cancellation, revision impact, restart recovery and backups.
-9. Offer AI connections for OpenAI, Anthropic, Google, xAI and one OpenAI-compatible custom endpoint by API key, and ChatGPT/Codex and Grok subscriptions through their official clients. Keep account identities, credentials and billing separate, with no automatic conversion or paid fallback. See [subscription connections](subscription-connections.md).
+1. **What needs me?** One place collects everything waiting for the engineer, most urgent first. It's always one
+   click away and always shows a count.
+2. **Every number has a source.** Quantities open their measurement on the drawing, rates open their build-up or
+   quote, and findings open the page they came from. It's one click, with nothing to search for.
+3. **Quiet by default.** A neutral screen with one accent colour. Colour means something (waiting, differs,
+   approved), never decoration. Details come on demand.
+4. **Tables behave like spreadsheets.** Keyboard movement, copy and paste to Excel, units always shown, figures
+   right-aligned in tabular numerals.
+5. **The team is present, not noisy.** Faces and one line each show who is doing what. The engineer talks to the
+   Manager or to anyone directly, and can read the team room when they want to.
+6. **Quick, informed decisions.** Each decision shows the proposal next to its evidence, with Approve, Reject and
+   Ask. Similar items can be approved together.
+7. **Nothing moves under the cursor.** Live updates appear gently and never reorder what the engineer is reading.
+8. **Plain language.** Construction English, not AI or software jargon.
 
-## Not in scope
+## The office
 
-Supplier email sending/sync and watchers are a future feature. Also excluded: a code sandbox or browser automation, benchmark gating, voice input, reusable agent definitions, public research libraries, Ollama and local models, BIM/IFC, native DWG interpretation and release packaging.
+- **Tender Manager.** One per tender. Leads the work, hires and briefs staff, reviews their output and brings
+  decisions to the engineer. The engineer can adjust its personality.
+- **Staff.** Hired by the Manager for this tender's actual needs, with a generated name, role, discipline,
+  experience, background, temperament, speaking style and professional opinions, and a locally drawn portrait.
+  They speak in their own voice, disagree, raise concerns and push back on the Manager or the engineer.
+- **Conversation.** The engineer talks to the Manager, messages any staff member directly, and can read the team
+  room where staff and the Manager brief, ask, hand over and review each other's work.
+- **Presence.** Each person shows their current activity, drawn from what they are really doing.
+- **Autonomy.** Default: the office works through to a finished tender and stops at gates and for real questions.
+  Settings → Fully autonomous: the office approves its own gates, and each of those decisions is marked "office-approved,
+  not reviewed". Export and release always stay with the engineer.
 
-## Reference acceptance
+## Gates (engineer in the loop)
 
-Private source folder (never commit its contents): `C:\Users\kareem\Desktop\(Arch-Civil) Tender Package - Rev03 27-06-2026\(Arch-Civil) Tender Package - Rev03 27-06-2026`.
+Scope and BOQ structure · Method of measurement · Quantities · Rates and build-ups · Subcontract and supplier
+choices · Markups and final price · Release.
 
-Observed: 43 PDFs, 24 DWGs, 6 XLSX, 3 XLSM with VBA, 6 DOC, 6 DOCX, plus incidental system files. The same 583-page specification and vendor lists repeat across six areas. Civil BOQ headers can reverse quantity/unit relative to actual rows; one workbook contains #REF! formulas. Formats, names and counts are acceptance evidence, never product constants.
+## Modules (MVP)
 
-## Brand
+1. **Documents.** Import a tender package and keep the originals unchanged. Read PDF, XLSX/XLSM, DOCX and scanned
+   pages (OCR, Arabic included, in the correct reading order). Group the documents, search them by exact words and
+   by meaning, and view them page by page. DWG files are listed and flagged as not readable yet.
+2. **BOQ.** Import the client BOQ from Excel, PDF or Word with source references. Record the method of measurement
+   the tender states.
+3. **Quantity Take-Off.** Staff set and check each sheet's scale, then place measurements (length, area, count) as
+   geometry on PDF drawings. Quantix computes the quantities. The engineer sees every measurement on the sheet and
+   can edit or redo it, or measure by hand. Quantix compares the takeoff with the BOQ: matches, differs, missing
+   from the BOQ, or not on the drawings.
+4. **Estimating.** Per item, either a unit rate with a dated source or a first-principles build-up (labour, plant,
+   material, subcontract, outputs, wastage). Then preliminaries, overheads, profit and tender adjustments, and a
+   tender summary.
+5. **Subcontract and supplier quotes.** Trade and material packages from the BOQ, enquiry drafts the engineer sends
+   from their own mail program, imported quotes, and line-by-line levelling (missing prices filled with our rate,
+   exclusions priced back in). Then a recommendation, the engineer's choice, and the chosen rates carried into the
+   estimate.
+6. **Submission.** A checklist of what the tender requires, each item with its source clause; drafted documents;
+   the priced BOQ in the client's own format; and a local export package. Nothing is sent to a client.
 
-The transparent v4 package in `design/brand/v4` governs the logo and palette. The application mapping and accessible semantic colours are in [v4 integration](../design/brand/v4-integration.md).
+## Company knowledge (persists across tenders)
+
+A master resource and rate library, the subcontractor and supplier directory, past tenders for benchmarking, and
+company rules and preferences (markups, standard exclusions and qualifications, house style). Every new team reads
+them. Dated information is revalidated before reuse.
+
+## AI
+
+API keys for Anthropic, OpenAI, Google, xAI and one OpenAI-compatible endpoint. ChatGPT/Codex and Grok subscriptions
+through their official clients only. The tender chooses its connection; the Manager may give staff other models
+from the connections already allowed. There are no spending controls in the MVP; each agent turn has a step limit.
+
+## Language and platform
+
+English interface; the office reads and writes Arabic where the tender needs it. A desktop app on Windows first,
+built so a hosted web version with several users can follow.
+
+## Later (not in the MVP)
+
+Tender programme, cash flow, DWG reading, Arabic interface, web version and firm accounts, AI spending controls,
+supplier email sending.
+
+## Done when
+
+- A synthetic tender goes end to end through every gate: priced BOQ, levelled subcontract package, submission
+  checklist and export.
+- The Arch-Civil Rev03 reference package is fully read, its drawings are taken off with visible measurements and
+  its BOQ is priced; the engineer spot-checks a sample. The package stays private and is never committed.
+- Service tests, UI tests, typecheck and lint pass in CI.
