@@ -17,7 +17,7 @@ jobs:
       - run: ruff check service && ruff format --check service
       - run: pytest service
 
-  ui:
+  interface:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
