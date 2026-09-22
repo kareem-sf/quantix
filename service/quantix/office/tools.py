@@ -9,6 +9,8 @@ from pathlib import Path
 from pydantic_ai import BinaryContent, ModelRetry, RunContext, ToolReturn
 from sqlalchemy.orm import Session, sessionmaker
 
+from quantix.boq import records as boq
+from quantix.boq.models import FACT_KINDS
 from quantix.documents import library, readers
 from quantix.documents.models import Document
 from quantix.office import records
@@ -196,6 +198,34 @@ def release(ctx: RunContext[Turn], staff_name: str, reason: str) -> str:
     return f"{member.first_name} has been released."
 
 
+def propose_boq_items(ctx: RunContext[Turn], items: list[boq.ItemIn]) -> str:
+    """Add BOQ lines exactly as the client's BOQ states them, up to 40 at a time, each with the page it is on and a
+    quote that includes the item number and the quantity. Lines that don't check out come back with the reason."""
+    with _working(ctx, f"Entering {len(items)} BOQ items") as (session, me):
+        return boq.propose_items(session, ctx.deps.tender_id, me, items[:40], ctx.deps.autonomous)
+
+
+def list_boq(ctx: RunContext[Turn]) -> str:
+    """The BOQ as the office has it so far: item, description, unit, quantity and approval."""
+    with _working(ctx, "Checking the BOQ") as (session, _):
+        rows = boq.items(session, ctx.deps.tender_id)
+        lines = [
+            f"{r.section + ' / ' if r.section else ''}{r.item} | {r.description[:80]} | {r.unit} | "
+            f"{r.quantity if r.quantity is not None else '-'} | {r.status}"
+            for r in rows
+        ]
+        known = [f"{FACT_KINDS[f.kind]}: {f.value} ({f.status})" for f in boq.facts(session, ctx.deps.tender_id)]
+    return "\n".join(known + [f"{len(rows)} BOQ items:"] + lines[:300]) if rows or known else "The BOQ is empty."
+
+
+def propose_fact(ctx: RunContext[Turn], kind: str, value: str, document_id: str, page: int, quote: str) -> str:
+    """Record a tender fact pricing depends on, for the engineer's approval: kind is method_of_measurement,
+    currency or vat. The quote must be on the page."""
+    with _working(ctx, f"Recording the {FACT_KINDS.get(kind, kind).lower()}") as (session, me):
+        boq.propose_fact(session, ctx.deps.tender_id, me, kind, value, document_id, page, quote, ctx.deps.autonomous)
+    return "Recorded." if ctx.deps.autonomous else "Recorded for the engineer's approval."
+
+
 COMMON: list[Callable] = [
     list_documents,
     search_documents,
@@ -205,6 +235,9 @@ COMMON: list[Callable] = [
     message_engineer,
     raise_concern,
     ask_engineer,
+    propose_boq_items,
+    list_boq,
+    propose_fact,
 ]
 STAFF: list[Callable] = [*COMMON, complete_task]
 MANAGER: list[Callable] = [*COMMON, hire, assign_task, release]

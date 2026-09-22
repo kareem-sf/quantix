@@ -8,6 +8,7 @@ const STAGES = [
   ["Overview", ""],
   ["Office", "/office"],
   ["Documents", "/documents"],
+  ["Estimate", "/estimate"],
 ] as const;
 
 export function Rail() {

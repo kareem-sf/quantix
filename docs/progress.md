@@ -90,4 +90,20 @@ The design was approved.
 - **Not yet done:** a live run with a real model. The engineer adds an AI key in Settings, and the office is then
   tried on a synthetic tender with a small budget.
 
-Next: BOQ (import the client BOQ with source references, and the method of measurement).
+## 23 September 2026: BOQ and tender facts
+
+- **Proposing items:** staff enter the client's BOQ with `propose_boq_items`, up to 40 lines a call. Each line
+  carries the page it is on and a quote. Quantix keeps a line only if the quote is on that page (ignoring Arabic
+  marks and spacing; "..." may skip words), and the item number and quantity are in the quote. Duplicates are
+  refused. Lines that fail come back to the model with the reason; the rest are saved.
+- **Tender facts:** method of measurement, currency and VAT, each proposed with its source. A newer approved fact
+  replaces the older one.
+- **Gates:** "Needs you" counts what is proposed, live. The engineer approves everything waiting in one go, or item
+  by item; a rejection with a reason goes back to whoever proposed it. Approvals are reported to the Manager. In
+  fully autonomous mode records are saved as "office-approved".
+- **Estimate screen:** the BOQ by section with statuses, Approve all, the tender facts, and an item panel with the
+  source page link, the quote and who entered it. Arabic units are isolated so they display correctly.
+- **Checks:** 41 service tests (3 runs in a row), 24 UI tests. A browser run on a scratch folder: proposals from the
+  sample Excel BOQ showed on the Overview and the Estimate screen, and Approve all approved them.
+
+Next: quantity takeoff (scale, measurements on drawings, comparison with the BOQ).

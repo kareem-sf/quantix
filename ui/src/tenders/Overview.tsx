@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
 import { AddDocuments } from "../documents/AddDocuments";
 import { useDocuments } from "../documents/queries";
+import { useGates } from "../estimate/queries";
 import { Face } from "../office/Face";
 import { TEAM, firstName, useDecisions, useMessages, useOffice, useSend } from "../office/queries";
 import { dueSentence } from "./due";
@@ -13,11 +14,27 @@ export function Overview() {
   const documents = useDocuments(tenderId);
   const office = useOffice(tenderId);
   const decisions = useDecisions(tenderId);
+  const gates = useGates(tenderId);
 
   if (tender.isError) return <p className="pt-14 text-ink-2">{tender.error.message}</p>;
   if (!tender.data || !documents.data || !office.data) return null;
 
-  const waiting = (decisions.data ?? []).filter((d) => d.status === "waiting");
+  const questions = (decisions.data ?? []).filter((d) => d.status === "waiting");
+  const approvals = [
+    gates.data?.facts && {
+      key: "facts",
+      title: `${gates.data.facts} tender ${gates.data.facts === 1 ? "fact" : "facts"} to approve`,
+      text: "Method of measurement, currency or VAT, as the office read them",
+      to: `/tenders/${tenderId}/estimate`,
+    },
+    gates.data?.boq && {
+      key: "boq",
+      title: `${gates.data.boq} BOQ ${gates.data.boq === 1 ? "item" : "items"} to approve`,
+      text: "Entered by the office from the client’s BOQ, each with its page",
+      to: `/tenders/${tenderId}/estimate?show=waiting`,
+    },
+  ].filter((a): a is { key: string; title: string; text: string; to: string } => Boolean(a));
+  const waiting = [...questions, ...approvals];
   const manager = office.data.staff.find((m) => m.is_manager);
   const current = documents.data.filter((d) => d.status !== "replaced");
   const read = current.filter((d) => d.status === "read").length;
@@ -53,7 +70,17 @@ export function Overview() {
         <>
           <h2 className="mt-9 mb-2 font-semibold text-ink-2">Needs you</h2>
           <div className="border-t border-line">
-            {waiting.map((d) => {
+            {approvals.map((a) => (
+              <Link key={a.key} to={a.to} className="flex items-center gap-3.5 border-b border-line px-1 py-3.5">
+                <span className="size-[7px] shrink-0 rounded-full bg-attention" />
+                <span className="flex min-w-0 grow flex-col gap-0.5">
+                  <span className="text-sm font-medium">{a.title}</span>
+                  <span className="truncate text-ink-3">{a.text}</span>
+                </span>
+                <span className="text-ink-4">›</span>
+              </Link>
+            ))}
+            {questions.map((d) => {
               const asker = office.data!.staff.find((m) => m.id === d.raised_by);
               return (
                 <Link
