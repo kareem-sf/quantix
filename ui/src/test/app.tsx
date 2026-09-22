@@ -5,6 +5,7 @@ import { vi } from "vitest";
 import type { Tender } from "../api/client";
 import { routes } from "../app/router";
 import type { SearchHit, TenderDocument } from "../documents/queries";
+import type { BoqItem, Fact } from "../estimate/queries";
 import type { Decision, Message, Staff, Task } from "../office/queries";
 import type { Connection, OfficeSettings } from "../settings/queries";
 
@@ -25,6 +26,8 @@ export interface FakeState {
   decisions: Decision[];
   tasks: Task[];
   officeState: "working" | "paused" | "idle";
+  items: BoqItem[];
+  facts: Fact[];
   /** Answer the next POST to this path with this error detail. */
   fail: Record<string, string>;
 }
@@ -44,6 +47,8 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     decisions: [],
     tasks: [],
     officeState: "idle",
+    items: [],
+    facts: [],
     fail: {},
     ...initial,
   };
@@ -122,6 +127,23 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     if (path.match(/^\/tenders\/\w+\/office\/stop$/)) {
       state.officeState = "paused";
       return new Response(null, { status: 204 });
+    }
+
+    if (path.match(/^\/tenders\/\w+\/boq$/)) return json({ items: state.items, facts: state.facts });
+    if (path.match(/^\/tenders\/\w+\/gates$/)) {
+      const count = (list: { status: string }[]) => list.filter((r) => r.status === "proposed").length;
+      return json({ boq: count(state.items), facts: count(state.facts) });
+    }
+    if (path.match(/^\/tenders\/\w+\/boq\/approve-all$/)) {
+      const waiting = state.items.filter((i) => i.status === "proposed");
+      for (const item of waiting) item.status = "approved";
+      return json({ approved: waiting.length });
+    }
+    const decided = path.match(/^\/(boq|facts)\/(\w+)\/decision$/);
+    if (decided) {
+      const record = (decided[1] === "boq" ? state.items : state.facts).find((r) => r.id === decided[2])!;
+      Object.assign(record, { status: body.approve ? "approved" : "rejected", reason: body.reason });
+      return json(null);
     }
 
     if (path === "/tenders" && method === "GET") return json(state.tenders);
