@@ -1,9 +1,12 @@
 import { Link, NavLink, useParams } from "react-router";
+import { Face } from "../office/Face";
+import { firstName, useOffice } from "../office/queries";
 import { dueShort } from "../tenders/due";
 import { useTenders } from "../tenders/queries";
 
 const STAGES = [
   ["Overview", ""],
+  ["Office", "/office"],
   ["Documents", "/documents"],
 ] as const;
 
@@ -12,7 +15,7 @@ export function Rail() {
   const tenders = useTenders();
 
   return (
-    <nav aria-label="Quantix" className="flex w-60 shrink-0 flex-col gap-0.5 border-r border-line bg-rail px-3 py-[18px]">
+    <nav aria-label="Quantix" className="flex w-60 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-line bg-rail px-3 py-[18px]">
       <div className="flex items-center justify-between px-2 pb-4">
         <Link to="/" className="text-[15px] font-semibold">
           Quantix
@@ -50,6 +53,7 @@ export function Rail() {
             ))}
         </div>
       ))}
+      {tenderId && <People tenderId={tenderId} />}
       <div className="grow" />
       <NavLink
         to="/settings"
@@ -58,5 +62,31 @@ export function Rail() {
         Settings
       </NavLink>
     </nav>
+  );
+}
+
+function People({ tenderId }: { tenderId: string }) {
+  const office = useOffice(tenderId);
+  const active = (office.data?.staff ?? []).filter((m) => m.status === "active");
+  if (active.length === 0) return null;
+  return (
+    <>
+      <span className="px-2 pt-5 pb-1.5 text-xs text-ink-3">Office</span>
+      {active.map((m) => (
+        <Link
+          key={m.id}
+          to={`/tenders/${tenderId}/office?with=${m.id}`}
+          className="flex items-start gap-[9px] rounded-md px-2 py-1.5 hover:bg-selected/60"
+        >
+          <Face id={m.id} size={24} />
+          <span className="flex min-w-0 flex-col gap-px">
+            <span className="font-medium">
+              {firstName(m)} <span className="font-normal text-ink-3">{m.is_manager ? "Manager" : m.role}</span>
+            </span>
+            <span className="text-xs leading-snug text-ink-2">{m.now ?? "Idle"}</span>
+          </span>
+        </Link>
+      ))}
+    </>
   );
 }

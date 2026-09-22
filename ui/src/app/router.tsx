@@ -1,5 +1,7 @@
-import { Navigate, Outlet, type RouteObject } from "react-router";
+import { Navigate, Outlet, useRouteError, type RouteObject } from "react-router";
 import { Documents } from "../documents/Documents";
+import { DecisionPage } from "../office/DecisionPage";
+import { Office } from "../office/Office";
 import { Settings } from "../settings/Settings";
 import { NewTender } from "../tenders/NewTender";
 import { Overview } from "../tenders/Overview";
@@ -17,6 +19,19 @@ function Shell() {
   );
 }
 
+function ScreenError() {
+  const error = useRouteError();
+  console.error(error);
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 text-ink-2">
+      <p className="text-sm">Something went wrong on this screen.</p>
+      <a href="/" className="font-medium text-ink underline underline-offset-4">
+        Reload Quantix
+      </a>
+    </div>
+  );
+}
+
 function Home() {
   const tenders = useTenders();
   if (!tenders.data) return null;
@@ -27,11 +42,14 @@ function Home() {
 export const routes: RouteObject[] = [
   {
     element: <Shell />,
+    errorElement: <ScreenError />,
     children: [
       { path: "/", element: <Home /> },
       { path: "/new", element: <NewTender /> },
       { path: "/tenders/:tenderId", element: <Overview /> },
       { path: "/tenders/:tenderId/documents", element: <Documents /> },
+      { path: "/tenders/:tenderId/office", element: <Office /> },
+      { path: "/tenders/:tenderId/decisions/:decisionId", element: <DecisionPage /> },
       { path: "/settings", element: <Settings /> },
     ],
   },

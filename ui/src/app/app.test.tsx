@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { fakeService, openApp } from "../test/app";
@@ -12,7 +12,8 @@ describe("Quantix shell", () => {
     await userEvent.type(screen.getByLabelText(/Submission date/), "2026-10-14");
     await userEvent.click(screen.getByRole("button", { name: "Start tender" }));
 
-    expect(await screen.findByRole("heading", { name: "Al Noor Primary School" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Nothing needs you right now" })).toBeInTheDocument();
+    expect(within(screen.getByRole("main")).getByText("Al Noor Primary School")).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/tenders/t1");
     const sidebar = screen.getByRole("navigation", { name: "Quantix" });
     expect(sidebar).toHaveTextContent("Al Noor Primary School");
@@ -25,7 +26,8 @@ describe("Quantix shell", () => {
     });
     openApp("/");
 
-    expect(await screen.findByRole("heading", { name: "Riyadh Warehouse" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Nothing needs you right now" })).toBeInTheDocument();
+    expect(within(screen.getByRole("main")).getByText("Riyadh Warehouse")).toBeInTheDocument();
     expect(screen.getByText("No due date yet.")).toBeInTheDocument();
   });
 

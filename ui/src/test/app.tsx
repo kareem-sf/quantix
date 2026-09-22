@@ -5,6 +5,7 @@ import { vi } from "vitest";
 import type { Tender } from "../api/client";
 import { routes } from "../app/router";
 import type { SearchHit, TenderDocument } from "../documents/queries";
+import type { Decision, Message, Staff, Task } from "../office/queries";
 import type { Connection, OfficeSettings } from "../settings/queries";
 
 function json(body: unknown, status = 200) {
@@ -19,6 +20,11 @@ export interface FakeState {
   documents: TenderDocument[];
   pages: Record<string, string>;
   hits: SearchHit[];
+  staff: Staff[];
+  messages: Message[];
+  decisions: Decision[];
+  tasks: Task[];
+  officeState: "working" | "paused" | "idle";
   /** Answer the next POST to this path with this error detail. */
   fail: Record<string, string>;
 }
@@ -33,6 +39,11 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     documents: [],
     pages: {},
     hits: [],
+    staff: [],
+    messages: [],
+    decisions: [],
+    tasks: [],
+    officeState: "idle",
     fail: {},
     ...initial,
   };
@@ -52,7 +63,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     const method = request.method;
     if (method !== "GET" && state.fail[path]) return json({ detail: state.fail[path] }, 400);
     const multipart = request.headers.get("content-type")?.startsWith("multipart/form-data");
-    const body = method === "GET" || method === "DELETE" || multipart ? undefined : await request.json();
+    const body = method === "GET" || method === "DELETE" || multipart ? undefined : await request.json().catch(() => undefined);
 
     const documents = path.match(/^\/tenders\/(\w+)\/documents$/);
     if (documents && method === "POST") {
@@ -77,6 +88,41 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     if (path.match(/^\/tenders\/\w+\/search$/)) return json(state.hits);
     const page = path.match(/^\/documents\/(\w+)\/pages\/(\d+)$/);
     if (page) return json({ number: Number(page[2]), text: state.pages[page[1]] ?? "", has_text: true });
+
+    const office = path.match(/^\/tenders\/(\w+)\/(office|messages|decisions|tasks)$/);
+    if (office?.[2] === "office") {
+      const waiting = state.decisions.filter((d) => d.status === "waiting").length;
+      const ai_ready = state.settings.office_ai !== null;
+      return json({ state: state.officeState, ai_ready, staff: state.staff, waiting });
+    }
+    if (office?.[2] === "messages" && method === "POST") {
+      const message: Message = {
+        id: state.messages.length + 1,
+        sender: "engineer",
+        channel: body.channel,
+        kind: "message",
+        text: body.text,
+        created_at: "2026-09-23T10:00:00Z",
+      };
+      state.messages.push(message);
+      return json(message, 201);
+    }
+    if (office?.[2] === "messages") {
+      const channel = new URL(request.url).searchParams.get("channel") ?? "team";
+      return json(state.messages.filter((m) => m.channel === channel));
+    }
+    if (office?.[2] === "decisions") return json(state.decisions);
+    if (office?.[2] === "tasks") return json(state.tasks);
+    const answer = path.match(/^\/decisions\/(\w+)\/answer$/);
+    if (answer) {
+      const decision = state.decisions.find((d) => d.id === answer[1])!;
+      Object.assign(decision, { status: "answered", answer: body.answer });
+      return json(decision);
+    }
+    if (path.match(/^\/tenders\/\w+\/office\/stop$/)) {
+      state.officeState = "paused";
+      return new Response(null, { status: 204 });
+    }
 
     if (path === "/tenders" && method === "GET") return json(state.tenders);
     if (path === "/tenders" && method === "POST") {

@@ -60,4 +60,34 @@ The design was approved.
 - **Checks:** 30 service tests and 15 UI tests. A browser run on a scratch data folder: 4 files read, an Arabic
   search found the right page, a PDF page rendered, and a sheet showed as text.
 
-Next: the office runtime (Manager, hired staff, team room, direct messages, gates).
+## 23 September 2026: the office
+
+- **Records:** staff with generated personas, messages (the team room, plus each person's chat with the engineer),
+  tasks and decisions. Everything shown in the office comes from these rows.
+- **Runtime:** a background loop wakes people with something new and runs one turn each: a tool loop of at most 12
+  model requests on the office's checked model.
+  - The Manager follows the whole team room. Staff wake for their tasks, for messages that name them, and for the
+    engineer's direct messages.
+  - Each turn's context is rebuilt from the records, not kept as chat history, so tokens stay low.
+  - Agents talk only through tools, so the team room shows only what they actually sent.
+- **Tools:** list, search, read and view pages (page images for scans and drawings), post to the team, message
+  the engineer, raise a concern, ask the engineer (2–4 options), complete a task. The Manager also has hire,
+  assign_task and release. A mistaken argument goes back to the model as a correction instead of failing the turn.
+- **The Tender Manager:** created for each tender with an AI-generated persona when the engineer first writes.
+- **Safeguards:** Stop takes effect between steps. The office pauses after 40 turns without hearing from the
+  engineer. An AI failure pauses it with a plain reason. A person who runs out of steps mid-task gets another turn.
+- **Fully autonomous mode:** ask_engineer tells the agent to decide and explain its reasons in the team room.
+- **Screens:**
+  - Overview: "N decisions need you", the Manager's latest message, and a box to ask the Manager.
+  - Office: the team room, direct chats, and profiles with background, working style, opinions and tasks.
+  - Decision: the question, its options or your own words.
+  - Sidebar: each person's face and what they are doing now.
+- **Portraits** are drawn from each person's id, never from their name.
+- **Checks:** 35 service tests, including a whole office conversation through the real runtime with a scripted
+  model; the service suite passed 8 runs in a row. 20 UI tests pass. A browser run on a seeded scratch folder
+  caught a crash the tests missed: an effect returned `scrollIntoView()`'s value, which this Chrome returns. It is
+  fixed, and a plain error screen now replaces React Router's developer page.
+- **Not yet done:** a live run with a real model. The engineer adds an AI key in Settings, and the office is then
+  tried on a synthetic tender with a small budget.
+
+Next: BOQ (import the client BOQ with source references, and the method of measurement).
