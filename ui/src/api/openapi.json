@@ -2021,6 +2021,383 @@
           }
         }
       }
+    },
+    "/tenders/{tender_id}/estimate": {
+      "get": {
+        "tags": [
+          "estimate"
+        ],
+        "summary": "Get Estimate",
+        "operationId": "get_estimate_tenders__tender_id__estimate_get",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EstimateOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/rates/{rate_id}/decision": {
+      "post": {
+        "tags": [
+          "estimate"
+        ],
+        "summary": "Decide Rate",
+        "operationId": "decide_rate_rates__rate_id__decision_post",
+        "parameters": [
+          {
+            "name": "rate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rate Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RateDecision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenders/{tender_id}/rates/approve-all": {
+      "post": {
+        "tags": [
+          "estimate"
+        ],
+        "summary": "Approve All Rates",
+        "operationId": "approve_all_rates_tenders__tender_id__rates_approve_all_post",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Saved"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/markups/{markups_id}/decision": {
+      "post": {
+        "tags": [
+          "estimate"
+        ],
+        "summary": "Decide Markups",
+        "operationId": "decide_markups_markups__markups_id__decision_post",
+        "parameters": [
+          {
+            "name": "markups_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Markups Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/library": {
+      "get": {
+        "tags": [
+          "estimate"
+        ],
+        "summary": "Get Library",
+        "operationId": "get_library_library_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LibraryOut"
+                  },
+                  "title": "Response Get Library Library Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "estimate"
+        ],
+        "summary": "Add To Library",
+        "operationId": "add_to_library_library_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LibraryIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/library/{resource_id}": {
+      "delete": {
+        "tags": [
+          "estimate"
+        ],
+        "summary": "Remove From Library",
+        "operationId": "remove_from_library_library__resource_id__delete",
+        "parameters": [
+          {
+            "name": "resource_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Resource Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2485,6 +2862,37 @@
         ],
         "title": "DocumentOut"
       },
+      "EstimateOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PricedItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "markups": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MarkupsOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "$ref": "#/components/schemas/SummaryOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "markups",
+          "summary"
+        ],
+        "title": "EstimateOut"
+      },
       "FactOut": {
         "properties": {
           "id": {
@@ -2540,13 +2948,18 @@
           "takeoff": {
             "type": "integer",
             "title": "Takeoff"
+          },
+          "pricing": {
+            "type": "integer",
+            "title": "Pricing"
           }
         },
         "type": "object",
         "required": [
           "boq",
           "facts",
-          "takeoff"
+          "takeoff",
+          "pricing"
         ],
         "title": "Gates"
       },
@@ -2641,6 +3054,230 @@
           "source"
         ],
         "title": "ItemOut"
+      },
+      "LibraryIn": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "labour",
+              "plant",
+              "material",
+              "subcontract",
+              "unit_rate"
+            ],
+            "title": "Kind"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Name"
+          },
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Unit"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Rate"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Currency"
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Source"
+          },
+          "dated": {
+            "type": "string",
+            "format": "date",
+            "title": "Dated"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "name",
+          "unit",
+          "rate",
+          "currency",
+          "source",
+          "dated"
+        ],
+        "title": "LibraryIn"
+      },
+      "LibraryOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "labour",
+              "plant",
+              "material",
+              "subcontract",
+              "unit_rate"
+            ],
+            "title": "Kind"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Name"
+          },
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Unit"
+          },
+          "rate": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Rate"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Currency"
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Source"
+          },
+          "dated": {
+            "type": "string",
+            "format": "date",
+            "title": "Dated"
+          },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "name",
+          "unit",
+          "rate",
+          "currency",
+          "source",
+          "dated",
+          "id"
+        ],
+        "title": "LibraryOut"
+      },
+      "LineOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "resource": {
+            "type": "string",
+            "title": "Resource"
+          },
+          "quantity": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Quantity"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "rate": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Rate"
+          },
+          "wastage": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Wastage"
+          },
+          "cost": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Cost"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "resource",
+          "quantity",
+          "unit",
+          "rate",
+          "wastage",
+          "cost"
+        ],
+        "title": "LineOut"
+      },
+      "MarkupsOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "preliminaries": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Preliminaries"
+          },
+          "overheads": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Overheads"
+          },
+          "profit": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Profit"
+          },
+          "adjustment": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Adjustment"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "proposed_by": {
+            "type": "string",
+            "title": "Proposed By"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "preliminaries",
+          "overheads",
+          "profit",
+          "adjustment",
+          "note",
+          "status",
+          "proposed_by"
+        ],
+        "title": "MarkupsOut"
       },
       "MeasurementIn": {
         "properties": {
@@ -2973,6 +3610,257 @@
         ],
         "title": "PageOut"
       },
+      "PricedItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "section": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Section"
+          },
+          "item": {
+            "type": "string",
+            "title": "Item"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity"
+          },
+          "item_status": {
+            "type": "string",
+            "title": "Item Status"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RateOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "amount": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "section",
+          "item",
+          "description",
+          "unit",
+          "quantity",
+          "item_status",
+          "rate",
+          "amount"
+        ],
+        "title": "PricedItem"
+      },
+      "RateDecision": {
+        "properties": {
+          "approve": {
+            "type": "boolean",
+            "title": "Approve"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "save_to_library": {
+            "type": "boolean",
+            "title": "Save To Library",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "approve"
+        ],
+        "title": "RateDecision"
+      },
+      "RateOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "basis": {
+            "type": "string",
+            "title": "Basis"
+          },
+          "rate": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Rate"
+          },
+          "unit_rate": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit Rate"
+          },
+          "lines": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/LineOut"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lines"
+          },
+          "source_document": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Document"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote"
+          },
+          "library_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Library Id"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "proposed_by": {
+            "type": "string",
+            "title": "Proposed By"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "basis",
+          "rate",
+          "unit_rate",
+          "lines",
+          "source_document",
+          "document_id",
+          "page",
+          "quote",
+          "library_id",
+          "note",
+          "status",
+          "proposed_by"
+        ],
+        "title": "RateOut"
+      },
+      "Saved": {
+        "properties": {
+          "approved": {
+            "type": "integer",
+            "title": "Approved"
+          }
+        },
+        "type": "object",
+        "required": [
+          "approved"
+        ],
+        "title": "Saved"
+      },
       "ScaleIn": {
         "properties": {
           "document_id": {
@@ -3270,6 +4158,117 @@
           "now"
         ],
         "title": "StaffOut"
+      },
+      "SummaryOut": {
+        "properties": {
+          "currency": {
+            "type": "string",
+            "title": "Currency"
+          },
+          "priced": {
+            "type": "integer",
+            "title": "Priced"
+          },
+          "items": {
+            "type": "integer",
+            "title": "Items"
+          },
+          "waiting": {
+            "type": "integer",
+            "title": "Waiting"
+          },
+          "net": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Net"
+          },
+          "preliminaries": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Preliminaries"
+          },
+          "overheads": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Overheads"
+          },
+          "profit": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Profit"
+          },
+          "adjustment": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Adjustment"
+          },
+          "total": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Total"
+          },
+          "vat_rate": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vat Rate"
+          },
+          "vat": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vat"
+          },
+          "total_with_vat": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total With Vat"
+          },
+          "unpriced": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unpriced"
+          }
+        },
+        "type": "object",
+        "required": [
+          "currency",
+          "priced",
+          "items",
+          "waiting",
+          "net",
+          "preliminaries",
+          "overheads",
+          "profit",
+          "adjustment",
+          "total",
+          "vat_rate",
+          "vat",
+          "total_with_vat",
+          "unpriced"
+        ],
+        "title": "SummaryOut"
       },
       "Takeoff": {
         "properties": {

@@ -1,6 +1,7 @@
 import { Navigate, Outlet, useRouteError, type RouteObject } from "react-router";
 import { Documents } from "../documents/Documents";
 import { Estimate } from "../estimate/Estimate";
+import { Library } from "../library/Library";
 import { Takeoff } from "../takeoff/Takeoff";
 import { DecisionPage } from "../office/DecisionPage";
 import { Office } from "../office/Office";
@@ -55,6 +56,7 @@ export const routes: RouteObject[] = [
       { path: "/tenders/:tenderId/estimate", element: <Estimate /> },
       { path: "/tenders/:tenderId/decisions/:decisionId", element: <DecisionPage /> },
       { path: "/settings", element: <Settings /> },
+      { path: "/library", element: <Library /> },
     ],
   },
 ];

@@ -46,7 +46,7 @@ describe("Estimate", () => {
     });
     openApp("/tenders/t1/estimate");
 
-    expect(await screen.findByText("2 BOQ items · 1 needs you")).toBeInTheDocument();
+    expect(await screen.findByText("0 of 2 items priced · 1 needs you")).toBeInTheDocument();
     expect(screen.getByText("Section 3 · Earthworks")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /Excavation to reduce levels/ }));
 
@@ -56,7 +56,7 @@ describe("Estimate", () => {
       "/tenders/t1/documents?doc=d1&page=1",
     );
     expect(within(panel).getByText("A2=3.1 | B2=Excavation to reduce levels | C2=m3 | D2=1240")).toBeInTheDocument();
-    expect(within(panel).getByText("Entered by Omar, Quantity Surveyor")).toBeInTheDocument();
+    expect(within(panel).getByText("Entered by Omar")).toBeInTheDocument();
   });
 
   it("approves everything waiting in one go", async () => {
