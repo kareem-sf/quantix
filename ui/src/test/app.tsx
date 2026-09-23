@@ -205,6 +205,11 @@ export function fakeService(initial: Partial<FakeState> = {}) {
       r.state = body.approve ? "ready" : "missing";
       return json(null);
     }
+    const dropped = path.match(/^\/requirements\/(\w+)$/);
+    if (dropped && method === "DELETE") {
+      state.requirements = state.requirements.filter((r) => r.id !== dropped[1]);
+      return new Response(null, { status: 204 });
+    }
     const readied = path.match(/^\/requirements\/(\w+)\/ready$/);
     if (readied) {
       const r = state.requirements.find((x) => x.id === readied[1])!;

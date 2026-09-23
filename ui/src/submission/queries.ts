@@ -98,3 +98,12 @@ export function useOpenFolder() {
       ok(await api.POST("/exports/{folder}/open", { params: { path: { folder } } })),
   });
 }
+
+export function useRemoveRequirement(tenderId: string) {
+  const refresh = useRefresh(tenderId);
+  return useMutation({
+    mutationFn: async (id: string) =>
+      ok(await api.DELETE("/requirements/{requirement_id}", { params: { path: { requirement_id: id } } })),
+    onSuccess: refresh,
+  });
+}

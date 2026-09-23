@@ -298,3 +298,17 @@ def test_a_requirement_already_on_the_checklist_is_not_added_twice(client, tende
         "0 requirements added to the checklist.\n"
         "Concrete works method statement: the checklist already has “Method statement for concrete works”"
     )
+
+
+def test_the_engineer_removes_a_duplicate_from_the_checklist(client, tender):
+    tender_id, layla, _, _ = tender
+    checklist(client, tender)
+    with client.app.state.sessions() as session:
+        method = submission.find_requirement(session, tender_id, "Method statement for concrete works")
+        submission.draft(session, method, layla, "Method statement", "Pour sequence.")
+        session.commit()
+        method_id = method.id
+    assert client.delete(f"/requirements/{method_id}").status_code == 204
+    titles = [r["title"] for r in client.get(f"/tenders/{tender_id}/submission").json()["requirements"]]
+    assert titles == ["Bid bond, 1% of the tender price"]
+    assert client.get(f"/tenders/{tender_id}/gates").json()["submission"] == 0  # its draft went with it

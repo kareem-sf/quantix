@@ -2994,6 +2994,52 @@
         }
       }
     },
+    "/requirements/{requirement_id}": {
+      "delete": {
+        "tags": [
+          "submission"
+        ],
+        "summary": "Remove Requirement",
+        "description": "Take an item off the checklist, such as a duplicate. Its drafts and any attached file go with it.",
+        "operationId": "remove_requirement_requirements__requirement_id__delete",
+        "parameters": [
+          {
+            "name": "requirement_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Requirement Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/requirements/{requirement_id}/ready": {
       "post": {
         "tags": [

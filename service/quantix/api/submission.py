@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -152,6 +153,15 @@ def decide_draft(draft_id: str, body: DecisionIn, session: DB, request: Request)
     records.decide(session, draft, body.approve, body.reason)
     session.commit()
     request.app.state.office.engineer_spoke(draft.tender_id)
+
+
+@router.delete("/requirements/{requirement_id}", status_code=204)
+def remove_requirement(requirement_id: str, session: DB, request: Request) -> None:
+    """Take an item off the checklist, such as a duplicate. Its drafts and any attached file go with it."""
+    requirement = _requirement(session, requirement_id)
+    shutil.rmtree(records.attachments_dir(request.app.state.home, requirement), ignore_errors=True)
+    session.delete(requirement)
+    session.commit()
 
 
 @router.post("/requirements/{requirement_id}/ready")

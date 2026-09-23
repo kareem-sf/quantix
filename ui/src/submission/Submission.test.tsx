@@ -63,6 +63,18 @@ describe("Submission", () => {
     await waitFor(() => expect(service.state.requirements[1].draft?.status).toBe("approved"));
   });
 
+  it("removes a duplicate from the checklist after asking", async () => {
+    const service = fakeService({ tenders: [tender], staff: [layla], requirements: checklist() });
+    openApp("/tenders/t1/submission?item=r3");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Remove from checklist" }));
+    await userEvent.click(screen.getByRole("button", { name: "Keep" }));
+    expect(service.state.requirements).toHaveLength(3);
+    await userEvent.click(screen.getByRole("button", { name: "Remove from checklist" }));
+    await userEvent.click(screen.getByRole("button", { name: "Remove it" }));
+    await waitFor(() => expect(service.state.requirements.map((r) => r.id)).toEqual(["r1", "r2"]));
+  });
+
   it("marks a requirement the engineer provides as ready", async () => {
     const service = fakeService({ tenders: [tender], staff: [layla], requirements: checklist() });
     openApp("/tenders/t1/submission?item=r1");

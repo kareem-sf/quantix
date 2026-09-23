@@ -9,6 +9,7 @@ import { useTender } from "../tenders/queries";
 import {
   useAddRequirement,
   useAttach,
+  useRemoveRequirement,
   useBuild,
   useDecideDraft,
   useMarkReady,
@@ -221,10 +222,12 @@ function RequirementPanel(props: { tenderId: string; requirement: Requirement; p
   const decide = useDecideDraft(tenderId);
   const ready = useMarkReady(tenderId);
   const attach = useAttach(tenderId);
+  const remove = useRemoveRequirement(tenderId);
+  const [removing, setRemoving] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
   const author = r.draft ? props.people.get(r.draft.proposed_by) : undefined;
-  const error = decide.error ?? ready.error ?? attach.error;
+  const error = decide.error ?? ready.error ?? attach.error ?? remove.error;
 
   return (
     <aside
@@ -323,6 +326,24 @@ function RequirementPanel(props: { tenderId: string; requirement: Requirement; p
         ) : (
           <button onClick={() => ready.mutate({ id: r.id, ready: false })} className="text-ink-2 hover:text-ink">
             Not ready after all
+          </button>
+        )}
+        <span className="grow" />
+        {removing ? (
+          <span className="flex gap-3">
+            <button
+              onClick={() => remove.mutate(r.id, { onSuccess: () => setParams({}) })}
+              className="font-medium text-attention"
+            >
+              Remove it
+            </button>
+            <button onClick={() => setRemoving(false)} className="text-ink-2">
+              Keep
+            </button>
+          </span>
+        ) : (
+          <button onClick={() => setRemoving(true)} className="text-ink-3 hover:text-attention">
+            Remove from checklist
           </button>
         )}
       </div>
