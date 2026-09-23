@@ -137,6 +137,11 @@ async def run_turn(
                     for part in node.request.parts:
                         if isinstance(part, RetryPromptPart):
                             log.info("%s: a tool call was sent back: %s", member.name, str(part.content)[:300])
+                    # Streamed: some services drop a long answer that arrives in one piece after a quiet minute.
+                    async with node.stream(run.ctx) as answer:
+                        async for _event in answer:
+                            if turn.stop.is_set():
+                                raise tools.Stopped()
                 elif Agent.is_call_tools_node(node):
                     calls = [p.tool_name for p in node.model_response.parts if isinstance(p, ToolCallPart)]
                     log.info("%s: answered in %.1f s, calling %s", member.name, time.monotonic() - asked, calls)

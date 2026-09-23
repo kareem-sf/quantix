@@ -5,9 +5,8 @@ import re
 
 import openpyxl
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart, UserPromptPart
-from pydantic_ai.models.function import FunctionModel
 from test_documents import make_pdf, read_all, upload
-from test_office import wait_for
+from test_office import scripted, wait_for
 from test_submission import client_bill
 
 from quantix import settings
@@ -187,7 +186,7 @@ def test_a_synthetic_tender_goes_through_every_gate_to_a_built_package(client, t
             args = {**args, "task_id": re.search(r"Your open tasks:\n- (\w+):", prompt).group(1)}
         return ModelResponse(parts=[ToolCallPart(name, args)])
 
-    client.app.state.office.model = lambda: FunctionModel(brain)
+    client.app.state.office.model = lambda: scripted(brain)
     gates = lambda: client.get(f"/tenders/{tender_id}/gates").json()  # noqa: E731
 
     def tell_layla(text):

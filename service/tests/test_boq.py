@@ -2,9 +2,8 @@ from decimal import Decimal
 
 import pytest
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
-from pydantic_ai.models.function import FunctionModel
 from test_documents import PDF, make_xlsx, read_all, upload
-from test_office import wait_for
+from test_office import scripted, wait_for
 
 from quantix import settings
 from quantix.boq import records
@@ -185,7 +184,7 @@ def test_staff_propose_items_through_their_tool(client, package, tmp_path):
         }
         return ModelResponse(parts=[ToolCallPart("propose_boq_items", {"items": [item]})])
 
-    client.app.state.office.model = lambda: FunctionModel(brain)
+    client.app.state.office.model = lambda: scripted(brain)
     client.post(f"/tenders/{tender_id}/messages", json={"channel": "team", "text": "Enter the BOQ."})
     wait_for(lambda o: client.get(f"/tenders/{tender_id}/gates").json()["boq"] == 1, client, tender_id)
     [item] = client.get(f"/tenders/{tender_id}/boq").json()["items"]

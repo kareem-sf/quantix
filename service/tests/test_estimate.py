@@ -4,9 +4,8 @@ from decimal import Decimal
 import openpyxl
 import pytest
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
-from pydantic_ai.models.function import FunctionModel
 from test_documents import make_pdf, read_all, upload
-from test_office import wait_for
+from test_office import scripted, wait_for
 
 from quantix import settings
 from quantix.boq import records as boq
@@ -275,7 +274,7 @@ def test_staff_price_through_their_tools(client, tender, tmp_path):
             else ModelResponse(parts=[TextPart("Done.")])
         )
 
-    client.app.state.office.model = lambda: FunctionModel(brain)
+    client.app.state.office.model = lambda: scripted(brain)
     with client.app.state.sessions() as session:
         office.post(session, tender_id, "engineer", priya, "Priya, price the excavation.")
         session.commit()

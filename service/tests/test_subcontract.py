@@ -2,10 +2,9 @@ from decimal import Decimal
 
 import pytest
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
-from pydantic_ai.models.function import FunctionModel
 from test_documents import make_pdf, read_all, upload
 from test_estimate import bill
-from test_office import wait_for
+from test_office import scripted, wait_for
 
 from quantix import settings
 from quantix.boq import records as boq
@@ -271,7 +270,7 @@ def test_staff_level_quotes_through_their_tools_and_an_autonomous_office_chooses
             else ModelResponse(parts=[TextPart("Done.")])
         )
 
-    client.app.state.office.model = lambda: FunctionModel(brain)
+    client.app.state.office.model = lambda: scripted(brain)
     with client.app.state.sessions() as session:
         office.post(session, tender_id, "engineer", omar, "Omar, level the groundworks quotes.")
         session.commit()

@@ -5,7 +5,7 @@ import time
 
 import pytest
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart, UserPromptPart
-from pydantic_ai.models.function import FunctionModel
+from pydantic_ai.models.function import DeltaToolCall, FunctionModel
 from test_documents import PDF, read_all, upload
 
 from quantix import settings
@@ -25,6 +25,19 @@ def call(tool: str, **args) -> ModelResponse:
 
 
 DONE = ModelResponse(parts=[TextPart("That's everything for now.")])
+
+
+def scripted(brain) -> FunctionModel:
+    """The brain as a model the office can stream from, as it does from a real service."""
+
+    async def stream(messages, info):
+        for index, part in enumerate(brain(messages, info).parts):
+            if isinstance(part, TextPart):
+                yield part.content
+            elif isinstance(part, ToolCallPart):
+                yield {index: DeltaToolCall(part.tool_name, part.args_as_json_str(), tool_call_id=part.tool_call_id)}
+
+    return FunctionModel(brain, stream_function=stream)
 
 
 def office_brain(messages, info) -> ModelResponse:
@@ -101,7 +114,7 @@ def office(client, tmp_path):
     settings.save(tmp_path, office_ai={"connection_id": "scripted", "model": "office-brain"})
 
     def use(brain):
-        client.app.state.office.model = lambda: FunctionModel(brain)
+        client.app.state.office.model = lambda: scripted(brain)
 
     use(office_brain)
     return tender_id, use
