@@ -90,13 +90,34 @@ def propose_items(session: Session, tender_id: str, by: Staff, items: list[ItemI
     return report + ("\nNot saved: " + "; ".join(problems) if problems else "")
 
 
+_ROW = re.compile(r"row (\d+)", re.IGNORECASE)
+
+
+def _row(item: BoqItem) -> str | None:
+    cell = _CELL.search(item.quote)
+    return cell.group(1) if cell else None
+
+
+def reference(item: BoqItem) -> str:
+    """How to name an item so it can't be mistaken for the same number in another bill; find_item reads it back.
+    A line the client left unnumbered is named by its row in the client's workbook."""
+    number = item.item or (f"row {_row(item)}" if _row(item) else "")
+    return f"{item.section} / {number}" if item.section else number
+
+
 def find_item(session: Session, tender_id: str, reference: str) -> BoqItem:
-    """A BOQ item by its number, or by "<section> / <number>" when several bills share the number."""
+    """A BOQ item by its number, or by "<section> / <number>" when several bills share the number. An unnumbered
+    line is "row <n>", its row in the client's workbook."""
     section, _, number = reference.strip().rpartition(" / ")
+    row = _ROW.fullmatch(number.strip())
     query = select(BoqItem).where(
-        BoqItem.tender_id == tender_id, BoqItem.item == number.strip(), BoqItem.status.in_(ACTIVE)
+        BoqItem.tender_id == tender_id, BoqItem.item == ("" if row else number.strip()), BoqItem.status.in_(ACTIVE)
     )
-    found = [i for i in session.scalars(query) if not section or (i.section or "").lower() == section.lower()]
+    found = [
+        i
+        for i in session.scalars(query)
+        if (not section or (i.section or "").lower() == section.lower()) and (not row or _row(i) == row.group(1))
+    ]
     if not found:
         raise ValueError(f"There is no BOQ item {reference}. Use list_boq to see the items.")
     if len(found) > 1:
@@ -173,7 +194,7 @@ def decide(session: Session, record: BoqItem | Fact, approve: bool, reason: str 
             if older.id != record.id and older.status in ACTIVE:
                 older.status = "replaced"
     if not approve:
-        what = f"BOQ item {record.item}" if isinstance(record, BoqItem) else FACT_KINDS[record.kind].lower()
+        what = f"BOQ item {reference(record)}" if isinstance(record, BoqItem) else FACT_KINDS[record.kind].lower()
         office.post(
             session,
             record.tender_id,

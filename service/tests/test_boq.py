@@ -208,6 +208,24 @@ def test_bills_that_reuse_item_numbers_are_told_apart_by_section(client, package
         assert records.find_item(session, tender_id, "8486 · earthwork / 3.1").section == "8486 · Earthwork"
         with pytest.raises(ValueError, match="There is no BOQ item 8487 / 3.1"):
             records.find_item(session, tender_id, "8487 / 3.1")
+        second = records.find_item(session, tender_id, "8486 · Earthwork / 3.1")
+        records.decide(session, second, False, "Wrong unit.")
+        session.commit()
+    to_qs = client.get(f"/tenders/{tender_id}/messages", params={"channel": qs}).json()
+    assert to_qs[-1]["text"] == "I rejected BOQ item 8486 · Earthwork / 3.1: Wrong unit."  # which bill, not only 3.1
+
+
+def test_a_line_the_client_left_unnumbered_is_named_by_its_row(client, package, qs):
+    tender_id, bill, _ = package
+    quote = "B2=Excavation to reduce levels | C2=m3 | D2=1240"
+    assert propose(client, tender_id, qs, [line(bill, item="", section="8486 · Earthwork", quote=quote)]).startswith(
+        "Saved 1"
+    )
+    with client.app.state.sessions() as session:
+        found = records.find_item(session, tender_id, "8486 · Earthwork / row 2")
+        assert records.reference(found) == "8486 · Earthwork / row 2"
+        with pytest.raises(ValueError, match="There is no BOQ item 8486 · Earthwork / row 3"):
+            records.find_item(session, tender_id, "8486 · Earthwork / row 3")
 
 
 def test_staff_withdraw_their_own_undecided_lines(client, package, qs):

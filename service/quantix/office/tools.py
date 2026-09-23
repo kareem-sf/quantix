@@ -281,7 +281,7 @@ def list_boq(ctx: RunContext[Turn]) -> str:
     with _working(ctx, "Checking the BOQ") as (session, _):
         rows = boq.items(session, ctx.deps.tender_id)
         lines = [
-            f"{r.section + ' / ' if r.section else ''}{r.item} | {r.description[:80]} | {r.unit} | "
+            f"{boq.reference(r)} | {r.description[:80]} | {r.unit} | "
             f"{r.quantity if r.quantity is not None else '-'} | {r.status}"
             for r in rows
         ]

@@ -137,7 +137,7 @@ def decide(session: Session, record: Rate | Markups, approve: bool, reason: str 
         _replace_older(session, record)
     if not approve and record.proposed_by != ENGINEER:
         if isinstance(record, Rate):
-            what = f"the rate for BOQ item {session.get(BoqItem, record.boq_item_id).item}"
+            what = f"the rate for BOQ item {boq.reference(session.get(BoqItem, record.boq_item_id))}"
         else:
             what = "the markups"
         office.post(
@@ -237,7 +237,7 @@ def summary(session: Session, tender_id: str) -> Summary:
         result.items += 1
         rate = current_rate(session, item.id)
         if rate is None or item.quantity is None:
-            result.unpriced.append(item.item)
+            result.unpriced.append(boq.reference(item))
             continue
         result.priced += 1
         result.waiting += rate.status == "proposed"
