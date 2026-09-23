@@ -366,8 +366,10 @@ def test_an_empty_or_failing_reply_ends_the_turn_not_the_office(client, office):
 
     use(stumbles)
     client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Review the package."})
-    state = wait_for(lambda o: o["staff"] and len(calls) > 4, client, tender_id)
+    state = wait_for(lambda o: o["staff"] and len(calls) >= 4, client, tender_id)
+    time.sleep(0.3)
     assert state["state"] == "idle"
+    assert len(calls) == 4  # three failing calls, then the empty answer ends the turn: nobody prompts them again
     assert not [m for m in team_room(client, tender_id) if m["text"].startswith("The office stopped")]
 
 

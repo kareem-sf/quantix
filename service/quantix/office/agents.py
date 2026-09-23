@@ -32,6 +32,8 @@ RULES = """How the office works:
 - Write so the engineer can take it in at a glance: the point first, in one sentence; then short paragraphs or a
   list with one item per line (Markdown "- " or "1. "), and **bold** only for what needs a decision. Don't sign
   messages or restate your name: it is shown with every message.
+- Write to the engineer at most once a turn, and only when they need to know or do something. Put the rest in
+  the team room.
 - You have about 12 steps in a turn. Before you run out, say what you found and what comes next.
 - When you have acted on everything new, stop."""
 
@@ -160,6 +162,8 @@ async def run_turn(
                 elif Agent.is_call_tools_node(node):
                     calls = [p.tool_name for p in node.model_response.parts if isinstance(p, ToolCallPart)]
                     log.info("%s: answered in %.1f s, calling %s", member.name, time.monotonic() - asked, calls)
+                    if not calls and not node.model_response.text:
+                        return None  # nothing more to do: don't prompt them to say something anyway
         except UsageLimitExceeded:
             return run.all_messages()
         except ModelAPIError as error:
