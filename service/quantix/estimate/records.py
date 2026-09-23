@@ -94,6 +94,9 @@ def propose_rate(
             raise ValueError("An estimated rate needs its reasoning in the note: outputs, prices and assumptions.")
     else:
         raise ValueError("The basis is quote, library or estimate.")
+    # the newest proposal for an item replaces any still waiting, so the engineer decides one rate per line
+    for older in session.scalars(select(Rate).where(Rate.boq_item_id == item.id, Rate.status == "proposed")):
+        older.status = "replaced"
     rate = Rate(
         tender_id=tender_id,
         boq_item_id=item.id,

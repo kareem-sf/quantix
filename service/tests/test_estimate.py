@@ -10,6 +10,7 @@ from test_office import scripted, wait_for
 from quantix import settings
 from quantix.boq import records as boq
 from quantix.estimate import records as estimate
+from quantix.estimate.models import Rate
 from quantix.office import records as office
 
 QUOTE = make_pdf([["Al-Rajhi Steel quotation 17 September", "Rebar B500B cut and bent 2,300.00 SAR per t"]])
@@ -228,6 +229,20 @@ def test_approving_keeps_one_rate_and_can_save_it_to_the_library(client, tender)
     assert (
         client.delete(f"/library/{entry['id']}").json()["detail"].startswith("A tender's rate is based on this entry")
     )
+
+
+def test_a_new_proposal_replaces_the_one_still_waiting(client, tender):
+    tender_id, priya, _ = tender
+    first = price(
+        client, tender_id, priya, "3.1", "estimate", "Unit rate from the BOQ wording.", unit_rate=Decimal("18")
+    )
+    second = price(
+        client, tender_id, priya, "3.1", "estimate", "Plant 4.5 m3/hr at 83.25 an hour.", unit_rate=Decimal(20)
+    )
+    with client.app.state.sessions() as session:
+        assert estimate.waiting(session, tender_id) == 1  # one rate per line for the engineer to decide
+        assert session.get(Rate, first).status == "replaced"
+        assert session.get(Rate, second).status == "proposed"
 
 
 def test_approve_all_and_send_a_rate_back(client, tender):
