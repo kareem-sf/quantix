@@ -751,6 +751,128 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tenders/{tender_id}/submission": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Submission */
+        get: operations["get_submission_tenders__tender_id__submission_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tenders/{tender_id}/requirements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add Requirement */
+        post: operations["add_requirement_tenders__tender_id__requirements_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/drafts/{draft_id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide Draft */
+        post: operations["decide_draft_drafts__draft_id__decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/requirements/{requirement_id}/ready": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark Ready */
+        post: operations["mark_ready_requirements__requirement_id__ready_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/requirements/{requirement_id}/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Attach File */
+        post: operations["attach_file_requirements__requirement_id__file_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tenders/{tender_id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Build Package
+         * @description The engineer's release: the package is built in the Quantix exports folder on this computer.
+         */
+        post: operations["build_package_tenders__tender_id__export_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/exports/{folder}/open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Open Folder */
+        post: operations["open_folder_exports__folder__open_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -777,6 +899,11 @@ export interface components {
             /** Files */
             files: string[];
         };
+        /** Body_attach_file_requirements__requirement_id__file_post */
+        Body_attach_file_requirements__requirement_id__file_post: {
+            /** File */
+            file: string;
+        };
         /** Boq */
         Boq: {
             /** Items */
@@ -793,6 +920,21 @@ export interface components {
         Choice: {
             /** Quote Id */
             quote_id: string;
+        };
+        /** ColumnsOut */
+        ColumnsOut: {
+            /** Document Id */
+            document_id: string;
+            /** Document Name */
+            document_name: string;
+            /** Sheet */
+            sheet: number;
+            /** Rate Column */
+            rate_column: string;
+            /** Amount Column */
+            amount_column: string;
+            /** Proposed By */
+            proposed_by: string;
         };
         /** CompanyIn */
         CompanyIn: {
@@ -935,6 +1077,19 @@ export interface components {
             /** Description */
             description: string | null;
         };
+        /** DraftOut */
+        DraftOut: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** Body */
+            body: string;
+            /** Status */
+            status: string;
+            /** Proposed By */
+            proposed_by: string;
+        };
         /** EnquiryOut */
         EnquiryOut: {
             /** Id */
@@ -970,6 +1125,29 @@ export interface components {
             /** Quote */
             quote: string;
         };
+        /** ExportIn */
+        ExportIn: {
+            /**
+             * Spread Markups
+             * @default true
+             */
+            spread_markups: boolean;
+        };
+        /** ExportOut */
+        ExportOut: {
+            /** Folder */
+            folder: string;
+            /** Files */
+            files: string[];
+            /** Priced Total */
+            priced_total: string;
+            /** Summary Total */
+            summary_total: string;
+            /** Factor */
+            factor: string;
+            /** Not Ready */
+            not_ready: string[];
+        };
         /** FactOut */
         FactOut: {
             /** Id */
@@ -998,6 +1176,8 @@ export interface components {
             pricing: number;
             /** Subcontract */
             subcontract: number;
+            /** Submission */
+            submission: number;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1364,6 +1544,49 @@ export interface components {
             /** Proposed By */
             proposed_by: string;
         };
+        /** ReadyIn */
+        ReadyIn: {
+            /** Ready */
+            ready: boolean;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+        };
+        /** RequirementIn */
+        RequirementIn: {
+            /** Section */
+            section: string;
+            /** Title */
+            title: string;
+        };
+        /** RequirementOut */
+        RequirementOut: {
+            /** Id */
+            id: string;
+            /** Section */
+            section: string;
+            /** Title */
+            title: string;
+            /** Document Id */
+            document_id: string | null;
+            /** Document Name */
+            document_name: string | null;
+            /** Page */
+            page: number | null;
+            /** Quote */
+            quote: string | null;
+            /** Added By */
+            added_by: string;
+            /** State */
+            state: string;
+            draft: components["schemas"]["DraftOut"] | null;
+            /** Ready Note */
+            ready_note: string | null;
+            /** File Name */
+            file_name: string | null;
+        };
         /** Saved */
         Saved: {
             /** Approved */
@@ -1468,6 +1691,13 @@ export interface components {
             status: string;
             /** Now */
             now: string | null;
+        };
+        /** SubmissionOut */
+        SubmissionOut: {
+            /** Requirements */
+            requirements: components["schemas"]["RequirementOut"][];
+            /** Columns */
+            columns: components["schemas"]["ColumnsOut"][];
         };
         /** SummaryOut */
         SummaryOut: {
@@ -3236,6 +3466,255 @@ export interface operations {
             };
             path: {
                 company_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_submission_tenders__tender_id__submission_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_requirement_tenders__tender_id__requirements_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequirementIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_draft_drafts__draft_id__decision_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecisionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mark_ready_requirements__requirement_id__ready_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                requirement_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReadyIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attach_file_requirements__requirement_id__file_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                requirement_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_attach_file_requirements__requirement_id__file_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    build_package_tenders__tender_id__export_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    open_folder_exports__folder__open_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                folder: string;
             };
             cookie?: never;
         };

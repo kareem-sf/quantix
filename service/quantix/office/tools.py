@@ -18,6 +18,7 @@ from quantix.estimate import records as estimate
 from quantix.office import records
 from quantix.office.models import TEAM, Staff
 from quantix.subcontract import records as subcontract
+from quantix.submission import records as submission
 from quantix.takeoff import records as takeoff
 
 
@@ -508,6 +509,46 @@ def recommend_quote(ctx: RunContext[Turn], package: str, company: str, reason: s
     return "Your recommendation is waiting for the engineer."
 
 
+def add_requirements(ctx: RunContext[Turn], requirements: list[submission.RequirementIn]) -> str:
+    """Add what the tender requires the bidder to submit to the checklist: forms, bonds, certificates, schedules,
+    method statements, the priced BOQ. Each with the clause that requires it."""
+    with _working(ctx, "Building the submission checklist") as (session, me):
+        return submission.add_requirements(session, ctx.deps.tender_id, me.id, requirements)
+
+
+def list_requirements(ctx: RunContext[Turn]) -> str:
+    """The submission checklist and where each requirement stands."""
+    with _working(ctx, "Checking the submission checklist") as (session, _):
+        rows = [
+            f"- {r.section} · {r.title}: {submission.state(session, r)}"
+            for r in submission.requirements(session, ctx.deps.tender_id)
+        ]
+    return "\n".join(rows) or "The checklist is empty. Add requirements with add_requirements."
+
+
+def draft_document(ctx: RunContext[Turn], requirement: str, title: str, text: str) -> str:
+    """Draft a submission document for a checklist requirement, such as a method statement, a covering letter or a
+    schedule. Base it on the tender documents and the approved figures; leave signatures and anything only the
+    engineer can provide as clear blanks. A new draft replaces your earlier one."""
+    with _working(ctx, f"Drafting {title}") as (session, me):
+        found = submission.find_requirement(session, ctx.deps.tender_id, requirement)
+        status = "office_approved" if ctx.deps.autonomous else "proposed"
+        submission.draft(session, found, me.id, title, text, status)
+    return "The draft is in the checklist." if ctx.deps.autonomous else "The draft is waiting for the engineer."
+
+
+def set_pricing_columns(
+    ctx: RunContext[Turn], document_id: str, sheet: int, rate_column: str, amount_column: str, header_quote: str
+) -> str:
+    """Say which columns of the client's BOQ workbook take the rate and the amount, so the priced BOQ is returned in
+    the client's own format. sheet is the page number read_page uses; header_quote is the header row as shown."""
+    with _working(ctx, "Reading the client's BOQ layout") as (session, me):
+        submission.set_pricing_columns(
+            session, ctx.deps.tender_id, me.id, document_id, sheet, rate_column, amount_column, header_quote
+        )
+    return f"Rates will go in column {rate_column.upper()} and amounts in column {amount_column.upper()}."
+
+
 COMMON: list[Callable] = [
     list_documents,
     search_documents,
@@ -535,6 +576,10 @@ COMMON: list[Callable] = [
     record_quote,
     levelling,
     recommend_quote,
+    add_requirements,
+    list_requirements,
+    draft_document,
+    set_pricing_columns,
 ]
 STAFF: list[Callable] = [*COMMON, complete_task]
 MANAGER: list[Callable] = [*COMMON, hire, assign_task, release]

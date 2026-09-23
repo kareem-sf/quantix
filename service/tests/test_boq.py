@@ -79,6 +79,7 @@ def test_items_are_saved_only_when_the_page_backs_them(client, package, qs):
         "takeoff": 0,
         "pricing": 0,
         "subcontract": 0,
+        "submission": 0,
     }
 
 
@@ -143,6 +144,7 @@ def test_an_autonomous_office_approves_its_own_items(client, package, qs):
         "takeoff": 0,
         "pricing": 0,
         "subcontract": 0,
+        "submission": 0,
     }
 
 

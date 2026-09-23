@@ -188,4 +188,33 @@ The design was approved.
   showed the table, opened the mail draft, marked it sent, and chose Najd; item 3.1 then priced at 20,460.00 in the
   estimate. That run found "Our rate" switching to the chosen quote's rate; this is fixed and covered by a test.
 
-Next: submission (requirements checklist, drafted documents, priced BOQ in the client's format, export package).
+
+## 23 September 2026: submission
+
+- **Checklist:** staff add what the tender requires the bidder to submit, with `add_requirements`. Each
+  requirement cites the clause that requires it, and only the ones whose clause checks out are kept. The engineer
+  can add their own.
+- **States:** each requirement is ready, needs you (a draft waits for review) or missing.
+- **Drafts:** staff draft submission documents with `draft_document`, leaving signatures and anything only the
+  engineer can provide as blanks. Drafts wait for the engineer, a new Submission gate. Sending one back tells the
+  author why. In Fully autonomous mode drafts are approved by the office and marked as not reviewed.
+- **What the engineer provides:** they attach a file (a bond or a certificate) or mark the requirement ready.
+- **Priced BOQ in the client's format:** staff read the client workbook's header and set the rate and amount
+  columns with `set_pricing_columns`; the header must contain those columns. Quantix writes each item's rate and
+  amount into a copy of the client's workbook, on the row its BOQ line was read from, keeping the client's own
+  formulas. The supplied file is never changed. Items from other BOQ sources go in a "Priced BOQ.xlsx" in Quantix's
+  layout.
+- **Markups in the rates (the engineer's option, on by default):** every rate is lifted by total ÷ net, so the BOQ
+  adds up to the tender total. The build reports any difference left by rounding each rate to the cent.
+- **Build package:** always the engineer's. It writes the priced BOQ, the approved drafts as Word files, the
+  attached files and a checklist workbook to `~/.quantix/exports/<tender> <date time>`. It lists anything not
+  ready, and "Open folder" opens it. Nothing is sent to the client.
+- **Screens:** Submission, following the approved mockup: the checklist by section with a filter, a requirement
+  panel with its source, the draft, approve or send back, add a file or mark ready, and the build bar. Also a
+  Submission line on the Overview.
+- **Checks:** 62 service tests and 38 UI tests. The spread is checked by hand: net 120,952.80 plus 10%
+  preliminaries = 133,048.08, factor 1.1, rates 20.35 and 3,836.80, and the BOQ adds up to 133,048.08. A browser
+  run on a scratch folder approved a draft, marked the priced BOQ ready and built the package. The files on disk
+  were checked: rates in E, amounts in F, the client's formula kept, a 3-row checklist and the Word draft.
+
+Next: past tender history and company rules.

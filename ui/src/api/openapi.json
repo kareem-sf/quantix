@@ -2717,6 +2717,406 @@
           }
         }
       }
+    },
+    "/tenders/{tender_id}/submission": {
+      "get": {
+        "tags": [
+          "submission"
+        ],
+        "summary": "Get Submission",
+        "operationId": "get_submission_tenders__tender_id__submission_get",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubmissionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenders/{tender_id}/requirements": {
+      "post": {
+        "tags": [
+          "submission"
+        ],
+        "summary": "Add Requirement",
+        "operationId": "add_requirement_tenders__tender_id__requirements_post",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequirementIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/drafts/{draft_id}/decision": {
+      "post": {
+        "tags": [
+          "submission"
+        ],
+        "summary": "Decide Draft",
+        "operationId": "decide_draft_drafts__draft_id__decision_post",
+        "parameters": [
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Draft Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/requirements/{requirement_id}/ready": {
+      "post": {
+        "tags": [
+          "submission"
+        ],
+        "summary": "Mark Ready",
+        "operationId": "mark_ready_requirements__requirement_id__ready_post",
+        "parameters": [
+          {
+            "name": "requirement_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Requirement Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadyIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/requirements/{requirement_id}/file": {
+      "post": {
+        "tags": [
+          "submission"
+        ],
+        "summary": "Attach File",
+        "operationId": "attach_file_requirements__requirement_id__file_post",
+        "parameters": [
+          {
+            "name": "requirement_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Requirement Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_attach_file_requirements__requirement_id__file_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenders/{tender_id}/export": {
+      "post": {
+        "tags": [
+          "submission"
+        ],
+        "summary": "Build Package",
+        "description": "The engineer's release: the package is built in the Quantix exports folder on this computer.",
+        "operationId": "build_package_tenders__tender_id__export_post",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/exports/{folder}/open": {
+      "post": {
+        "tags": [
+          "submission"
+        ],
+        "summary": "Open Folder",
+        "operationId": "open_folder_exports__folder__open_post",
+        "parameters": [
+          {
+            "name": "folder",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Folder"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2784,6 +3184,20 @@
         ],
         "title": "Body_add_documents_tenders__tender_id__documents_post"
       },
+      "Body_attach_file_requirements__requirement_id__file_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_attach_file_requirements__requirement_id__file_post"
+      },
       "Boq": {
         "properties": {
           "items": {
@@ -2834,6 +3248,44 @@
           "quote_id"
         ],
         "title": "Choice"
+      },
+      "ColumnsOut": {
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "document_name": {
+            "type": "string",
+            "title": "Document Name"
+          },
+          "sheet": {
+            "type": "integer",
+            "title": "Sheet"
+          },
+          "rate_column": {
+            "type": "string",
+            "title": "Rate Column"
+          },
+          "amount_column": {
+            "type": "string",
+            "title": "Amount Column"
+          },
+          "proposed_by": {
+            "type": "string",
+            "title": "Proposed By"
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_id",
+          "document_name",
+          "sheet",
+          "rate_column",
+          "amount_column",
+          "proposed_by"
+        ],
+        "title": "ColumnsOut"
       },
       "CompanyIn": {
         "properties": {
@@ -3306,6 +3758,39 @@
         ],
         "title": "DocumentOut"
       },
+      "DraftOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "proposed_by": {
+            "type": "string",
+            "title": "Proposed By"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "body",
+          "status",
+          "proposed_by"
+        ],
+        "title": "DraftOut"
+      },
       "EnquiryOut": {
         "properties": {
           "id": {
@@ -3416,6 +3901,64 @@
         ],
         "title": "ExclusionOut"
       },
+      "ExportIn": {
+        "properties": {
+          "spread_markups": {
+            "type": "boolean",
+            "title": "Spread Markups",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "ExportIn"
+      },
+      "ExportOut": {
+        "properties": {
+          "folder": {
+            "type": "string",
+            "title": "Folder"
+          },
+          "files": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Files"
+          },
+          "priced_total": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Priced Total"
+          },
+          "summary_total": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Summary Total"
+          },
+          "factor": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Factor"
+          },
+          "not_ready": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Not Ready"
+          }
+        },
+        "type": "object",
+        "required": [
+          "folder",
+          "files",
+          "priced_total",
+          "summary_total",
+          "factor",
+          "not_ready"
+        ],
+        "title": "ExportOut"
+      },
       "FactOut": {
         "properties": {
           "id": {
@@ -3479,6 +4022,10 @@
           "subcontract": {
             "type": "integer",
             "title": "Subcontract"
+          },
+          "submission": {
+            "type": "integer",
+            "title": "Submission"
           }
         },
         "type": "object",
@@ -3487,7 +4034,8 @@
           "facts",
           "takeoff",
           "pricing",
-          "subcontract"
+          "subcontract",
+          "submission"
         ],
         "title": "Gates"
       },
@@ -4679,6 +5227,160 @@
         ],
         "title": "RateOut"
       },
+      "ReadyIn": {
+        "properties": {
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "ready"
+        ],
+        "title": "ReadyIn"
+      },
+      "RequirementIn": {
+        "properties": {
+          "section": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Section"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Title"
+          }
+        },
+        "type": "object",
+        "required": [
+          "section",
+          "title"
+        ],
+        "title": "RequirementIn"
+      },
+      "RequirementOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "section": {
+            "type": "string",
+            "title": "Section"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "document_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Name"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote"
+          },
+          "added_by": {
+            "type": "string",
+            "title": "Added By"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DraftOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ready_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ready Note"
+          },
+          "file_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "section",
+          "title",
+          "document_id",
+          "document_name",
+          "page",
+          "quote",
+          "added_by",
+          "state",
+          "draft",
+          "ready_note",
+          "file_name"
+        ],
+        "title": "RequirementOut"
+      },
       "Saved": {
         "properties": {
           "approved": {
@@ -4989,6 +5691,30 @@
           "now"
         ],
         "title": "StaffOut"
+      },
+      "SubmissionOut": {
+        "properties": {
+          "requirements": {
+            "items": {
+              "$ref": "#/components/schemas/RequirementOut"
+            },
+            "type": "array",
+            "title": "Requirements"
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/ColumnsOut"
+            },
+            "type": "array",
+            "title": "Columns"
+          }
+        },
+        "type": "object",
+        "required": [
+          "requirements",
+          "columns"
+        ],
+        "title": "SubmissionOut"
       },
       "SummaryOut": {
         "properties": {
