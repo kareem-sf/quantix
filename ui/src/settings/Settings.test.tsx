@@ -41,6 +41,31 @@ describe("Settings", () => {
     expect(await screen.findByText("The key was refused. Check it and try again.")).toBeInTheDocument();
   });
 
+  it("shows the key being typed when asked", async () => {
+    fakeService();
+    openApp("/settings");
+
+    const key = await screen.findByLabelText("API key");
+    expect(key).toHaveAttribute("type", "password");
+    await userEvent.click(screen.getByRole("button", { name: "Show the key" }));
+    expect(key).toHaveAttribute("type", "text");
+    await userEvent.click(screen.getByRole("button", { name: "Hide the key" }));
+    expect(key).toHaveAttribute("type", "password");
+  });
+
+  it("says so plainly when the Quantix service isn't running", async () => {
+    const service = fakeService();
+    openApp("/settings");
+    await screen.findByLabelText("API key");
+
+    service.fetch.mockRejectedValue(new TypeError("Failed to fetch"));
+    await userEvent.type(screen.getByLabelText("API key"), "sk-test");
+    await userEvent.click(screen.getByRole("button", { name: "Add connection" }));
+    expect(
+      await screen.findByText("The Quantix service isn’t answering. Make sure Quantix is running, then try again."),
+    ).toBeInTheDocument();
+  });
+
   it("switches the office to fully autonomous", async () => {
     const service = fakeService();
     openApp("/settings");

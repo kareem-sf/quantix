@@ -6,7 +6,11 @@ export type Tender = components["schemas"]["TenderOut"];
 // The development server forwards /api to the local service and adds the access token.
 export const api = createClient<paths>({
   baseUrl: `${window.location.origin}/api`,
-  fetch: (request) => globalThis.fetch(request),
+  fetch: (request) =>
+    globalThis.fetch(request).catch(() => {
+      // The browser only says "Failed to fetch" when the local service isn't there at all.
+      throw new Error("The Quantix service isn’t answering. Make sure Quantix is running, then try again.");
+    }),
 });
 
 /** The response data, or an error carrying the service's own message. */

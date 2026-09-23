@@ -146,6 +146,7 @@ function AddConnection() {
   const add = useAddConnection();
   const [provider, setProvider] = useState<Provider>("anthropic");
   const [key, setKey] = useState("");
+  const [showKey, setShowKey] = useState(false);
   const [address, setAddress] = useState("");
 
   function submit(event: FormEvent) {
@@ -176,15 +177,31 @@ function AddConnection() {
             </option>
           ))}
         </select>
-        <input
-          aria-label="API key"
-          type="password"
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-          placeholder="API key"
-          autoComplete="off"
-          className={`${input} grow`}
-        />
+        <div className="relative flex grow">
+          <input
+            aria-label="API key"
+            type={showKey ? "text" : "password"}
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            placeholder="API key"
+            autoComplete="off"
+            spellCheck={false}
+            className={`${input} grow pr-9`}
+          />
+          <button
+            type="button"
+            aria-label={showKey ? "Hide the key" : "Show the key"}
+            aria-pressed={showKey}
+            onClick={() => setShowKey(!showKey)}
+            className="absolute inset-y-0 right-0 flex w-9 items-center justify-center text-ink-3 hover:text-ink"
+          >
+            <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+              <circle cx="12" cy="12" r="3" />
+              {showKey && <path d="M3 3l18 18" />}
+            </svg>
+          </button>
+        </div>
       </div>
       {provider === "openai_compatible" && (
         <input
