@@ -1,8 +1,11 @@
 """One agent turn: who the person is, what is new for them, and their tools."""
 
+import logging
+import time
+
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, UsageLimitExceeded, UsageLimits
-from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import ModelMessage, RetryPromptPart, ToolCallPart
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 from sqlalchemy.orm import Session
@@ -12,6 +15,8 @@ from quantix.documents import library
 from quantix.office import records, tools
 from quantix.office.models import ENGINEER, TEAM, Message, Staff
 from quantix.office.tools import Turn
+
+log = logging.getLogger("quantix.office")
 
 STEP_LIMIT = 12  # model requests in one turn; the person picks up again on their next turn
 REQUEST_TIMEOUT = 120.0  # seconds for one model request; a stalled service must not freeze the office
@@ -123,9 +128,18 @@ async def run_turn(
     limits = UsageLimits(request_limit=STEP_LIMIT)
     async with agent.iter(prompt, deps=turn, usage_limits=limits, message_history=history) as run:
         try:
-            async for _node in run:
+            asked = time.monotonic()
+            async for node in run:
                 if turn.stop.is_set():
                     raise tools.Stopped()
+                if Agent.is_model_request_node(node):
+                    asked = time.monotonic()
+                    for part in node.request.parts:
+                        if isinstance(part, RetryPromptPart):
+                            log.info("%s: a tool call was sent back: %s", member.name, str(part.content)[:300])
+                elif Agent.is_call_tools_node(node):
+                    calls = [p.tool_name for p in node.model_response.parts if isinstance(p, ToolCallPart)]
+                    log.info("%s: answered in %.1f s, calling %s", member.name, time.monotonic() - asked, calls)
         except UsageLimitExceeded:
             return run.all_messages()
     return None

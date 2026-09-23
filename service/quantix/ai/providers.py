@@ -74,6 +74,8 @@ MODEL_MISSING = "This model isn't available on this account."
 def explain(error: BaseException) -> str:
     """A plain sentence for the engineer. Never includes the key or the raw response."""
     status = _status(error)
+    if status is None and error.__cause__ is not None:  # Pydantic AI wraps the provider's own error
+        return explain(error.__cause__)
     text = str(error).lower()
     if status in (401, 403, "UNAUTHENTICATED", "PERMISSION_DENIED") or "api key" in text or "api_key" in text:
         return "The key was refused. Check it and try again."

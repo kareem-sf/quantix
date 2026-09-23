@@ -2,6 +2,7 @@ import json
 import re
 
 import pytest
+from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, UserPromptPart
 from pydantic_ai.models.function import FunctionModel
 
@@ -142,3 +143,13 @@ def test_removing_a_connection_clears_the_office_ai(client, models, monkeypatch)
 )
 def test_failures_are_explained_plainly(error, message):
     assert providers.explain(error).startswith(message)
+
+
+def test_a_wrapped_provider_error_is_explained_from_its_cause():
+    try:
+        try:
+            raise type("APITimeoutError", (Exception,), {})()
+        except Exception as timeout:
+            raise ModelAPIError("zai-glm", "Request timed out.") from timeout
+    except ModelAPIError as wrapped:
+        assert providers.explain(wrapped).startswith("The AI service took too long to answer.")
