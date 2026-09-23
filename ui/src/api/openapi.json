@@ -238,6 +238,50 @@
             }
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "tenders"
+        ],
+        "summary": "Delete Tender",
+        "description": "The tender and everything Quantix keeps for it. Built packages in exports and the engineer's own files stay.",
+        "operationId": "delete_tender_tenders__tender_id__delete",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/ai/connections": {
@@ -4802,6 +4846,11 @@
           "checked_at": {
             "type": "string",
             "title": "Checked At"
+          },
+          "sees_images": {
+            "type": "boolean",
+            "title": "Sees Images",
+            "default": false
           }
         },
         "type": "object",

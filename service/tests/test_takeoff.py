@@ -221,6 +221,7 @@ def test_staff_measure_through_their_tools(client, sheet, tmp_path):
         )
 
     client.app.state.office.model = lambda: scripted(brain)
+    client.app.state.office.sees_images = lambda: True
     with client.app.state.sessions() as session:
         office.post(session, tender_id, "engineer", qs_id, "Omar, measure the external wall on A-101.")
         session.commit()

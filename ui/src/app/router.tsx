@@ -13,6 +13,7 @@ import { Submission } from "../submission/Submission";
 import { NewTender } from "../tenders/NewTender";
 import { Overview } from "../tenders/Overview";
 import { useTenders } from "../tenders/queries";
+import { Opening } from "./Opening";
 import { Rail } from "./Rail";
 
 function Shell() {
@@ -41,7 +42,7 @@ function ScreenError() {
 
 function Home() {
   const tenders = useTenders();
-  if (!tenders.data) return null;
+  if (!tenders.data) return <Opening error={tenders.isError} />;
   if (tenders.data.length > 0) return <Navigate to={`/tenders/${tenders.data[0].id}`} replace />;
   return <Navigate to="/new" replace />;
 }

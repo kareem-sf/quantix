@@ -35,11 +35,19 @@ def office_model(home: Path) -> Model | None:
     return providers.build_model(connection["provider"], chosen["model"], connection["api_key"], connection["base_url"])
 
 
+def office_sees_images(home: Path) -> bool:
+    """Whether the office's AI read the number in the check's image; unknown counts as no."""
+    chosen = settings.load(home)["office_ai"]
+    connection = chosen and connections.get(home, chosen["connection_id"])
+    return bool(connection and connection["checks"].get(chosen["model"], {}).get("sees_images"))
+
+
 class Office:
     def __init__(self, home: Path, sessions: sessionmaker[Session], model: Callable[[], Model | None] | None = None):
         self.home = home
         self.sessions = sessions
         self.model = model or (lambda: office_model(home))
+        self.sees_images = lambda: office_sees_images(home)
         self._wake = threading.Event()
         self._closing = threading.Event()
         self._thread = threading.Thread(target=self._run, name="quantix-office", daemon=True)
@@ -139,7 +147,7 @@ class Office:
         except Stopped:
             return False
         except Exception as error:
-            log.warning("Office work on %s failed: %s", tender_id, type(error).__name__)
+            log.warning("Office work on %s failed: %s: %s", tender_id, type(error).__name__, str(error)[:500])
             self._pause(tender_id, f"The office stopped: {providers.explain(error)} Send a message to try again.")
             return False
 
@@ -158,7 +166,9 @@ class Office:
             session.commit()
             session.expunge(member)
         autonomous = settings.load(self.home)["office_mode"] == "autonomous"
-        turn = Turn(self.home, self.sessions, tender_id, staff_id, autonomous, self._stop_event(tender_id))
+        turn = Turn(
+            self.home, self.sessions, tender_id, staff_id, autonomous, self._stop_event(tender_id), self.sees_images()
+        )
         self._turns[tender_id] = self._turns.get(tender_id, 0) + 1
         try:
             try:

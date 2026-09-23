@@ -302,3 +302,23 @@ def test_a_placeholder_profile_is_sent_back():
             voice="Blunt and dry.",
         )
     assert sorted(e["loc"][0] for e in caught.value.errors()) == ["background", "experience_years", "opinions"]
+
+
+def test_an_ai_that_cannot_read_images_is_not_shown_drawings(client, office):
+    tender_id, use = office
+    document_id = client.get(f"/tenders/{tender_id}/documents").json()[0]["id"]
+    seen: list[str] = []
+
+    def looks(messages, info):
+        if info.output_tools:
+            return office_brain(messages, info)
+        if not returns(messages):
+            return call("view_page", document_id=document_id, page=1)
+        seen[:] = returns(messages)
+        return DONE
+
+    use(looks)
+    client.app.state.office.sees_images = lambda: False
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Look at the conditions."})
+    wait_for(lambda o: o["staff"] and seen, client, tender_id)
+    assert seen[0].startswith("The office's AI can't read images, so it can't look at drawings or scans.")

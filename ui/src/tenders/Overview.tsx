@@ -1,13 +1,16 @@
 import { IconArrowUp, IconChevronRight } from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
 import { AddDocuments } from "../documents/AddDocuments";
 import { useDocuments } from "../documents/queries";
-import { useGates } from "../estimate/queries";
+import { money, useEstimate, useGates } from "../estimate/queries";
 import { Face } from "../office/Face";
 import { TEAM, firstName, useDecisions, useMessages, useOffice, useSend } from "../office/queries";
+import { Opening } from "../app/Opening";
 import { dueSentence } from "./due";
-import { useSetOutcome, useTender } from "./queries";
+import { usePackages } from "../subcontract/queries";
+import { useSubmission } from "../submission/queries";
+import { useDeleteTender, useSetOutcome, useTender } from "./queries";
 
 export function Overview() {
   const { tenderId = "" } = useParams();
@@ -18,7 +21,7 @@ export function Overview() {
   const gates = useGates(tenderId);
 
   if (tender.isError) return <p className="pt-14 text-ink-2">{tender.error.message}</p>;
-  if (!tender.data || !documents.data || !office.data) return null;
+  if (!tender.data || !documents.data || !office.data) return <Opening error={documents.isError || office.isError} />;
 
   const questions = (decisions.data ?? []).filter((d) => d.status === "waiting");
   const approvals = [
@@ -139,28 +142,116 @@ export function Overview() {
       ) : (
         <div className="mt-9 flex flex-col">
           <h2 className="pb-2 font-semibold text-ink-2">Where things stand</h2>
-          <Link
+          <Standing
             to={`/tenders/${tenderId}/documents`}
-            className="grid grid-cols-[140px_minmax(0,1fr)_160px] items-center gap-4 px-1 py-2"
-          >
-            <span className="font-medium">Documents</span>
-            <span className="text-ink-2">
-              {read} of {current.length} read
-              {reading > 0 && ` · reading ${reading}`}
-              {problems > 0 && ` · ${problems} can’t be read`}
-            </span>
-            <span className="relative h-1 overflow-hidden rounded-sm bg-selected">
-              <span
-                className="absolute inset-y-0 left-0 rounded-sm bg-ink"
-                style={{ width: `${Math.round(((read + problems) / current.length) * 100)}%` }}
-              />
-            </span>
-          </Link>
+            label="Documents"
+            text={`${read} of ${current.length} read${reading > 0 ? ` · reading ${reading}` : ""}${problems > 0 ? ` · ${problems} can’t be read` : ""}`}
+            done={(read + problems) / current.length}
+          />
+          <Progress tenderId={tenderId} />
         </div>
       )}
+      <DeleteTender tenderId={tenderId} name={tender.data.name} />
 
       <div className="grow" />
       <AskOffice tenderId={tenderId} to={manager?.id ?? TEAM} name={manager ? firstName(manager) : undefined} />
+    </div>
+  );
+}
+
+function Standing(props: { to: string; label: string; text: string; done: number }) {
+  return (
+    <Link to={props.to} className="grid grid-cols-[140px_minmax(0,1fr)_160px] items-center gap-4 px-1 py-2 hover:bg-rail">
+      <span className="font-medium">{props.label}</span>
+      <span className="min-w-0 text-ink-2">{props.text}</span>
+      <span className="relative h-1 overflow-hidden rounded-sm bg-selected">
+        <span
+          className="absolute inset-y-0 left-0 rounded-sm bg-ink"
+          style={{ width: `${Math.round(Math.min(1, props.done) * 100)}%` }}
+        />
+      </span>
+    </Link>
+  );
+}
+
+/** The BOQ, the price, the packages and the submission, once each has something in it. */
+function Progress({ tenderId }: { tenderId: string }) {
+  const estimate = useEstimate(tenderId);
+  const packages = usePackages(tenderId);
+  const submission = useSubmission(tenderId);
+  const items = estimate.data?.items ?? [];
+  const summary = estimate.data?.summary;
+  const decided = items.filter((i) => i.item_status !== "proposed").length;
+  const chosen = (packages.data ?? []).filter((p) => p.selected_quote_id).length;
+  const requirements = submission.data?.requirements ?? [];
+  const ready = requirements.filter((r) => r.state === "ready").length;
+  return (
+    <>
+      {items.length > 0 && (
+        <Standing
+          to={`/tenders/${tenderId}/estimate`}
+          label="BOQ"
+          text={`${items.length} items · ${decided} approved`}
+          done={decided / items.length}
+        />
+      )}
+      {summary && items.length > 0 && (
+        <Standing
+          to={`/tenders/${tenderId}/estimate`}
+          label="Estimate"
+          text={`${summary.priced} of ${summary.items} priced${summary.priced ? ` · ${summary.currency} ${money(summary.total)}` : ""}`}
+          done={summary.priced / summary.items}
+        />
+      )}
+      {(packages.data?.length ?? 0) > 0 && (
+        <Standing
+          to={`/tenders/${tenderId}/subcontract`}
+          label="Subcontract"
+          text={`${chosen} of ${packages.data!.length} packages chosen`}
+          done={chosen / packages.data!.length}
+        />
+      )}
+      {requirements.length > 0 && (
+        <Standing
+          to={`/tenders/${tenderId}/submission`}
+          label="Submission"
+          text={`${ready} of ${requirements.length} ready`}
+          done={ready / requirements.length}
+        />
+      )}
+    </>
+  );
+}
+
+function DeleteTender({ tenderId, name }: { tenderId: string; name: string }) {
+  const remove = useDeleteTender(tenderId);
+  const navigate = useNavigate();
+  const [asking, setAsking] = useState(false);
+  if (!asking)
+    return (
+      <button onClick={() => setAsking(true)} className="mt-9 self-start text-ink-3 hover:text-attention">
+        Delete this tender
+      </button>
+    );
+  return (
+    <div className="mt-9 flex flex-col gap-2.5 rounded-[10px] border border-line p-3.5">
+      <span>
+        Delete <span className="font-medium">{name}</span> and everything Quantix keeps for it: documents, BOQ,
+        rates, the team and its conversations. Your original files and built packages stay.
+      </span>
+      <span className="flex gap-2">
+        <button
+          onClick={() => remove.mutate(undefined, { onSuccess: () => navigate("/") })}
+          disabled={remove.isPending}
+          className="h-[34px] rounded-lg bg-attention px-3.5 text-[13px] text-white"
+        >
+          Delete tender
+        </button>
+        <button onClick={() => setAsking(false)} className="h-[34px] rounded-lg border border-line-strong px-3.5 text-[13px]">
+          Keep it
+        </button>
+      </span>
+      {remove.isError && <span className="text-attention">{remove.error.message}</span>}
     </div>
   );
 }
@@ -169,7 +260,9 @@ export function Overview() {
 function Outcome({ tenderId, outcome }: { tenderId: string; outcome: "open" | "submitted" | "won" | "lost" }) {
   const set = useSetOutcome(tenderId);
   return (
-    <select
+    <label className="flex items-center gap-1 text-ink-3">
+      · Outcome
+      <select
       aria-label="Outcome"
       value={outcome}
       onChange={(e) => set.mutate(e.target.value as typeof outcome)}
@@ -179,7 +272,8 @@ function Outcome({ tenderId, outcome }: { tenderId: string; outcome: "open" | "s
       <option value="submitted">Submitted</option>
       <option value="won">Won</option>
       <option value="lost">Lost</option>
-    </select>
+      </select>
+    </label>
   );
 }
 
@@ -196,7 +290,7 @@ function ManagerNote({ tenderId, managerId }: { tenderId: string; managerId: str
         <span className="font-medium">
           {manager.name} <span className="font-normal text-ink-3">Tender Manager</span>
         </span>
-        <span className="text-[15px] leading-relaxed text-[#27272A]" dir="auto">
+        <span className="line-clamp-4 text-[15px] leading-relaxed text-[#27272A]" dir="auto">
           {latest?.text ?? manager.now ?? "Getting to know the tender."}
         </span>
         <Link to={`/tenders/${tenderId}/office?with=${manager.id}`} className="text-ink-3 hover:text-ink">

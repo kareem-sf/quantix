@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { fakeService, openApp } from "../test/app";
-import { folderGroup } from "./Documents";
+import { folderGroup, subfolder } from "./Documents";
 import type { TenderDocument } from "./queries";
 
 const tender = { id: "t1", name: "Synthetic school", due_date: null, created_at: "2026-09-23T10:00:00Z" };
@@ -30,6 +30,13 @@ describe("folder groups", () => {
     expect(folderGroup("Pkg/Drawings/A-101.pdf", all)).toBe("Drawings");
     const loose = [doc("c", "Conditions/ITT.docx"), doc("d", "BOQ.xlsx")];
     expect(folderGroup("Conditions/ITT.docx", loose)).toBe("Conditions");
+  });
+
+  it("shows the folders below the group, such as a revision", () => {
+    const all = [doc("a", "Pkg/BOQ/Rev0 (Old)/Part 1/Earth.xlsx"), doc("b", "Pkg/BOQ/Rev01 (Update)/Earth R-8486.xlsx")];
+    expect(subfolder("Pkg/BOQ/Rev0 (Old)/Part 1/Earth.xlsx", all)).toBe("Rev0 (Old) / Part 1");
+    expect(subfolder("Pkg/BOQ/Rev01 (Update)/Earth R-8486.xlsx", all)).toBe("Rev01 (Update)");
+    expect(subfolder("Pkg/ITT.docx", [...all, doc("c", "Pkg/ITT.docx")])).toBe("");
   });
 });
 

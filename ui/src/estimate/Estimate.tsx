@@ -152,7 +152,7 @@ export function Estimate() {
                     className={`${COLUMNS} w-full items-center border-b border-subtle px-2 py-3 text-left ${item.id === selected?.id ? "rounded-md bg-subtle" : "hover:bg-rail"}`}
                   >
                     <span className="text-ink-3">{item.item}</span>
-                    <span className="min-w-0 truncate" dir="auto">
+                    <span className="line-clamp-2 min-w-0" dir="auto" title={item.description}>
                       {item.description}
                     </span>
                     <span className="text-right">{quantity(item.quantity)}</span>

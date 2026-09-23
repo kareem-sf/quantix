@@ -50,7 +50,11 @@ export interface paths {
         get: operations["get_tender_tenders__tender_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete Tender
+         * @description The tender and everything Quantix keeps for it. Built packages in exports and the engineer's own files stay.
+         */
+        delete: operations["delete_tender_tenders__tender_id__delete"];
         options?: never;
         head?: never;
         /** Change Tender */
@@ -1408,6 +1412,11 @@ export interface components {
             message: string;
             /** Checked At */
             checked_at: string;
+            /**
+             * Sees Images
+             * @default false
+             */
+            sees_images: boolean;
         };
         /** OfficeAI */
         OfficeAI: {
@@ -1979,6 +1988,37 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TenderOut"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_tender_tenders__tender_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

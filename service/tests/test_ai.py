@@ -2,11 +2,12 @@ import json
 import re
 
 import pytest
+from pydantic_ai import BinaryContent
 from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, UserPromptPart
 from pydantic_ai.models.function import FunctionModel
 
-from quantix.ai import providers
+from quantix.ai import check, providers
 
 
 class Refused(Exception):
@@ -97,7 +98,33 @@ def test_model_check_needs_real_tool_use(client, models, monkeypatch):
     use_model(monkeypatch, lambda messages, info: requests.append(1) or follows_instructions(messages, info))
     checked = client.post(f"/ai/connections/{connection['id']}/checks", json={"model": "model-a"}).json()
     assert checked["checks"]["model-a"]["ok"] is True
-    assert len(requests) == 1  # the tool call is the proof; waiting for a closing reply only costs time
+    assert len(requests) == 2  # the tool call is the proof, then one request with an image; no closing replies
+
+
+def sees(messages, info):
+    """Follows instructions, and reads the check's number from the image (the test fixes it at 123)."""
+    if any(isinstance(c, BinaryContent) for m in messages for p in m.parts for c in getattr(p, "content", []) or []):
+        return ModelResponse(parts=[TextPart("123")])
+    return follows_instructions(messages, info)
+
+
+def test_the_check_finds_out_whether_a_model_reads_images(client, models, monkeypatch):
+    connection = add(client).json()
+    monkeypatch.setattr(check.secrets, "randbelow", lambda n: 23)
+
+    use_model(monkeypatch, follows_instructions)  # answers "Done." to the image: can't see it
+    blind = client.post(f"/ai/connections/{connection['id']}/checks", json={"model": "model-a"}).json()
+    assert blind["checks"]["model-a"]["sees_images"] is False
+    assert blind["checks"]["model-a"]["message"].endswith("won't look at drawings or scans with it.")
+
+    use_model(monkeypatch, sees)
+    seeing = client.post(f"/ai/connections/{connection['id']}/checks", json={"model": "model-a"}).json()
+    assert seeing["checks"]["model-a"] | {"checked_at": ""} == {
+        "ok": True,
+        "message": "Works, including the tools the office needs.",
+        "sees_images": True,
+        "checked_at": "",
+    }
 
 
 def test_the_office_only_uses_a_checked_model(client, models, monkeypatch, tmp_path):

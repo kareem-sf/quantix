@@ -1,3 +1,4 @@
+import shutil
 from collections.abc import Iterator
 from datetime import date, datetime
 from typing import Annotated, Literal
@@ -64,3 +65,15 @@ def change_tender(tender_id: str, body: TenderChange, session: DB) -> TenderOut:
     tender.outcome = body.outcome
     session.commit()
     return TenderOut.model_validate(tender)
+
+
+@router.delete("/{tender_id}", status_code=204)
+def delete_tender(tender_id: str, session: DB, request: Request) -> None:
+    """The tender and everything Quantix keeps for it. Built packages in exports and the engineer's own files stay."""
+    tender = service.get_tender(session, tender_id)
+    if tender is None:
+        raise HTTPException(status_code=404, detail="Tender not found.")
+    request.app.state.office.stop(tender_id)
+    session.delete(tender)  # the database removes its documents, BOQ, rates, packages and the rest with it
+    session.commit()
+    shutil.rmtree(request.app.state.home / "tenders" / tender_id, ignore_errors=True)

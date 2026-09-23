@@ -72,6 +72,14 @@ class Turn:
     staff_id: str
     autonomous: bool
     stop: threading.Event
+    sees_images: bool = True  # False when the office's AI failed the image check
+
+
+BLIND = (
+    "The office's AI can't read images, so it can't look at drawings or scans. Work from the text with read_page "
+    "and find_on_page, and tell the engineer what you couldn't check: they can measure on the Takeoff screen or "
+    "choose an AI that reads images in Settings."
+)
 
 
 @contextmanager
@@ -131,8 +139,10 @@ def read_page(ctx: RunContext[Turn], document_id: str, page: int) -> str:
         return f"{document.name}, page {page}:\n{found.text}"
 
 
-def view_page(ctx: RunContext[Turn], document_id: str, page: int) -> ToolReturn:
+def view_page(ctx: RunContext[Turn], document_id: str, page: int) -> ToolReturn | str:
     """Look at a page as an image: drawings, scans, tables and stamps. Cite it as "<document name>, page <n>"."""
+    if not ctx.deps.sees_images:
+        return BLIND
     with _working(ctx) as (session, me):
         document = _document(session, ctx.deps.tender_id, document_id)
         if document.kind != "pdf" or not 1 <= page <= (document.page_count or 0):
@@ -326,6 +336,8 @@ def set_scale(
 ) -> str:
     """Set a drawing's scale from a dimension printed on it: the two ends of the dimension line in view_page pixels,
     its real length in metres, and the dimension text as printed (e.g. "40.00"). Use find_on_page to locate it."""
+    if not ctx.deps.sees_images:
+        return BLIND
     with _working(ctx, "Setting the scale of a drawing") as (session, me):
         factor = _points(session, ctx.deps.tender_id, document_id, page)
         line = _snapped(ctx, session, document_id, page, [from_xy, to_xy], factor)
@@ -351,6 +363,8 @@ def measure(
     point per thing counted). Points are in view_page pixels. unit: length m, or m2 with a height as multiplier_m;
     area m2, or m3 with a thickness; count nr. Link the BOQ item number it belongs to when there is one.
     Quantix computes the quantity from your points."""
+    if not ctx.deps.sees_images:
+        return BLIND
     with _working(ctx, f"Measuring {label}") as (session, me):
         factor = _points(session, ctx.deps.tender_id, document_id, page)
         status = "office_approved" if ctx.deps.autonomous else "proposed"

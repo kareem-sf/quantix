@@ -44,8 +44,9 @@ def remove(home: Path, connection_id: str) -> None:
     jsonfile.update(_path(home), _empty(), change)
 
 
-def record_check(home: Path, connection_id: str, model: str, ok: bool, message: str) -> None:
-    result = {"ok": ok, "message": message, "checked_at": datetime.now(UTC).isoformat()}
+def record_check(home: Path, connection_id: str, model: str, ok: bool, message: str, sees_images: bool) -> None:
+    now = datetime.now(UTC).isoformat()
+    result = {"ok": ok, "message": message, "sees_images": sees_images, "checked_at": now}
 
     def change(data: dict[str, Any]) -> None:
         for connection in data["connections"]:

@@ -46,3 +46,23 @@ def test_data_survives_a_restart(tmp_path):
     with TestClient(create_app(tmp_path, TOKEN), headers=headers) as c:
         assert [t["name"] for t in c.get("/tenders").json()] == ["Kept"]
     assert (tmp_path / "quantix.sqlite").exists()
+
+
+def test_deleting_a_tender_removes_everything_quantix_keeps_for_it(client, tmp_path):
+    from test_documents import PDF, read_all, upload
+
+    tender_id = client.post("/tenders", json={"name": "Old test"}).json()["id"]
+    upload(client, tender_id, {"Conditions.pdf": PDF})
+    read_all(client, tender_id)
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": "team", "text": "Hello."})
+    assert (tmp_path / "tenders" / tender_id).exists()
+
+    assert client.delete(f"/tenders/{tender_id}").status_code == 204
+    assert client.get(f"/tenders/{tender_id}").status_code == 404
+    assert not (tmp_path / "tenders" / tender_id).exists()
+    with client.app.state.sessions() as session:
+        from sqlalchemy import text
+
+        for table in ("documents", "pages", "messages"):
+            assert session.execute(text(f"select count(*) from {table}")).scalar() == 0
+    assert client.delete(f"/tenders/{tender_id}").status_code == 404

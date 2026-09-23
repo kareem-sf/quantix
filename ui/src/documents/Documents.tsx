@@ -95,14 +95,20 @@ function Groups(props: { documents: TenderDocument[]; selected?: string; onOpen:
           className={`flex flex-col gap-0.5 rounded-md px-2 py-[7px] text-left ${d.id === props.selected ? "bg-selected" : "hover:bg-rail"}`}
         >
           <span className="flex w-full justify-between gap-2.5">
-            <span className="min-w-0 truncate font-medium" dir="auto">
+            <span className="line-clamp-2 min-w-0 font-medium [overflow-wrap:anywhere]" dir="auto" title={d.name}>
               {d.name}
             </span>
             <span className="shrink-0 text-ink-3">{d.page_count ? `${d.page_count} pp` : ""}</span>
           </span>
+          {subfolder(d.path, props.documents) && (
+            <span className="text-xs text-ink-3" dir="auto">
+              {subfolder(d.path, props.documents)}
+            </span>
+          )}
           {d.description && <span className="text-ink-3">{d.description}</span>}
           {PROBLEM.has(d.status) && <span className="text-attention">{d.note}</span>}
-          {(d.status === "waiting" || d.status === "reading") && <span className="text-ink-3">Reading…</span>}
+          {d.status === "waiting" && <span className="text-ink-3">Waiting to be read</span>}
+          {d.status === "reading" && <span className="text-ink-3">Reading…</span>}
         </button>
       ))}
     </div>
@@ -115,6 +121,13 @@ export function folderGroup(path: string, all: TenderDocument[]) {
   const shared = all.length > 1 && all.every((d) => d.path.startsWith(`${top}/`));
   const folders = path.split("/").slice(shared ? 1 : 0, -1);
   return folders[0] ?? "Documents";
+}
+
+/** The folders below the group, e.g. "Rev01 (Update)", so revisions of the same file can be told apart. */
+export function subfolder(path: string, all: TenderDocument[]) {
+  const top = path.split("/")[0];
+  const shared = all.length > 1 && all.every((d) => d.path.startsWith(`${top}/`));
+  return path.split("/").slice(shared ? 2 : 1, -1).join(" / ");
 }
 
 function SearchResults(props: { tenderId: string; query: string; onOpen: (id: string, page: number) => void }) {

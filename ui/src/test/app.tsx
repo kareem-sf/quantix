@@ -287,6 +287,10 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     }
     const tender = state.tenders.find((t) => path === `/tenders/${t.id}`);
     if (tender && method === "PATCH") Object.assign(tender, body);
+    if (tender && method === "DELETE") {
+      state.tenders = state.tenders.filter((t) => t !== tender);
+      return new Response(null, { status: 204 });
+    }
     if (path.startsWith("/tenders/")) return tender ? json({ outcome: "open", ...tender }) : json({ detail: "Tender not found." }, 404);
 
     if (path === "/ai/connections" && method === "GET") return json(state.connections);
@@ -305,7 +309,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     const connection = state.connections.find((c) => path.startsWith(`/ai/connections/${c.id}`));
     if (connection && path.endsWith("/models")) return json(state.models);
     if (connection && path.endsWith("/checks")) {
-      connection.checks[body.model] = { ok: true, message: "Works, including the tools the office needs.", checked_at: "" };
+      connection.checks[body.model] = { ok: true, message: "Works, including the tools the office needs.", checked_at: "", sees_images: true };
       return json(connection);
     }
     if (connection && method === "DELETE") {

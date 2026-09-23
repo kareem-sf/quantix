@@ -23,6 +23,7 @@ class ModelCheck(BaseModel):
     ok: bool
     message: str
     checked_at: str
+    sees_images: bool = False  # checks made before this was tested count as not seeing
 
 
 class ConnectionOut(BaseModel):
@@ -118,8 +119,8 @@ async def list_models(connection_id: str, home: Home) -> list[str]:
 async def check_model(connection_id: str, body: CheckRequest, home: Home) -> ConnectionOut:
     c = _connection(home, connection_id)
     model = providers.build_model(c["provider"], body.model, c["api_key"], c["base_url"])
-    ok, message = await check.check_model(model)
-    connections.record_check(home, connection_id, body.model, ok, message)
+    ok, message, sees_images = await check.check_model(model)
+    connections.record_check(home, connection_id, body.model, ok, message, sees_images)
     return _out(_connection(home, connection_id))
 
 
