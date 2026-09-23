@@ -1,3 +1,4 @@
+import { IconX } from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { money } from "../estimate/queries";
@@ -229,8 +230,8 @@ function RequirementPanel(props: { tenderId: string; requirement: Requirement; p
       aria-label={r.title}
       className="flex w-[400px] shrink-0 flex-col gap-[18px] overflow-y-auto border-l border-line bg-white px-6 pt-7 pb-5 max-xl:absolute max-xl:inset-y-0 max-xl:right-0 max-xl:z-10 max-xl:shadow-[-8px_0_24px_rgba(0,0,0,0.08)]"
     >
-      <button aria-label="Close" onClick={() => setParams({})} className="-mt-3 -mr-2 self-end text-lg leading-none text-ink-3 hover:text-ink">
-        ×
+      <button aria-label="Close" onClick={() => setParams({})} className="-mt-3 -mr-2 self-end text-ink-3 hover:text-ink">
+        <IconX className="size-[18px]" stroke={1.75} />
       </button>
       <div className="flex flex-col gap-1">
         <span className="text-ink-3">{r.section}</span>

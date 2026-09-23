@@ -1,3 +1,4 @@
+import { IconChevronLeft, IconChevronRight } from "@tabler/icons-react";
 import { useState, type MouseEvent } from "react";
 import { useParams, useSearchParams } from "react-router";
 import { pageImage, useDocuments } from "../documents/queries";
@@ -207,16 +208,17 @@ function PagePicker(props: { documentId: string; page: number; count: number; on
   if (props.count <= 1) return null;
   return (
     <span className="flex items-center gap-2 text-ink-2">
-      <button disabled={props.page <= 1} onClick={() => props.onOpen(props.documentId, props.page - 1)} aria-label="Previous page">
-        ‹
+      <button disabled={props.page <= 1} onClick={() => props.onOpen(props.documentId, props.page - 1)} aria-label="Previous page" className="disabled:text-ink-4">
+        <IconChevronLeft className="size-4" stroke={1.75} />
       </button>
       Page {props.page} of {props.count}
       <button
         disabled={props.page >= props.count}
         onClick={() => props.onOpen(props.documentId, props.page + 1)}
         aria-label="Next page"
+        className="disabled:text-ink-4"
       >
-        ›
+        <IconChevronRight className="size-4" stroke={1.75} />
       </button>
     </span>
   );

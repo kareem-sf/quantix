@@ -1,3 +1,4 @@
+import { IconX } from "@tabler/icons-react";
 import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { Face } from "../office/Face";
@@ -193,9 +194,9 @@ function Close() {
     <button
       aria-label="Close"
       onClick={() => setParams(show ? { show } : {})}
-      className="-mt-3 -mr-2 self-end text-lg leading-none text-ink-3 hover:text-ink"
+      className="-mt-3 -mr-2 self-end text-ink-3 hover:text-ink"
     >
-      ×
+      <IconX className="size-[18px]" stroke={1.75} />
     </button>
   );
 }

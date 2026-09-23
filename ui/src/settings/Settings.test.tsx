@@ -27,7 +27,7 @@ describe("Settings", () => {
     fakeService();
     openApp("/settings");
 
-    await userEvent.selectOptions(await screen.findByLabelText("Service"), "OpenAI-compatible service");
+    await userEvent.click(await screen.findByRole("radio", { name: "OpenAI-compatible service" }));
     expect(screen.getByLabelText("Service address")).toBeInTheDocument();
   });
 

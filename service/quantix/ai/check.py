@@ -8,6 +8,10 @@ from pydantic_ai.models import Model
 from quantix.ai.providers import explain
 
 
+class _Confirmed(Exception):
+    """Ends the check as soon as the tool is called: the model's closing reply proves nothing more."""
+
+
 async def check_model(model: Model) -> tuple[bool, str]:
     code = secrets.token_hex(3)
     received: list[str] = []
@@ -15,7 +19,7 @@ async def check_model(model: Model) -> tuple[bool, str]:
     def confirm(code: str) -> str:
         """Confirm the code you were given."""
         received.append(code)
-        return "Confirmed."
+        raise _Confirmed()
 
     agent = Agent(
         model,

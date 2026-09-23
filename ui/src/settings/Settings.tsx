@@ -1,4 +1,6 @@
+import { IconEye, IconEyeOff } from "@tabler/icons-react";
 import { useState, type FormEvent, type ReactNode } from "react";
+import { ProviderLogo } from "./ProviderLogo";
 import {
   PROVIDERS,
   useAddConnection,
@@ -99,9 +101,12 @@ function ConnectionRow({ connection }: { connection: Connection }) {
   return (
     <div className="flex flex-col gap-2.5 border-t border-subtle py-3">
       <div className="flex items-center justify-between">
-        <span className="flex flex-col gap-0.5">
-          <span className="font-medium">{connection.label}</span>
-          <span className="text-ink-3">Key {connection.key_hint}</span>
+        <span className="flex items-center gap-2.5">
+          <ProviderLogo provider={connection.provider} size={20} />
+          <span className="flex flex-col gap-0.5">
+            <span className="font-medium">{connection.label}</span>
+            <span className="text-ink-3">Key {connection.key_hint}</span>
+          </span>
         </span>
         <button onClick={() => remove.mutate(connection.id)} className="text-ink-3 hover:text-ink">
           Remove
@@ -130,6 +135,9 @@ function ConnectionRow({ connection }: { connection: Connection }) {
           {check.isPending ? "Checking…" : "Check"}
         </button>
       </div>
+      {check.isPending && (
+        <p className="text-ink-3">The model is asked to use a tool. Some services take up to a minute to answer.</p>
+      )}
       {models.isError && <p className="text-attention">{models.error.message}</p>}
       {check.isError && <p className="text-attention">{check.error.message}</p>}
       {result && !check.isPending && (
@@ -164,19 +172,22 @@ function AddConnection() {
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-2.5 border-t border-subtle pt-3">
+      <div role="radiogroup" aria-label="Service" className="flex flex-wrap gap-1.5">
+        {PROVIDERS.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            role="radio"
+            aria-checked={provider === p.id}
+            onClick={() => setProvider(p.id)}
+            className={`flex h-9 items-center gap-2 rounded-lg border px-3 text-[13px] ${provider === p.id ? "border-ink bg-rail font-medium" : "border-line-strong text-ink-2 hover:text-ink"}`}
+          >
+            <ProviderLogo provider={p.id} />
+            {p.label}
+          </button>
+        ))}
+      </div>
       <div className="flex gap-2">
-        <select
-          aria-label="Service"
-          value={provider}
-          onChange={(e) => setProvider(e.target.value as Provider)}
-          className={input}
-        >
-          {PROVIDERS.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.label}
-            </option>
-          ))}
-        </select>
         <div className="relative flex grow">
           <input
             aria-label="API key"
@@ -195,11 +206,7 @@ function AddConnection() {
             onClick={() => setShowKey(!showKey)}
             className="absolute inset-y-0 right-0 flex w-9 items-center justify-center text-ink-3 hover:text-ink"
           >
-            <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
-              <circle cx="12" cy="12" r="3" />
-              {showKey && <path d="M3 3l18 18" />}
-            </svg>
+            {showKey ? <IconEyeOff className="size-4" stroke={1.75} /> : <IconEye className="size-4" stroke={1.75} />}
           </button>
         </div>
       </div>

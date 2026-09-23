@@ -1,3 +1,4 @@
+import { IconArrowRight, IconArrowUp } from "@tabler/icons-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { Face } from "./Face";
@@ -131,7 +132,7 @@ export function Conversation(props: {
             disabled={!draft.trim() || send.isPending}
             className="flex size-8 items-center justify-center rounded-lg bg-ink text-white disabled:bg-line-strong"
           >
-            ↑
+            <IconArrowUp className="size-4" stroke={1.75} />
           </button>
         </div>
         {send.isError && <p className="pt-2 text-attention">{send.error.message}</p>}
@@ -145,7 +146,7 @@ function Line({ message, author, onPerson }: { message: Message; author?: Staff;
   if (message.kind === "task" || message.kind === "note") {
     return (
       <div className="flex items-center gap-2 pl-10 text-ink-3">
-        <span>→</span>
+        <IconArrowRight className="size-3.5 shrink-0" stroke={1.75} />
         <span className="grow">{message.text}</span>
         <span className="text-xs">{time}</span>
       </div>

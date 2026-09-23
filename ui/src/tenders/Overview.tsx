@@ -1,3 +1,4 @@
+import { IconArrowUp, IconChevronRight } from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
 import { AddDocuments } from "../documents/AddDocuments";
@@ -104,7 +105,7 @@ export function Overview() {
                   <span className="text-sm font-medium">{a.title}</span>
                   <span className="truncate text-ink-3">{a.text}</span>
                 </span>
-                <span className="text-ink-4">›</span>
+                <IconChevronRight className="size-4 shrink-0 text-ink-4" stroke={1.75} />
               </Link>
             ))}
             {questions.map((d) => {
@@ -121,7 +122,7 @@ export function Overview() {
                     <span className="truncate text-ink-3">{d.text}</span>
                   </span>
                   {asker && <span className="text-ink-3">{firstName(asker)}</span>}
-                  <span className="text-ink-4">›</span>
+                  <IconChevronRight className="size-4 shrink-0 text-ink-4" stroke={1.75} />
                 </Link>
               );
             })}
@@ -228,7 +229,7 @@ function AskOffice({ tenderId, to, name }: { tenderId: string; to: string; name?
           disabled={!draft.trim() || send.isPending}
           className="flex size-8 items-center justify-center rounded-lg bg-ink text-white disabled:bg-line-strong"
         >
-          ↑
+          <IconArrowUp className="size-4" stroke={1.75} />
         </button>
       </div>
       {send.isSuccess && !draft && <p className="pt-2 text-ink-3">Sent. Replies appear in the Office.</p>}

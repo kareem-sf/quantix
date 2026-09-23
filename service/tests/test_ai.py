@@ -92,9 +92,11 @@ def test_model_check_needs_real_tool_use(client, models, monkeypatch):
     assert checked["checks"]["model-a"]["ok"] is False
     assert "didn't use the tool" in checked["checks"]["model-a"]["message"]
 
-    use_model(monkeypatch, follows_instructions)
+    requests = []
+    use_model(monkeypatch, lambda messages, info: requests.append(1) or follows_instructions(messages, info))
     checked = client.post(f"/ai/connections/{connection['id']}/checks", json={"model": "model-a"}).json()
     assert checked["checks"]["model-a"]["ok"] is True
+    assert len(requests) == 1  # the tool call is the proof; waiting for a closing reply only costs time
 
 
 def test_the_office_only_uses_a_checked_model(client, models, monkeypatch, tmp_path):

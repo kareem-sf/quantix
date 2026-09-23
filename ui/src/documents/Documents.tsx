@@ -1,3 +1,4 @@
+import { IconChevronLeft, IconChevronRight } from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
 import { useParams, useSearchParams } from "react-router";
 import { AddDocuments } from "./AddDocuments";
@@ -161,10 +162,10 @@ function Viewer({ document, number, onPage }: { document: TenderDocument; number
         </span>
         <span className="flex shrink-0 gap-1.5">
           <button aria-label="Previous page" disabled={number <= 1} onClick={() => onPage(number - 1)} className={nav}>
-            ‹
+            <IconChevronLeft className="size-4" stroke={1.75} />
           </button>
           <button aria-label="Next page" disabled={number >= count} onClick={() => onPage(number + 1)} className={nav}>
-            ›
+            <IconChevronRight className="size-4" stroke={1.75} />
           </button>
           <a
             href={originalFile(document.id)}
