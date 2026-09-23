@@ -10,6 +10,7 @@ import type { Decision, Message, Staff, Task } from "../office/queries";
 import type { Comparison, Measurement, Sheet } from "../takeoff/queries";
 import type { Connection, OfficeSettings } from "../settings/queries";
 import type { Company, Package } from "../subcontract/queries";
+import type { Requirement } from "../submission/queries";
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -40,6 +41,9 @@ export interface FakeState {
   library: LibraryEntry[];
   packages: Package[];
   directory: Company[];
+  requirements: Requirement[];
+  columns: unknown[];
+  exports: { spread_markups: boolean }[];
   decided: { id: string; approve: boolean; save_to_library?: boolean }[];
   /** Answer the next POST to this path with this error detail. */
   fail: Record<string, string>;
@@ -72,6 +76,9 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     library: [],
     packages: [],
     directory: [],
+    requirements: [],
+    columns: [],
+    exports: [],
     decided: [],
     fail: {},
     ...initial,
@@ -187,6 +194,31 @@ export function fakeService(initial: Partial<FakeState> = {}) {
       for (const p of state.packages) for (const e of p.enquiries) if (e.id === sent[1]) e.status = "sent";
       return json(null);
     }
+    if (path.match(/^\/tenders\/\w+\/submission$/)) return json({ requirements: state.requirements, columns: state.columns });
+    const draftDecision = path.match(/^\/drafts\/(\w+)\/decision$/);
+    if (draftDecision) {
+      const r = state.requirements.find((x) => x.draft?.id === draftDecision[1])!;
+      r.draft!.status = body.approve ? "approved" : "rejected";
+      r.state = body.approve ? "ready" : "missing";
+      return json(null);
+    }
+    const readied = path.match(/^\/requirements\/(\w+)\/ready$/);
+    if (readied) {
+      const r = state.requirements.find((x) => x.id === readied[1])!;
+      Object.assign(r, { ready_note: body.ready ? body.note : null, state: body.ready ? "ready" : "missing" });
+      return json(null);
+    }
+    if (path.match(/^\/tenders\/\w+\/export$/)) {
+      state.exports.push(body);
+      return json({
+        folder: "Synthetic school 2026-09-23 1000",
+        files: ["Priced Bill.xlsx", "Checklist.xlsx"],
+        priced_total: "133048.09",
+        summary_total: "133048.08",
+        factor: "1.1",
+        not_ready: ["Bid bond"],
+      });
+    }
     if (path === "/directory" && method === "GET") return json(state.directory);
     if (path === "/directory" && method === "POST") {
       const company = { id: `co${state.directory.length + 1}`, added_by: "engineer", ...body };
@@ -220,7 +252,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     if (path.match(/^\/tenders\/\w+\/boq$/)) return json({ items: state.items, facts: state.facts });
     if (path.match(/^\/tenders\/\w+\/gates$/)) {
       const count = (list: { status: string }[]) => list.filter((r) => r.status === "proposed").length;
-      return json({ boq: count(state.items), facts: count(state.facts), takeoff: count(state.measurements), pricing: 0, subcontract: 0 });
+      return json({ boq: count(state.items), facts: count(state.facts), takeoff: count(state.measurements), pricing: 0, subcontract: 0, submission: 0 });
     }
     if (path.match(/^\/tenders\/\w+\/boq\/approve-all$/)) {
       const waiting = state.items.filter((i) => i.status === "proposed");

@@ -11,6 +11,7 @@ const STAGES = [
   ["Takeoff", "/takeoff"],
   ["Estimate", "/estimate"],
   ["Subcontract", "/subcontract"],
+  ["Submission", "/submission"],
 ] as const;
 
 export function Rail() {

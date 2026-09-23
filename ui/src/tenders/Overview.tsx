@@ -45,6 +45,12 @@ export function Overview() {
       text: "Levelled subcontract and supplier quotes with the office’s recommendation",
       to: `/tenders/${tenderId}/subcontract`,
     },
+    gates.data?.submission && {
+      key: "submission",
+      title: `${gates.data.submission} ${gates.data.submission === 1 ? "draft" : "drafts"} to review`,
+      text: "Submission documents the office drafted from the tender’s requirements",
+      to: `/tenders/${tenderId}/submission?show=review`,
+    },
     gates.data?.boq && {
       key: "boq",
       title: `${gates.data.boq} BOQ ${gates.data.boq === 1 ? "item" : "items"} to approve`,
