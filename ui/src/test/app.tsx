@@ -246,6 +246,11 @@ export function fakeService(initial: Partial<FakeState> = {}) {
       state.measurements.push(m);
       return json(m, 201);
     }
+    const scaled = path.match(/^\/scales\/(\w+)\/decision$/);
+    if (scaled) {
+      state.decided.push({ id: scaled[1], ...body });
+      return json(null);
+    }
     const measured = path.match(/^\/measurements\/(\w+)(\/decision)?$/);
     if (measured) {
       const m = state.measurements.find((x) => x.id === measured[1])!;

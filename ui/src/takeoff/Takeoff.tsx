@@ -100,9 +100,9 @@ export function Takeoff() {
                 ))}
               </span>
             </div>
-            <p className="pb-2">
+            <div className="pb-2">
               <ScaleNote tenderId={tenderId} sheet={sheet.data} />
-            </p>
+            </div>
             {tool !== "select" && !finished && (
               <p className="pb-2 text-ink-2">
                 {tool === "scale"
@@ -228,17 +228,52 @@ function ScaleNote({ tenderId, sheet }: { tenderId: string; sheet: Sheet }) {
   const decide = useDecideScale(tenderId);
   if (!sheet.scale) return <span className="text-attention">No scale yet: use Scale on a printed dimension</span>;
   return (
-    <span className="flex items-center gap-2 text-ink-2">
+    <div className="flex flex-wrap items-center gap-2 text-ink-2">
       Scale checked on the {sheet.scale.dimension} dimension
       <span className="text-ink-3" title="At the sheet's printed size: compare it with the scale in the title block">
         · about 1:{sheet.scale.ratio.toLocaleString("en-US")}
       </span>
       {sheet.scale.status === "proposed" && (
-        <button onClick={() => decide.mutate({ id: sheet.scale!.id, approve: true })} className="font-medium text-ink">
-          Approve scale
-        </button>
+        <>
+          <button onClick={() => decide.mutate({ id: sheet.scale!.id, approve: true })} className="font-medium text-ink">
+            Approve scale
+          </button>
+          <SendBack onSend={(reason) => decide.mutate({ id: sheet.scale!.id, approve: false, reason })} />
+        </>
       )}
-    </span>
+    </div>
+  );
+}
+
+/** Reject with the reason, so whoever proposed it knows what to put right. */
+function SendBack({ onSend }: { onSend: (reason: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  if (!open)
+    return (
+      <button onClick={() => setOpen(true)} className="text-ink-2 hover:text-ink">
+        Send back
+      </button>
+    );
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSend(reason);
+        setOpen(false);
+      }}
+      className="flex items-center gap-1.5"
+    >
+      <input
+        aria-label="What to put right"
+        autoFocus
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        placeholder="What to put right"
+        className="h-7 w-56 rounded-md border border-line-strong px-2 text-[13px] outline-none focus:border-ink"
+      />
+      <button className="font-medium text-ink">Send</button>
+    </form>
   );
 }
 
@@ -356,9 +391,7 @@ function SheetPanel({ tenderId, measurements, selected }: { tenderId: string; me
                   <button onClick={() => decide.mutate({ id: m.id, approve: true })} className="font-medium">
                     Approve
                   </button>
-                  <button onClick={() => decide.mutate({ id: m.id, approve: false })} className="text-ink-2">
-                    Reject
-                  </button>
+                  <SendBack onSend={(reason) => decide.mutate({ id: m.id, approve: false, reason })} />
                 </>
               )}
               <button onClick={() => remove.mutate(m.id)} className="text-ink-3 hover:text-ink">

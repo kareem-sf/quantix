@@ -97,10 +97,10 @@ export function useMeasure(tenderId: string) {
 export function useDecideMeasurement(tenderId: string) {
   const refresh = useRefresh(tenderId);
   return useMutation({
-    mutationFn: async (body: { id: string; approve: boolean }) => {
+    mutationFn: async (body: { id: string; approve: boolean; reason?: string }) => {
       const result = await api.POST("/measurements/{measurement_id}/decision", {
         params: { path: { measurement_id: body.id } },
-        body: { approve: body.approve, reason: null },
+        body: { approve: body.approve, reason: body.reason ?? null },
       });
       if (!result.response.ok) must(result);
     },
@@ -111,10 +111,10 @@ export function useDecideMeasurement(tenderId: string) {
 export function useDecideScale(tenderId: string) {
   const refresh = useRefresh(tenderId);
   return useMutation({
-    mutationFn: async (body: { id: string; approve: boolean }) => {
+    mutationFn: async (body: { id: string; approve: boolean; reason?: string }) => {
       const result = await api.POST("/scales/{scale_id}/decision", {
         params: { path: { scale_id: body.id } },
-        body: { approve: body.approve, reason: null },
+        body: { approve: body.approve, reason: body.reason ?? null },
       });
       if (!result.response.ok) must(result);
     },

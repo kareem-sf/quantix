@@ -156,6 +156,14 @@ describe("Takeoff", () => {
     expect(screen.getByRole("button", { name: "Approve scale" })).toBeInTheDocument();
     expect(screen.getByText("· about 1:283")).toBeInTheDocument(); // to compare with the title block
 
+    const sheetArea = screen.getByRole("region", { name: "Drawing" });
+    await userEvent.click(within(sheetArea).getByRole("button", { name: "Send back" }));
+    await userEvent.type(within(sheetArea).getByLabelText("What to put right"), "Use the 40.00 m dimension on grid A.");
+    await userEvent.click(within(sheetArea).getByRole("button", { name: "Send" }));
+    await waitFor(() =>
+      expect(service.state.decided).toContainEqual({ id: "sc1", approve: false, reason: "Use the 40.00 m dimension on grid A." }),
+    );
+
     await userEvent.click(within(panel).getByRole("button", { name: "Approve" }));
     await waitFor(() => expect(service.state.measurements[0].status).toBe("approved"));
   });
