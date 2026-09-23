@@ -39,6 +39,12 @@ export function Overview() {
       text: "Rates and markups from the office, each with its build-up or source",
       to: `/tenders/${tenderId}/estimate?show=waiting`,
     },
+    gates.data?.subcontract && {
+      key: "subcontract",
+      title: `${gates.data.subcontract} ${gates.data.subcontract === 1 ? "quote" : "quotes"} to choose`,
+      text: "Levelled subcontract and supplier quotes with the office’s recommendation",
+      to: `/tenders/${tenderId}/subcontract`,
+    },
     gates.data?.boq && {
       key: "boq",
       title: `${gates.data.boq} BOQ ${gates.data.boq === 1 ? "item" : "items"} to approve`,

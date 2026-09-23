@@ -17,6 +17,7 @@ from quantix.documents.models import Document
 from quantix.estimate import records as estimate
 from quantix.office import records
 from quantix.office.models import TEAM, Staff
+from quantix.subcontract import records as subcontract
 from quantix.takeoff import records as takeoff
 
 
@@ -416,6 +417,97 @@ def estimate_summary(ctx: RunContext[Turn]) -> str:
     return "\n".join(lines)
 
 
+def search_directory(ctx: RunContext[Turn], words: str = "") -> str:
+    """Search the firm's directory of subcontractors and suppliers by name or trade."""
+    with _working(ctx, "Checking the directory") as (session, _):
+        rows = subcontract.directory(session, words)[:40]
+    if not rows:
+        return "Nobody in the directory matches. Add a company with add_company."
+    return "\n".join(f"{c.name} · {c.kind} · {c.trades}" + (f" · {c.email}" if c.email else "") for c in rows)
+
+
+def add_company(
+    ctx: RunContext[Turn], name: str, kind: str, trades: str, email: str | None = None, phone: str | None = None
+) -> str:
+    """Add a subcontractor or supplier to the firm's directory, e.g. from the tender's approved vendor list.
+    kind is subcontractor or supplier."""
+    with _working(ctx, f"Adding {name} to the directory") as (session, me):
+        subcontract.add_company(session, me.id, name, kind, trades, email, phone)
+    return f"{name} is in the directory."
+
+
+def create_package(ctx: RunContext[Turn], name: str, kind: str, boq_items: list[str]) -> str:
+    """Group BOQ items into a package to price from outside: kind "subcontract" (a trade let to a subcontractor)
+    or "supply" (materials bought from a supplier)."""
+    with _working(ctx, f"Setting up the {name} package") as (session, me):
+        subcontract.create_package(session, ctx.deps.tender_id, me.id, name, kind, boq_items)
+    return f"The {name} package has {len(boq_items)} items. Draft enquiries with draft_enquiry."
+
+
+def draft_enquiry(ctx: RunContext[Turn], package: str, company: str, subject: str, body: str) -> str:
+    """Draft an enquiry email to a company in the directory. The engineer sends it from their own mail program.
+    Include the items, quantities, units, the scope, the programme and the date quotes are due."""
+    with _working(ctx, f"Drafting an enquiry to {company}") as (session, me):
+        found = subcontract.find_company(session, company)
+        subcontract.draft_enquiry(
+            session, subcontract.find_package(session, ctx.deps.tender_id, package), found, me.id, subject, body
+        )
+    return f"The enquiry to {company} is ready for the engineer to send."
+
+
+def record_quote(
+    ctx: RunContext[Turn],
+    package: str,
+    company: str,
+    document_id: str,
+    lines: list[subcontract.QuoteLine],
+    exclusions: list[subcontract.Exclusion] | None = None,
+) -> str:
+    """Record a company's quote from its document: each quoted rate with the page and line it is on, and anything
+    the quote excludes with your estimate of what it adds. Quantix levels the quotes."""
+    with _working(ctx, f"Recording {company}'s quote") as (session, me):
+        found_package = subcontract.find_package(session, ctx.deps.tender_id, package)
+        subcontract.record_quote(
+            session,
+            found_package,
+            subcontract.find_company(session, company),
+            me.id,
+            document_id,
+            lines,
+            exclusions or [],
+        )
+    return f"{company}'s quote is recorded. Use levelling to compare the quotes."
+
+
+def levelling(ctx: RunContext[Turn], package: str) -> str:
+    """The package's quotes side by side, as Quantix levels them: gaps filled with our own rate, exclusions added."""
+    with _working(ctx, f"Levelling the {package} quotes") as (session, _):
+        result = subcontract.level(session, subcontract.find_package(session, ctx.deps.tender_id, package))
+    if not result.columns:
+        return "No quotes recorded yet."
+    lines = []
+    for column in sorted(result.columns, key=lambda c: c.rank or 999):
+        gaps = [i.item for i in result.items if column.cells[i.id].plugged]
+        lines.append(
+            f"{column.rank or '-'}. {column.company}: quoted {column.quoted_total}, exclusions {column.exclusions}, "
+            f"levelled {column.levelled_total if column.levelled_total is not None else 'incomplete'}"
+            + (f" (our rate used for {', '.join(gaps)})" if gaps else "")
+        )
+    return "\n".join(lines)
+
+
+def recommend_quote(ctx: RunContext[Turn], package: str, company: str, reason: str) -> str:
+    """Recommend which quote to take, and why: price after levelling, gaps, exclusions and your view of the company.
+    The engineer chooses."""
+    with _working(ctx, f"Recommending a quote for {package}") as (session, me):
+        found = subcontract.find_package(session, ctx.deps.tender_id, package)
+        quote = subcontract.recommend(session, found, me.id, subcontract.find_company(session, company), reason)
+        if ctx.deps.autonomous:
+            subcontract.select_quote(session, found, quote, status="office_approved")
+            return f"The office has taken {company}'s quote; its rates are in the estimate."
+    return "Your recommendation is waiting for the engineer."
+
+
 COMMON: list[Callable] = [
     list_documents,
     search_documents,
@@ -436,6 +528,13 @@ COMMON: list[Callable] = [
     propose_rate,
     propose_markups,
     estimate_summary,
+    search_directory,
+    add_company,
+    create_package,
+    draft_enquiry,
+    record_quote,
+    levelling,
+    recommend_quote,
 ]
 STAFF: list[Callable] = [*COMMON, complete_task]
 MANAGER: list[Callable] = [*COMMON, hire, assign_task, release]
