@@ -92,7 +92,11 @@ def situation(session: Session, member: Staff, new: list[Message]) -> str:
     tasks = records.open_tasks(session, member)
     if tasks:
         parts.append("Your open tasks:\n" + "\n".join(f"- {t.id}: {t.title}. {t.brief}" for t in tasks))
-    waiting = records.decisions(session, member.tender_id, waiting_only=True)
+    decisions = records.decisions(session, member.tender_id)
+    answered = [d for d in decisions if d.status == "answered"][-10:]
+    if answered:  # everyone knows what the engineer decided, not only whoever asked
+        parts.append("The engineer has decided:\n" + "\n".join(f"- {d.title}: {d.answer}" for d in answered))
+    waiting = [d for d in decisions if d.status == "waiting"]
     if waiting:
         parts.append("Waiting for the engineer:\n" + "\n".join(f"- {d.title}" for d in waiting))
     shown = {m.id for m in new}

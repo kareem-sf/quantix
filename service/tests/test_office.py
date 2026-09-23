@@ -369,3 +369,18 @@ def test_an_empty_or_failing_reply_ends_the_turn_not_the_office(client, office):
     state = wait_for(lambda o: o["staff"] and len(calls) > 4, client, tender_id)
     assert state["state"] == "idle"
     assert not [m for m in team_room(client, tender_id) if m["text"].startswith("The office stopped")]
+
+
+def test_everyone_sees_what_the_engineer_decided(client, office):
+    from quantix.office import agents
+    from quantix.office import records as office_records
+
+    tender_id, _ = office
+    with client.app.state.sessions() as session:
+        salem = office_records.hire(session, tender_id, "Salem Al Suwaidi", "Tender Manager", {}, is_manager=True)
+        nora = office_records.hire(session, tender_id, "Nora Al-Otaibi", "Commercial QS", {})
+        question = office_records.ask(session, tender_id, salem, "Zero-quantity lines", "Price them?", ["Yes", "No"])
+        office_records.answer(session, question, "Price them rate-only.")
+        session.commit()
+        brief = agents.situation(session, nora, [])
+    assert "The engineer has decided:\n- Zero-quantity lines: Price them rate-only." in brief
