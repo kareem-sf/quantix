@@ -32,9 +32,11 @@ Each domain module owns its models, its service functions and the agent tools th
 
 ## Boundaries
 
+- AI connections and their keys are kept in `~/.quantix/auth.json`, and office settings (office mode, the office's
+  AI) in `~/.quantix/settings.json`: plain JSON files the engineer can read. The service never returns a key.
 - The UI talks only to the HTTP API on loopback. Each launch of the service gets a fresh bearer token. In
   development the Vite server starts the service on a free port and forwards `/api` to it with the token, so the
-  browser preview and the desktop window use the same path and the UI never holds the token or any credential.
+  browser preview and the desktop window use the same path and the UI never holds the token or a key.
   Release packaging, which embeds the service in the desktop app, comes later.
 - Every record belongs to a tender, and every tender belongs to an owner, so accounts can be added later.
 - Long work runs in a durable job ledger, not as fire-and-forget tasks. After a restart, interrupted work resumes
