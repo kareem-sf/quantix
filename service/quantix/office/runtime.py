@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pydantic_ai.models import Model
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from quantix import settings, tenders
@@ -148,7 +149,12 @@ class Office:
             return False
         except Exception as error:
             log.warning("Office work on %s failed: %s: %s", tender_id, type(error).__name__, str(error)[:500])
-            self._pause(tender_id, f"The office stopped: {providers.explain(error)} Send a message to try again.")
+            reason = (
+                "Quantix hit a problem of its own; the details are in its log."
+                if isinstance(error, SQLAlchemyError)
+                else providers.explain(error)
+            )
+            self._pause(tender_id, f"The office stopped: {reason} Send a message to try again.")
             return False
 
     async def _turn(self, model: Model, tender_id: str, staff_id: str) -> bool:

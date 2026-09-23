@@ -105,8 +105,16 @@ def all_tasks(session: Session, tender_id: str) -> list[Task]:
 
 def complete(session: Session, member: Staff, task_id: str, result: str) -> Task:
     task = session.get(Task, task_id)
-    if task is None or task.staff_id != member.id:
-        raise ValueError("That task isn't one of yours. Check the task list you were given.")
+    if task is None or task.staff_id != member.id or task.status != "open":
+        mine = open_tasks(session, member)
+        raise ValueError(
+            "That isn't one of your open tasks. "
+            + (
+                f"Yours: {', '.join(f'{t.id} ({t.title})' for t in mine)}."
+                if mine
+                else "You have none open: report other work in the team room."
+            )
+        )
     task.status, task.result, task.done_at = "done", result.strip(), datetime.now(UTC)
     post(session, member.tender_id, member.id, TEAM, f"Finished: {task.title}. {result.strip()}")
     return task

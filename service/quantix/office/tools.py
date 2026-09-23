@@ -341,7 +341,9 @@ def set_scale(
     dimension_text: str,
 ) -> str:
     """Set a drawing's scale from a dimension printed on it: the two ends of the dimension line in view_page pixels,
-    its real length in metres, and the dimension text as printed (e.g. "40.00"). Use find_on_page to locate it."""
+    its real length in metres, and the dimension text as printed (e.g. "40.00"). Use find_on_page to locate it.
+    The points go on the line's end ticks, never on its text. A graphic scale bar works too: its 0 and end ticks,
+    with the end label (e.g. "25") as the dimension text."""
     if not ctx.deps.sees_images:
         return BLIND
     with _working(ctx, "Setting the scale of a drawing") as (session, me):

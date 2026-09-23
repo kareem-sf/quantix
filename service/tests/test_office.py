@@ -410,6 +410,22 @@ def test_each_turn_shows_where_things_stand_and_the_chat_so_far(client, office):
     )
 
 
+def test_finishing_a_task_twice_says_what_is_still_open(client, office):
+    from quantix.office import records as office_records
+
+    tender_id, _ = office
+    with client.app.state.sessions() as session:
+        salem = office_records.hire(session, tender_id, "Salem Al Suwaidi", "Tender Manager", {}, is_manager=True)
+        rashid = office_records.hire(session, tender_id, "Rashid Al-Ghamdi", "Estimator", {})
+        first = office_records.assign(session, tender_id, salem, rashid, "set the scales", "From a dimension.")
+        office_records.complete(session, rashid, first.id, "Done.")
+        with pytest.raises(ValueError, match="You have none open: report other work in the team room."):
+            office_records.complete(session, rashid, first.id, "Done again.")
+        second = office_records.assign(session, tender_id, salem, rashid, "measure the areas", "Both sheets.")
+        with pytest.raises(ValueError, match=f"Yours: {second.id} \\(measure the areas\\)."):
+            office_records.complete(session, rashid, first.id, "Done again.")
+
+
 def test_only_the_manager_brings_decisions_to_the_engineer():
     from quantix.office import tools
 

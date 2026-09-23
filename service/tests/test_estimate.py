@@ -164,6 +164,13 @@ def test_every_rate_needs_a_basis_that_checks_out(client, tender):
             )
         with pytest.raises(ValueError, match="There is no BOQ item 9.9"):
             estimate.propose_rate(session, tender_id, priya, "9.9", "estimate", "x" * 30, unit_rate=Decimal("1"))
+        # an estimate that also names a library entry or document that doesn't exist keeps only what it rests on
+        rate = estimate.propose_rate(
+            session, tender_id, priya, "3.1", "estimate", "x" * 30, unit_rate=Decimal("18"), library_id="L-01",
+            document_id="made-up", page=3,
+        )  # fmt: skip
+        session.flush()
+        assert (rate.library_id, rate.document_id, rate.page) == (None, None, None)
 
 
 def test_approving_keeps_one_rate_and_can_save_it_to_the_library(client, tender):
