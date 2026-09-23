@@ -194,3 +194,27 @@ def test_an_ai_failure_pauses_the_office_with_a_plain_reason(client, office):
 def test_the_engineer_can_only_message_people_on_the_team(client, office):
     tender_id, _ = office
     assert client.post(f"/tenders/{tender_id}/messages", json={"channel": "nobody", "text": "Hi"}).status_code == 400
+
+
+def test_running_out_of_steps_carries_on_without_losing_what_was_read(client, office):
+    tender_id, use = office
+    document_id = client.get(f"/tenders/{tender_id}/documents").json()[0]["id"]
+
+    def reads_too_long(messages, info):
+        if info.output_tools:
+            return office_brain(messages, info)
+        latest = [p.content for m in messages for p in m.parts if isinstance(p, UserPromptPart)][-1]
+        if "ran out of steps" not in latest:
+            return call("read_page", document_id=document_id, page=1)  # never finishes on its own
+        if any(p.tool_name == "message_engineer" for m in messages for p in m.parts if isinstance(p, ToolReturnPart)):
+            return DONE
+        pages = sum(1 for text in returns(messages) if text.startswith("Conditions.pdf, page 1"))
+        return call("message_engineer", text=f"I read {pages} pages before I ran out of steps.")
+
+    use(reads_too_long)
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Review the package."})
+    state = wait_for(lambda o: o["state"] == "idle" and o["staff"], client, tender_id)
+    [rania] = state["staff"]
+    chat = client.get(f"/tenders/{tender_id}/messages", params={"channel": rania["id"]}).json()
+    assert [m["text"] for m in chat] == ["I read 12 pages before I ran out of steps."]
+    assert rania["now"] is None

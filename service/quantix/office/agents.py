@@ -1,7 +1,8 @@
 """One agent turn: who the person is, what is new for them, and their tools."""
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent, UsageLimits
+from pydantic_ai import Agent, UsageLimitExceeded, UsageLimits
+from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models import Model
 from sqlalchemy.orm import Session
 
@@ -21,9 +22,12 @@ RULES = """How the office works:
   Never invent figures, dates or clauses. If the documents don't say, say that.
 - Say what you think. If you disagree with the Manager, a colleague or the engineer, use raise_concern.
 - Keep messages short and in plain construction English, even when the documents are in Arabic.
+- You have about 12 steps in a turn. Before you run out, say what you found and what comes next.
 - When you have acted on everything new, stop."""
 
 MANAGER_DUTIES = """You are the Tender Manager: you lead this tender for the engineer.
+- Start by telling the engineer your plan in a few lines (message_engineer). Look over the document list and the
+  key pages yourself, but don't read the package page by page: that is your team's work.
 - Hire the people this particular tender needs, when it needs them, with hire. There is no standard team:
   choose roles from the actual work. Keep the team small.
 - Give each person clear tasks with assign_task, check their results, and follow up.
@@ -101,7 +105,11 @@ def situation(session: Session, member: Staff, new: list[Message]) -> str:
     return "\n\n".join(parts)
 
 
-async def run_turn(model: Model, turn: Turn, member: Staff, prompt: str, autonomous: bool) -> None:
+async def run_turn(
+    model: Model, turn: Turn, member: Staff, prompt: str, autonomous: bool, history: list[ModelMessage] | None = None
+) -> list[ModelMessage] | None:
+    """One turn. When the person runs out of steps, returns the turn's conversation so their next turn carries on
+    from it instead of starting over."""
     agent = Agent(
         model,
         deps_type=Turn,
@@ -109,10 +117,15 @@ async def run_turn(model: Model, turn: Turn, member: Staff, prompt: str, autonom
         tools=tools.MANAGER if member.is_manager else tools.STAFF,
         retries=2,
     )
-    async with agent.iter(prompt, deps=turn, usage_limits=UsageLimits(request_limit=STEP_LIMIT)) as run:
-        async for _node in run:
-            if turn.stop.is_set():
-                raise tools.Stopped()
+    limits = UsageLimits(request_limit=STEP_LIMIT)
+    async with agent.iter(prompt, deps=turn, usage_limits=limits, message_history=history) as run:
+        try:
+            async for _node in run:
+                if turn.stop.is_set():
+                    raise tools.Stopped()
+        except UsageLimitExceeded:
+            return run.all_messages()
+    return None
 
 
 async def create_persona(model: Model, brief: str) -> Persona:

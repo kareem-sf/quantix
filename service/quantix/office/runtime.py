@@ -6,7 +6,6 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
-from pydantic_ai import UsageLimitExceeded
 from pydantic_ai.models import Model
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -23,6 +22,7 @@ log = logging.getLogger("quantix.office")
 
 OFFICE = "office"  # the sender of the office's own notices; never used for anything an agent says
 TURN_BUDGET = 40  # turns without hearing from the engineer before the office pauses
+CARRY_ON = "You ran out of steps in your last turn. Carry on from where you stopped, and report what you have."
 
 
 def office_model(home: Path) -> Model | None:
@@ -45,7 +45,8 @@ class Office:
         self._turns: dict[str, int] = {}
         self._paused: set[str] = set()
         self._working: str | None = None  # the tender being worked on right now
-        self._again: set[str] = set()  # people whose last turn ran out of steps with work open
+        self._again: set[str] = set()  # people whose last turn ran out of steps
+        self._carry: dict[str, list] = {}  # their conversation, so the next turn carries on from it
 
     # The engineer's side -------------------------------------------------------------------------------------
 
@@ -146,7 +147,10 @@ class Office:
             if not new and staff_id not in self._again:
                 return False
             self._again.discard(staff_id)
+            history = self._carry.pop(staff_id, None)
             prompt = agents.situation(session, member, new)
+            if history is not None:
+                prompt = f"{CARRY_ON}\n\n{prompt}"
             records.mark_read(session, member)
             session.commit()
             session.expunge(member)
@@ -154,15 +158,15 @@ class Office:
         turn = Turn(self.home, self.sessions, tender_id, staff_id, autonomous, self._stop_event(tender_id))
         self._turns[tender_id] = self._turns.get(tender_id, 0) + 1
         try:
-            await agents.run_turn(model, turn, member, prompt, autonomous)
-        except UsageLimitExceeded:
-            with self.sessions() as session:
-                if records.open_tasks(session, session.get(Staff, staff_id)):
-                    self._again.add(staff_id)
+            conversation = await agents.run_turn(model, turn, member, prompt, autonomous, history)
+            if conversation is not None:
+                self._again.add(staff_id)
+                if history is None:  # one continuation in a row; after that the next turn starts from the records
+                    self._carry[staff_id] = conversation
         finally:
             with self.sessions() as session:
                 person = session.get(Staff, staff_id)
-                if not person.is_manager and not records.open_tasks(session, person):
+                if staff_id not in self._again:
                     person.now = None
                 session.commit()
         return True
