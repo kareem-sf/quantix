@@ -42,6 +42,17 @@ def drawing_ratio(metres_per_point: float) -> int:
     return round(metres_per_point / POINT_M)
 
 
+_PRINTED_SCALE = re.compile(r"\b1\s*:\s*(\d{2,5})\b")
+PAPER_SIZES = (0.5, 2**-0.5, 1, 2**0.5, 2)  # a sheet printed one or two paper sizes smaller or larger
+
+
+def _fits_printed_scale(page_text: str, ratio: int) -> tuple[bool, list[int]]:
+    """Whether a scale agrees, within 20%, with a scale printed on the sheet. A sheet that prints none fits any."""
+    printed = sorted({int(n) for n in _PRINTED_SCALE.findall(page_text)})
+    fits = not printed or any(abs(ratio / (n * size) - 1) <= 0.2 for n in printed for size in PAPER_SIZES)
+    return fits, printed
+
+
 def _page(session: Session, tender_id: str, document_id: str, number: int) -> tuple[Document, Page]:
     document = session.get(Document, document_id)
     if document is None or document.tender_id != tender_id or document.kind != "pdf":
@@ -95,6 +106,14 @@ def set_scale(
     span = math.dist(line[0], line[1])
     if span < 10:
         raise ValueError("The two points are too close together to set a scale; use a longer dimension.")
+    ratio = drawing_ratio(length_m / span)
+    fits, printed = _fits_printed_scale(found.text, ratio)
+    if by != ENGINEER and not fits:
+        raise ValueError(
+            f"Those two points make the sheet about 1:{ratio:,}, but it prints "
+            f"{' and '.join(f'1:{n}' for n in printed)}. Put the points on the two ends of the dimension line itself "
+            "(its ticks or extension lines), not on its text or another label, or on the ends of the graphic scale bar."
+        )
     scale = Scale(
         tender_id=tender_id,
         document_id=document_id,

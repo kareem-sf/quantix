@@ -388,6 +388,28 @@ def test_everyone_sees_what_the_engineer_decided(client, office):
     assert "The engineer has decided:\n- Zero-quantity lines: Price them rate-only." in brief
 
 
+def test_each_turn_shows_where_things_stand_and_the_chat_so_far(client, office):
+    from quantix.office import agents
+    from quantix.office import records as office_records
+    from quantix.office.models import ENGINEER
+
+    tender_id, _ = office
+    with client.app.state.sessions() as session:
+        salem = office_records.hire(session, tender_id, "Salem Al Suwaidi", "Tender Manager", {}, is_manager=True)
+        rashid = office_records.hire(session, tender_id, "Rashid Al-Ghamdi", "Estimator", {})
+        office_records.assign(session, tender_id, salem, rashid, "reset the drawing scales", "From a dimension.")
+        office_records.post(session, tender_id, salem.id, salem.id, "The zero lines are C.21.1 and C.7.1.2.")
+        office_records.post(session, tender_id, ENGINEER, salem.id, "One combined query.")
+        session.commit()
+        brief = agents.situation(session, salem, [])
+    assert "Where the tender stands:\n- BOQ: 0 lines, 0 approved." in brief
+    assert "Open tasks in the team:\n- Rashid: reset the drawing scales" in brief  # so no one is briefed twice
+    assert (
+        "Earlier in your chat with the engineer:\n- You: The zero lines are C.21.1 and C.7.1.2.\n"
+        "- Engineer: One combined query." in brief
+    )
+
+
 def test_only_the_manager_brings_decisions_to_the_engineer():
     from quantix.office import tools
 

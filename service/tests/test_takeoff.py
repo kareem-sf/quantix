@@ -11,7 +11,7 @@ from quantix import settings
 from quantix.boq import records as boq
 from quantix.office import records as office
 
-DRAWING = make_pdf([["A-101 GROUND FLOOR PLAN", "Grid A to E 40.00", "Scale 1:100"]])  # a 612 x 792 point page
+DRAWING = make_pdf([["A-101 GROUND FLOOR PLAN", "Grid A to E 40.00", "Scale 1:250"]])  # a 612 x 792 point page
 
 
 def bill() -> bytes:
@@ -133,6 +133,18 @@ def test_a_new_scale_recomputes_the_sheet(client, sheet):
     scale(client, tender_id, drawing, length_m=80.0)
     [again] = client.get(f"/tenders/{tender_id}/takeoff").json()["measurements"]
     assert again["quantity"] == "80.000"
+
+
+def test_the_office_cannot_set_a_scale_the_sheet_contradicts(client, sheet):
+    from quantix.takeoff import records as takeoff
+
+    tender_id, drawing, qs_id = sheet
+    with client.app.state.sessions() as session, pytest.raises(ValueError) as refused:
+        # 40 m across 40 points, e.g. from one text label to another: about 1:2,835 on a sheet printed 1:250
+        takeoff.set_scale(session, tender_id, qs_id, drawing, 1, [[100, 100], [140, 100]], 40, "40.00", "proposed")
+    assert str(refused.value).startswith("Those two points make the sheet about 1:2,835, but it prints 1:250.")
+    with client.app.state.sessions() as session:  # 1:283 is within 20% of the printed 1:250
+        takeoff.set_scale(session, tender_id, qs_id, drawing, 1, [[100, 100], [500, 100]], 40, "40.00", "proposed")
 
 
 def test_the_rules_are_explained_when_broken(client, sheet):

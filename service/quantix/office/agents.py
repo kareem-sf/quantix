@@ -11,10 +11,16 @@ from pydantic_ai.settings import ModelSettings
 from sqlalchemy.orm import Session
 
 from quantix import company, tenders
+from quantix.boq import records as boq
+from quantix.boq.models import APPROVED
 from quantix.documents import library
+from quantix.estimate import records as estimate
 from quantix.office import records, tools
 from quantix.office.models import ENGINEER, TEAM, Message, Staff
 from quantix.office.tools import Persona, Turn
+from quantix.subcontract import records as subcontract
+from quantix.submission import records as submission
+from quantix.takeoff import records as takeoff
 
 log = logging.getLogger("quantix.office")
 
@@ -33,7 +39,10 @@ RULES = """How the office works:
   list with one item per line (Markdown "- " or "1. "), and **bold** only for what needs a decision. Don't sign
   messages or restate your name: it is shown with every message.
 - Write to the engineer at most once a turn, and only when they need to know or do something. Put the rest in
-  the team room.
+  the team room. Your chat with the engineer is below: never repeat what you have already told them or ask what
+  they have already answered. If nothing is new for them, don't write.
+- "Where the tender stands" below is current. Check details with list_boq, estimate_summary, takeoff_summary and
+  list_requirements; don't re-read pages to find out what the office has already entered.
 - You have about 12 steps in a turn. Before you run out, say what you found and what comes next.
 - When you have acted on everything new, stop."""
 
@@ -59,7 +68,7 @@ def instructions(member: Staff, autonomous: bool) -> str:
         f"You are {member.name}, {member.role} in a construction tendering office. "
         f"{p.get('discipline', '')}, {p.get('experience_years', '')} years. {p.get('background', '')}\n"
         f"How you work: {p.get('working_style', '')}\nWhat you believe: {p.get('opinions', '')}\n"
-        f"How you speak: {p.get('voice', '')}"
+        f"How you speak: {p.get('voice', '')} This is flavour only: the rules on clear writing below come first."
     )
     mode = (
         "\nThe engineer has set the office to work fully autonomously: approve your own gates, and record every "
@@ -93,9 +102,14 @@ def situation(session: Session, member: Staff, new: list[Message]) -> str:
         parts.append(
             "The firm's rules, which the whole office follows:\n" + "\n".join(f"- {r.topic}: {r.text}" for r in rules)
         )
+    parts.append("Where the tender stands:\n" + standing(session, member.tender_id))
     tasks = records.open_tasks(session, member)
     if tasks:
         parts.append("Your open tasks:\n" + "\n".join(f"- {t.id}: {t.title}. {t.brief}" for t in tasks))
+    if member.is_manager:
+        given = [t for t in records.all_tasks(session, member.tender_id) if t.status == "open"]
+        if given:
+            parts.append("Open tasks in the team:\n" + "\n".join(f"- {names[t.staff_id]}: {t.title}" for t in given))
     decisions = records.decisions(session, member.tender_id)
     answered = [d for d in decisions if d.status == "answered"][-10:]
     if answered:  # everyone knows what the engineer decided, not only whoever asked
@@ -107,8 +121,34 @@ def situation(session: Session, member: Staff, new: list[Message]) -> str:
     earlier = [m for m in records.messages(session, member.tender_id, TEAM, limit=12) if m.id not in shown]
     if earlier:
         parts.append("Earlier in the team room:\n" + "\n".join(line(m) for m in earlier))
+    chat = [m for m in records.messages(session, member.tender_id, member.id, limit=10) if m.id not in shown]
+    if chat:  # so no one repeats themselves or asks the engineer again
+        parts.append(
+            "Earlier in your chat with the engineer:\n"
+            + "\n".join(f"- {'You' if m.sender == member.id else 'Engineer'}: {m.text}" for m in chat)
+        )
     parts.append("New for you:\n" + ("\n".join(line(m) for m in new) or "- Nothing new; carry on with your tasks."))
     return "\n\n".join(parts)
+
+
+def standing(session: Session, tender_id: str) -> str:
+    """The work so far in counts, from the records."""
+    items = boq.items(session, tender_id)
+    price = estimate.summary(session, tender_id)
+    packages = subcontract.packages(session, tender_id)
+    checklist = [submission.state(session, r) for r in submission.requirements(session, tender_id)]
+    approved = sum(i.status in APPROVED for i in items)
+    return "\n".join(
+        [
+            f"- BOQ: {len(items)} lines, {approved} approved.",
+            f"- Estimate: {price.priced} of {price.items} lines priced, {price.waiting} waiting for the engineer.",
+            f"- Takeoff: {len(takeoff.measurements(session, tender_id))} measurements, "
+            f"{takeoff.waiting(session, tender_id)} scales or measurements waiting for the engineer.",
+            f"- Subcontract: {len(packages)} packages, {sum(bool(p.selected_quote_id) for p in packages)} chosen.",
+            f"- Submission: {checklist.count('ready')} of {len(checklist)} checklist items ready, "
+            f"{checklist.count('review')} drafts waiting for the engineer.",
+        ]
+    )
 
 
 class CutShort(Exception):

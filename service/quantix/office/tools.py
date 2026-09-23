@@ -36,7 +36,10 @@ class Persona(BaseModel):
     background: str = Field(description="Two sentences about their career")
     working_style: str = Field(description="How they work, in one or two sentences")
     opinions: str = Field(description="Professional views they hold and will voice")
-    voice: str = Field(description="How they speak and write")
+    voice: str = Field(
+        description="How they speak and write: a distinct manner that stays clear and easy to read, "
+        "with no catchphrases, forms of address or slang"
+    )
 
     @field_validator("name")
     @classmethod
