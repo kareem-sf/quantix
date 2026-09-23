@@ -1,8 +1,10 @@
 """Read a tender file into numbered pages of text. PDF pages keep their page numbers; a spreadsheet gives one page
 per sheet; a Word document gives pages of about 3,000 characters split at paragraphs."""
 
+import ctypes
 import threading
 from dataclasses import dataclass
+from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 
@@ -43,6 +45,8 @@ class PageText:
     number: int
     text: str
     has_text: bool = True
+    width: float | None = None  # PDF points
+    height: float | None = None
 
 
 class Unreadable(Exception):
@@ -79,7 +83,8 @@ def _pdf(path: Path) -> list[PageText]:
                 page = document[index]
                 text = _pdf_page_text(page.get_textpage())
                 visible = sum(not c.isspace() for c in text)
-                pages.append(PageText(index + 1, text, has_text=visible >= SCAN_CHARACTERS))
+                width, height = page.get_size()
+                pages.append(PageText(index + 1, text, visible >= SCAN_CHARACTERS, width, height))
             return pages
         finally:
             document.close()
@@ -154,6 +159,52 @@ def _word(path: Path) -> list[PageText]:
     if current or not pages:
         pages.append(PageText(len(pages) + 1, "\n".join(current)))
     return pages
+
+
+def find_text(path: Path, number: int, text: str, limit: int = 20) -> list[tuple[float, float, float, float]]:
+    """Where `text` is printed on a PDF page: (left, top, right, bottom) in points from the top left."""
+    with PDFIUM:
+        document = pdfium.PdfDocument(path)
+        try:
+            page = document[number - 1]
+            height = page.get_height()
+            textpage = page.get_textpage()
+            searcher = textpage.search(text)
+            boxes = []
+            while len(boxes) < limit and (found := searcher.get_next()):
+                index, count = found
+                chars = [textpage.get_charbox(i) for i in range(index, index + count)]
+                left, bottom = min(c[0] for c in chars), min(c[1] for c in chars)
+                right, top = max(c[2] for c in chars), max(c[3] for c in chars)
+                boxes.append((left, height - top, right, height - bottom))
+            return boxes
+        finally:
+            document.close()
+
+
+@lru_cache(maxsize=32)
+def vector_points(path: Path, number: int, limit: int = 50_000) -> tuple[tuple[float, float], ...]:
+    """The end and corner points of the lines drawn on a PDF page, in points from the top left. Takeoff snaps to
+    them so measurements land exactly on the drawing. A scan has none."""
+    found: set[tuple[float, float]] = set()
+    with PDFIUM:
+        document = pdfium.PdfDocument(path)
+        try:
+            page = document[number - 1]
+            height = page.get_height()
+            x, y = ctypes.c_float(), ctypes.c_float()
+            for obj in page.get_objects(filter=[pdfium_raw.FPDF_PAGEOBJ_PATH], max_depth=5):
+                matrix = obj.get_matrix()
+                for index in range(pdfium_raw.FPDFPath_CountSegments(obj.raw)):
+                    segment = pdfium_raw.FPDFPath_GetPathSegment(obj.raw, index)
+                    pdfium_raw.FPDFPathSegment_GetPoint(segment, ctypes.byref(x), ctypes.byref(y))
+                    px, py = matrix.on_point(x.value, y.value)
+                    found.add((round(px, 4), round(height - py, 4)))
+                    if len(found) >= limit:
+                        return tuple(found)
+        finally:
+            document.close()
+    return tuple(found)
 
 
 def render_page(path: Path, number: int, width: int = 1400) -> bytes:

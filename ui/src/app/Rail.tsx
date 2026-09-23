@@ -8,6 +8,7 @@ const STAGES = [
   ["Overview", ""],
   ["Office", "/office"],
   ["Documents", "/documents"],
+  ["Takeoff", "/takeoff"],
   ["Estimate", "/estimate"],
 ] as const;
 

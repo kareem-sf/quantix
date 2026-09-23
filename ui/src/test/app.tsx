@@ -7,6 +7,7 @@ import { routes } from "../app/router";
 import type { SearchHit, TenderDocument } from "../documents/queries";
 import type { BoqItem, Fact } from "../estimate/queries";
 import type { Decision, Message, Staff, Task } from "../office/queries";
+import type { Comparison, Measurement, Sheet } from "../takeoff/queries";
 import type { Connection, OfficeSettings } from "../settings/queries";
 
 function json(body: unknown, status = 200) {
@@ -28,6 +29,10 @@ export interface FakeState {
   officeState: "working" | "paused" | "idle";
   items: BoqItem[];
   facts: Fact[];
+  sheets: Sheet[];
+  measurements: Measurement[];
+  comparison: Comparison[];
+  scales: unknown[];
   /** Answer the next POST to this path with this error detail. */
   fail: Record<string, string>;
 }
@@ -49,6 +54,10 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     officeState: "idle",
     items: [],
     facts: [],
+    sheets: [],
+    measurements: [],
+    comparison: [],
+    scales: [],
     fail: {},
     ...initial,
   };
@@ -129,10 +138,30 @@ export function fakeService(initial: Partial<FakeState> = {}) {
       return new Response(null, { status: 204 });
     }
 
+    if (path.match(/^\/tenders\/\w+\/takeoff$/))
+      return json({ sheets: state.sheets, measurements: state.measurements, comparison: state.comparison });
+    if (path.match(/^\/documents\/\w+\/pages\/\d+\/vertices$/)) return json([[101, 101]]);
+    const sheet = path.match(/^\/documents\/(\w+)\/pages\/(\d+)\/sheet$/);
+    if (sheet) return json(state.sheets.find((s) => s.document_id === sheet[1] && s.page === Number(sheet[2])));
+    if (path.match(/^\/tenders\/\w+\/scales$/)) {
+      state.scales.push(body);
+      return json({ id: "sc1", metres_per_point: 0.1, status: "approved", proposed_by: "engineer", ...body }, 201);
+    }
+    if (path.match(/^\/tenders\/\w+\/measurements$/)) {
+      const m = { id: `m${state.measurements.length + 1}`, quantity: null, status: "approved", proposed_by: "engineer", ...body };
+      state.measurements.push(m);
+      return json(m, 201);
+    }
+    const measured = path.match(/^\/measurements\/(\w+)(\/decision)?$/);
+    if (measured) {
+      const m = state.measurements.find((x) => x.id === measured[1])!;
+      m.status = method === "DELETE" ? "rejected" : body.approve ? "approved" : "rejected";
+      return method === "DELETE" ? new Response(null, { status: 204 }) : json(null);
+    }
     if (path.match(/^\/tenders\/\w+\/boq$/)) return json({ items: state.items, facts: state.facts });
     if (path.match(/^\/tenders\/\w+\/gates$/)) {
       const count = (list: { status: string }[]) => list.filter((r) => r.status === "proposed").length;
-      return json({ boq: count(state.items), facts: count(state.facts) });
+      return json({ boq: count(state.items), facts: count(state.facts), takeoff: count(state.measurements) });
     }
     if (path.match(/^\/tenders\/\w+\/boq\/approve-all$/)) {
       const waiting = state.items.filter((i) => i.status === "proposed");

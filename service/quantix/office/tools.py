@@ -4,6 +4,7 @@ import threading
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 
 from pydantic_ai import BinaryContent, ModelRetry, RunContext, ToolReturn
@@ -15,6 +16,7 @@ from quantix.documents import library, readers
 from quantix.documents.models import Document
 from quantix.office import records
 from quantix.office.models import TEAM, Staff
+from quantix.takeoff import records as takeoff
 
 
 class Stopped(Exception):
@@ -226,6 +228,114 @@ def propose_fact(ctx: RunContext[Turn], kind: str, value: str, document_id: str,
     return "Recorded." if ctx.deps.autonomous else "Recorded for the engineer's approval."
 
 
+VIEW_WIDTH = 1600  # view_page images are this many pixels wide; takeoff tools use the same pixels
+
+
+def _points(session: Session, tender_id: str, document_id: str, page: int) -> float:
+    """Page points per view_page pixel."""
+    found = library.page(session, document_id, page)
+    document = session.get(Document, document_id)
+    if not found or not found.width or document is None or document.tender_id != tender_id:
+        raise ValueError("Takeoff works on PDF pages of this tender; check the document id and page.")
+    return found.width / VIEW_WIDTH
+
+
+def _snapped(ctx: RunContext[Turn], session: Session, document_id: str, page: int, pixels, factor: float):
+    """view_page pixels to page points, snapped onto the drawing's own corners and line ends."""
+    path = library.stored_file(ctx.deps.home, session.get(Document, document_id))
+    return takeoff.snap([[x * factor, y * factor] for x, y in pixels], readers.vector_points(path, page))
+
+
+def find_on_page(ctx: RunContext[Turn], document_id: str, page: int, text: str) -> str:
+    """Find where text is printed on a drawing (a dimension, grid label, room name or note), exactly, from the PDF
+    itself. Positions are in view_page pixels: left, top, right, bottom."""
+    with _working(ctx, f"Finding “{text}” on a drawing") as (session, _):
+        factor = _points(session, ctx.deps.tender_id, document_id, page)
+        path = library.stored_file(ctx.deps.home, session.get(Document, document_id))
+    boxes = readers.find_text(path, page, text)
+    if not boxes:
+        return f"“{text}” is not printed on that page as text. Look at the page with view_page instead."
+    return "\n".join(
+        f"“{text}” at left {b[0] / factor:.0f}, top {b[1] / factor:.0f}, "
+        f"right {b[2] / factor:.0f}, bottom {b[3] / factor:.0f}"
+        for b in boxes
+    )
+
+
+def set_scale(
+    ctx: RunContext[Turn],
+    document_id: str,
+    page: int,
+    from_xy: list[float],
+    to_xy: list[float],
+    length_m: float,
+    dimension_text: str,
+) -> str:
+    """Set a drawing's scale from a dimension printed on it: the two ends of the dimension line in view_page pixels,
+    its real length in metres, and the dimension text as printed (e.g. "40.00"). Use find_on_page to locate it."""
+    with _working(ctx, "Setting the scale of a drawing") as (session, me):
+        factor = _points(session, ctx.deps.tender_id, document_id, page)
+        line = _snapped(ctx, session, document_id, page, [from_xy, to_xy], factor)
+        status = "office_approved" if ctx.deps.autonomous else "proposed"
+        scale = takeoff.set_scale(
+            session, ctx.deps.tender_id, me.id, document_id, page, line, length_m, dimension_text, status
+        )
+        return f"Scale set: 1 metre is {1 / scale.metres_per_point / factor:.1f} view_page pixels."
+
+
+def measure(
+    ctx: RunContext[Turn],
+    document_id: str,
+    page: int,
+    kind: str,
+    label: str,
+    points: list[list[float]],
+    unit: str,
+    multiplier_m: float | None = None,
+    boq_item: str | None = None,
+) -> str:
+    """Measure on a drawing whose scale is set. kind is length (a polyline), area (a closed outline) or count (one
+    point per thing counted). Points are in view_page pixels. unit: length m, or m2 with a height as multiplier_m;
+    area m2, or m3 with a thickness; count nr. Link the BOQ item number it belongs to when there is one.
+    Quantix computes the quantity from your points."""
+    with _working(ctx, f"Measuring {label}") as (session, me):
+        factor = _points(session, ctx.deps.tender_id, document_id, page)
+        status = "office_approved" if ctx.deps.autonomous else "proposed"
+        m = takeoff.measure(
+            session,
+            ctx.deps.tender_id,
+            me.id,
+            document_id,
+            page,
+            kind,
+            label,
+            _snapped(ctx, session, document_id, page, points, factor),
+            unit,
+            Decimal(str(multiplier_m)) if multiplier_m is not None else None,
+            boq_item,
+            status,
+        )
+        q = takeoff.quantity(session, m)
+    return (
+        f"Measured {label}: {q} {unit}." if q is not None else "Saved, but the sheet has no scale yet: set_scale first."
+    )
+
+
+def takeoff_summary(ctx: RunContext[Turn]) -> str:
+    """The takeoff so far against the BOQ: each measured item with its takeoff and BOQ quantities and the result."""
+    with _working(ctx, "Comparing the takeoff with the BOQ") as (session, _):
+        rows = takeoff.compare(session, ctx.deps.tender_id)
+    if not rows:
+        return "Nothing has been measured yet."
+    return "\n".join(
+        f"{r.item or '(no BOQ item)'} {r.description[:60]}: "
+        f"takeoff {r.takeoff if r.takeoff is not None else '-'} {r.unit}, "
+        f"BOQ {r.boq_quantity if r.boq_quantity is not None else '-'} {r.boq_unit or ''} "
+        f"→ {r.result.replace('_', ' ')}"
+        for r in rows
+    )
+
+
 COMMON: list[Callable] = [
     list_documents,
     search_documents,
@@ -238,6 +348,10 @@ COMMON: list[Callable] = [
     propose_boq_items,
     list_boq,
     propose_fact,
+    find_on_page,
+    set_scale,
+    measure,
+    takeoff_summary,
 ]
 STAFF: list[Callable] = [*COMMON, complete_task]
 MANAGER: list[Callable] = [*COMMON, hire, assign_task, release]

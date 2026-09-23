@@ -1548,6 +1548,479 @@
           }
         }
       }
+    },
+    "/tenders/{tender_id}/takeoff": {
+      "get": {
+        "tags": [
+          "takeoff"
+        ],
+        "summary": "Get Takeoff",
+        "operationId": "get_takeoff_tenders__tender_id__takeoff_get",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Takeoff"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{document_id}/pages/{number}/sheet": {
+      "get": {
+        "tags": [
+          "takeoff"
+        ],
+        "summary": "Get Sheet",
+        "description": "Any PDF page as a sheet the engineer can measure on.",
+        "operationId": "get_sheet_documents__document_id__pages__number__sheet_get",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Number"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sheet"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{document_id}/pages/{number}/vertices": {
+      "get": {
+        "tags": [
+          "takeoff"
+        ],
+        "summary": "Get Vertices",
+        "description": "The drawing's own corners and line ends, for snapping the engineer's clicks.",
+        "operationId": "get_vertices_documents__document_id__pages__number__vertices_get",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Number"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    }
+                  },
+                  "title": "Response Get Vertices Documents  Document Id  Pages  Number  Vertices Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenders/{tender_id}/scales": {
+      "post": {
+        "tags": [
+          "takeoff"
+        ],
+        "summary": "Set Scale",
+        "operationId": "set_scale_tenders__tender_id__scales_post",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScaleIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScaleOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenders/{tender_id}/measurements": {
+      "post": {
+        "tags": [
+          "takeoff"
+        ],
+        "summary": "Add Measurement",
+        "operationId": "add_measurement_tenders__tender_id__measurements_post",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeasurementIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasurementOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/measurements/{measurement_id}/decision": {
+      "post": {
+        "tags": [
+          "takeoff"
+        ],
+        "summary": "Decide Measurement",
+        "operationId": "decide_measurement_measurements__measurement_id__decision_post",
+        "parameters": [
+          {
+            "name": "measurement_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Measurement Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scales/{scale_id}/decision": {
+      "post": {
+        "tags": [
+          "takeoff"
+        ],
+        "summary": "Decide Scale",
+        "operationId": "decide_scale_scales__scale_id__decision_post",
+        "parameters": [
+          {
+            "name": "scale_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scale Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/measurements/{measurement_id}": {
+      "delete": {
+        "tags": [
+          "takeoff"
+        ],
+        "summary": "Delete Measurement",
+        "description": "The engineer removes a measurement to redo it. It is kept as rejected, not erased.",
+        "operationId": "delete_measurement_measurements__measurement_id__delete",
+        "parameters": [
+          {
+            "name": "measurement_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Measurement Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1652,6 +2125,104 @@
           "model"
         ],
         "title": "CheckRequest"
+      },
+      "ComparisonOut": {
+        "properties": {
+          "boq_item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boq Item Id"
+          },
+          "item": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "boq_quantity": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boq Quantity"
+          },
+          "boq_unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boq Unit"
+          },
+          "takeoff": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Takeoff"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "result": {
+            "type": "string",
+            "title": "Result"
+          },
+          "difference": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Difference"
+          }
+        },
+        "type": "object",
+        "required": [
+          "boq_item_id",
+          "item",
+          "description",
+          "boq_quantity",
+          "boq_unit",
+          "takeoff",
+          "unit",
+          "result",
+          "difference"
+        ],
+        "title": "ComparisonOut"
       },
       "ConnectionCreate": {
         "properties": {
@@ -1965,12 +2536,17 @@
           "facts": {
             "type": "integer",
             "title": "Facts"
+          },
+          "takeoff": {
+            "type": "integer",
+            "title": "Takeoff"
           }
         },
         "type": "object",
         "required": [
           "boq",
-          "facts"
+          "facts",
+          "takeoff"
         ],
         "title": "Gates"
       },
@@ -2065,6 +2641,178 @@
           "source"
         ],
         "title": "ItemOut"
+      },
+      "MeasurementIn": {
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "length",
+              "area",
+              "count"
+            ],
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "points": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Points"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "multiplier": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Multiplier"
+          },
+          "boq_item": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boq Item"
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_id",
+          "page",
+          "kind",
+          "label",
+          "points",
+          "unit"
+        ],
+        "title": "MeasurementIn"
+      },
+      "MeasurementOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "points": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Points"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "multiplier": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Multiplier"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity"
+          },
+          "boq_item": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boq Item"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "proposed_by": {
+            "type": "string",
+            "title": "Proposed By"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "document_id",
+          "page",
+          "kind",
+          "label",
+          "points",
+          "unit",
+          "multiplier",
+          "quantity",
+          "boq_item",
+          "status",
+          "proposed_by"
+        ],
+        "title": "MeasurementOut"
       },
       "MessageIn": {
         "properties": {
@@ -2225,6 +2973,94 @@
         ],
         "title": "PageOut"
       },
+      "ScaleIn": {
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "line": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Line"
+          },
+          "length_m": {
+            "type": "number",
+            "title": "Length M"
+          },
+          "dimension": {
+            "type": "string",
+            "title": "Dimension"
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_id",
+          "page",
+          "line",
+          "length_m",
+          "dimension"
+        ],
+        "title": "ScaleIn"
+      },
+      "ScaleOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "metres_per_point": {
+            "type": "number",
+            "title": "Metres Per Point"
+          },
+          "line": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Line"
+          },
+          "length_m": {
+            "type": "number",
+            "title": "Length M"
+          },
+          "dimension": {
+            "type": "string",
+            "title": "Dimension"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "proposed_by": {
+            "type": "string",
+            "title": "Proposed By"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "metres_per_point",
+          "line",
+          "length_m",
+          "dimension",
+          "status",
+          "proposed_by"
+        ],
+        "title": "ScaleOut"
+      },
       "SearchHit": {
         "properties": {
           "document_id": {
@@ -2312,6 +3148,50 @@
         "type": "object",
         "title": "SettingsUpdate"
       },
+      "Sheet": {
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "width": {
+            "type": "number",
+            "title": "Width"
+          },
+          "height": {
+            "type": "number",
+            "title": "Height"
+          },
+          "scale": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScaleOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_id",
+          "name",
+          "page",
+          "width",
+          "height",
+          "scale"
+        ],
+        "title": "Sheet"
+      },
       "Source": {
         "properties": {
           "document_id": {
@@ -2390,6 +3270,38 @@
           "now"
         ],
         "title": "StaffOut"
+      },
+      "Takeoff": {
+        "properties": {
+          "sheets": {
+            "items": {
+              "$ref": "#/components/schemas/Sheet"
+            },
+            "type": "array",
+            "title": "Sheets"
+          },
+          "measurements": {
+            "items": {
+              "$ref": "#/components/schemas/MeasurementOut"
+            },
+            "type": "array",
+            "title": "Measurements"
+          },
+          "comparison": {
+            "items": {
+              "$ref": "#/components/schemas/ComparisonOut"
+            },
+            "type": "array",
+            "title": "Comparison"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sheets",
+          "measurements",
+          "comparison"
+        ],
+        "title": "Takeoff"
       },
       "TaskOut": {
         "properties": {

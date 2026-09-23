@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from quantix.core.db import Base, UTCDateTime
@@ -40,3 +40,5 @@ class Page(Base):
     text: Mapped[str] = mapped_column(Text)
     search_text: Mapped[str] = mapped_column(Text)
     has_text: Mapped[bool] = mapped_column(Boolean)
+    width: Mapped[float | None] = mapped_column(Float)  # PDF page size in points, for takeoff geometry
+    height: Mapped[float | None] = mapped_column(Float)

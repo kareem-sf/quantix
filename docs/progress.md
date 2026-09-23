@@ -106,4 +106,30 @@ The design was approved.
 - **Checks:** 41 service tests (3 runs in a row), 24 UI tests. A browser run on a scratch folder: proposals from the
   sample Excel BOQ showed on the Overview and the Estimate screen, and Approve all approved them.
 
-Next: quantity takeoff (scale, measurements on drawings, comparison with the BOQ).
+## 23 September 2026: quantity takeoff
+
+- **Scale:** set per sheet by calibrating on a dimension printed on the drawing. The dimension text must really be
+  on the page, and it may be in metres or millimetres. Approving a new scale replaces the sheet's older ones, which
+  also fixed a tie between two scales set within Windows' 15 ms clock tick.
+- **Measurements:** stored as geometry in page points. A length, area or count, optionally times a height (length
+  to m²) or a thickness (area to m³), and optionally linked to a BOQ item. Quantities are never stored: Quantix
+  computes them from the points and the sheet's current scale whenever they are read, so a corrected scale updates
+  the whole sheet. Counts are whole numbers.
+- **Snapping:** Quantix reads the corners and line ends of the lines drawn in each PDF page, and points snap onto
+  them: staff's points within 6 page points, the engineer's clicks within 10 screen pixels. The same clicks on a
+  synthetic plan gave 806.7 m² before snapping and 800.020 m² after, which is exactly what the drawing holds.
+- **Staff tools:**
+  - `find_on_page` gives exact positions of printed text from the PDF.
+  - `set_scale` and `measure` take view_page pixels, which Quantix snaps and converts.
+  - `takeoff_summary` gives the comparison.
+- **Comparison with the BOQ:** each measured item matches (within 2%), differs (with the percentage), has a
+  different unit (Arabic units understood), or the BOQ has no quantity; measurements with no BOQ item show as
+  missing from the BOQ.
+- **Takeoff screen:** a sheet picker, the drawing with every mark (proposed in orange, approved in dark), Length,
+  Area, Count and Scale tools, zoom, and a panel with each quantity, its BOQ result, approve or reject, and remove
+  to redo.
+- **Checks:** 47 service tests (the takeoff tests passed 12 runs in a row), 27 UI tests. A browser run on a
+  synthetic plan set the scale and measured the slab through the real screen, with exact results. The layout was
+  fixed for narrow windows.
+
+Next: estimating (unit rates with sources, build-ups, markups, the company rate library).

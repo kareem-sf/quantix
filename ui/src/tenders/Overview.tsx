@@ -27,6 +27,12 @@ export function Overview() {
       text: "Method of measurement, currency or VAT, as the office read them",
       to: `/tenders/${tenderId}/estimate`,
     },
+    gates.data?.takeoff && {
+      key: "takeoff",
+      title: `${gates.data.takeoff} takeoff ${gates.data.takeoff === 1 ? "mark" : "marks"} to check`,
+      text: "Scales and measurements the team drew on the drawings",
+      to: `/tenders/${tenderId}/takeoff`,
+    },
     gates.data?.boq && {
       key: "boq",
       title: `${gates.data.boq} BOQ ${gates.data.boq === 1 ? "item" : "items"} to approve`,
