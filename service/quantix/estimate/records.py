@@ -92,6 +92,7 @@ def propose_rate(
     elif basis == "estimate":
         if len(note.strip()) < 20:
             raise ValueError("An estimated rate needs its reasoning in the note: outputs, prices and assumptions.")
+        _check_not_settled(session, item)
     else:
         raise ValueError("The basis is quote, library or estimate.")
     # the newest proposal for an item replaces any still waiting, so the engineer decides one rate per line
@@ -117,6 +118,17 @@ def propose_rate(
     if status in APPROVED:
         _replace_older(session, rate)
     return rate
+
+
+def _check_not_settled(session: Session, item: BoqItem) -> None:
+    """A line the engineer has approved takes a new estimate only once they have sent a rate on it back since."""
+    rates = session.scalars(select(Rate).where(Rate.boq_item_id == item.id, Rate.decided_at.is_not(None)))
+    decided = sorted(rates, key=lambda r: r.decided_at)
+    if decided and decided[-1].status == "approved":
+        raise ValueError(
+            f"The engineer approved {rate_of(decided[-1])} for {boq.reference(item)}; a new estimate doesn't replace "
+            "it. If you think it is wrong, say why with raise_concern. A quote for the line can replace it."
+        )
 
 
 def _replace_older(session: Session, record: Rate | Markups) -> None:

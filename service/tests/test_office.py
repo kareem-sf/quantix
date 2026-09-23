@@ -5,7 +5,14 @@ import time
 
 import pytest
 from pydantic_ai.exceptions import ModelAPIError
-from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart, UserPromptPart
+from pydantic_ai.messages import (
+    ModelResponse,
+    RetryPromptPart,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from pydantic_ai.models.function import DeltaToolCall, FunctionModel
 from test_documents import PDF, read_all, upload
 
@@ -408,6 +415,32 @@ def test_each_turn_shows_where_things_stand_and_the_chat_so_far(client, office):
         "Earlier in your chat with the engineer:\n- You: The zero lines are C.21.1 and C.7.1.2.\n"
         "- Engineer: One combined query." in brief
     )
+
+
+def test_a_full_team_gives_new_work_to_the_people_it_has(client, office):
+    from quantix.office import records as office_records
+
+    tender_id, use = office
+    with client.app.state.sessions() as session:
+        office_records.hire(session, tender_id, "Rania Farouk", "Tender Manager", {}, is_manager=True)
+        for name in ("Omar Haddad", "Layla Nasser", "Sami Khoury", "Dana Aziz", "Tariq Saleh"):
+            office_records.hire(session, tender_id, name, "Estimator", {})
+        session.commit()
+    seen: list[str] = []
+
+    def manager(messages, info):
+        seen[:] = [str(p.content) for m in messages for p in m.parts if isinstance(p, RetryPromptPart)]
+        if seen or "You are Rania Farouk" not in info.instructions:
+            return DONE
+        profile = {"discipline": "Pricing", "experience_years": 9, "background": "Priced roads in Riyadh."}
+        profile |= {"working_style": "Builds rates up.", "opinions": "Quotes lie.", "voice": "Short and plain."}
+        return call("hire", name="Hadi Nassar", role="Estimator", **profile)
+
+    use(manager)
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Price the small items."})
+    wait_for(lambda o: seen, client, tender_id)
+    assert seen[0].startswith("The team already has 5 people: Omar Haddad (Estimator)")
+    assert "Hadi Nassar" not in [m["name"] for m in client.get(f"/tenders/{tender_id}/office").json()["staff"]]
 
 
 def test_finishing_a_task_twice_says_what_is_still_open(client, office):

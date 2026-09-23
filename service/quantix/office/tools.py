@@ -24,6 +24,7 @@ from quantix.subcontract import records as subcontract
 from quantix.submission import records as submission
 from quantix.takeoff import records as takeoff
 
+TEAM_LIMIT = 5  # staff under the Manager; a tender's work is shared among a few, not spread across many
 FOREIGN_SCRIPT = re.compile("[぀-ヿ㐀-鿿가-힯]")  # Chinese, Japanese, Korean
 
 
@@ -233,6 +234,12 @@ def hire(
         problems = "; ".join(f"{e['loc'][0]}: {e['msg']}" for e in error.errors())
         raise ModelRetry(f"Make them a real person. {problems}.") from error
     with _working(ctx, f"Hiring a {role}") as (session, me):
+        staff = [m for m in records.team(session, ctx.deps.tender_id) if not m.is_manager]
+        if len(staff) >= TEAM_LIMIT:
+            raise ValueError(
+                f"The team already has {len(staff)} people: {', '.join(f'{m.name} ({m.role})' for m in staff)}. "
+                "Give this work to one of them, or release someone whose work is done first."
+            )
         member = records.hire(session, ctx.deps.tender_id, name, role, profile)
         member.now = "Just joined the team"
         records.post(session, ctx.deps.tender_id, me.id, TEAM, f"{member.name} joins the team as {role}.", "task")

@@ -245,6 +245,21 @@ def test_a_new_proposal_replaces_the_one_still_waiting(client, tender):
         assert session.get(Rate, second).status == "proposed"
 
 
+def test_an_approved_line_takes_a_new_estimate_only_after_the_engineer_sends_one_back(client, tender):
+    tender_id, priya, quote = tender
+    lines = [estimate.LineIn(**line) for line in BUILD_UP]
+    approved = price(client, tender_id, priya, "4.3", "estimate", "Outputs from the last school job.", lines=lines)
+    client.post(f"/rates/{approved}/decision", json={"approve": True})
+    with pytest.raises(ValueError, match="The engineer approved 3488.00 for 4.3; a new estimate doesn't replace it"):
+        price(client, tender_id, priya, "4.3", "estimate", "Outputs from another job.", unit_rate=Decimal(3000))
+    quoted = price(  # a quote may still challenge it
+        client, tender_id, priya, "4.3", "quote", "Quoted.", lines=lines, document_id=quote, page=1,
+        quote="Rebar B500B cut and bent 2,300.00",
+    )  # fmt: skip
+    client.post(f"/rates/{quoted}/decision", json={"approve": False, "reason": "Redo the fixing outputs."})
+    price(client, tender_id, priya, "4.3", "estimate", "Fixing outputs redone as asked.", unit_rate=Decimal(3400))
+
+
 def test_approve_all_and_send_a_rate_back(client, tender):
     tender_id, priya, _ = tender
     price(client, tender_id, priya, "3.1", "estimate", "Plant 4.5 m3/hr at 83.25 per hour.", unit_rate=Decimal("18.50"))
