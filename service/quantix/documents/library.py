@@ -141,7 +141,7 @@ class Reader:
             session.commit()
             if claimed.rowcount == 0:
                 return True
-            path, kind = stored_file(self.home, document), document.kind
+            path, kind, document_id = stored_file(self.home, document), document.kind, document.id
             try:
                 pages = readers.read_file(path, kind)
             except readers.Unreadable as reason:
@@ -151,31 +151,41 @@ class Reader:
                 outcome, note, pages = "failed", "Quantix couldn't read this file.", []
             else:
                 outcome, note = "read", None
-            if outcome == "read":
-                for p in pages:
-                    session.add(
-                        Page(
-                            document_id=document.id,
-                            number=p.number,
-                            text=p.text,
-                            search_text=searchable(p.text),
-                            has_text=p.has_text,
-                            width=p.width,
-                            height=p.height,
+            try:
+                if outcome == "read":
+                    for p in pages:
+                        session.add(
+                            Page(
+                                document_id=document.id,
+                                number=p.number,
+                                text=p.text,
+                                search_text=searchable(p.text),
+                                has_text=p.has_text,
+                                width=p.width,
+                                height=p.height,
+                            )
                         )
-                    )
-                scans = sum(not p.has_text for p in pages)
-                if kind == "pdf" and scans:
-                    note = (
-                        f"{scans} of {len(pages)} pages are scans without text. "
-                        "The office reads them from the page image."
-                    )
-            session.execute(
-                update(Document)
-                .where(Document.id == document.id, Document.status == "reading")
-                .values(status=outcome, note=note)
-            )
-            if outcome == "read":
-                session.execute(update(Document).where(Document.id == document.id).values(page_count=len(pages)))
-            session.commit()
+                    scans = sum(not p.has_text for p in pages)
+                    if kind == "pdf" and scans:
+                        note = (
+                            f"{scans} of {len(pages)} pages are scans without text. "
+                            "The office reads them from the page image."
+                        )
+                session.execute(
+                    update(Document)
+                    .where(Document.id == document.id, Document.status == "reading")
+                    .values(status=outcome, note=note)
+                )
+                if outcome == "read":
+                    session.execute(update(Document).where(Document.id == document.id).values(page_count=len(pages)))
+                session.commit()
+            except Exception:  # noqa: BLE001  (one bad file must never stop the reader for every other file)
+                session.rollback()
+                log.exception("Saving %s failed", document_id)
+                session.execute(
+                    update(Document)
+                    .where(Document.id == document_id, Document.status == "reading")
+                    .values(status="failed", note="Quantix couldn't read this file.")
+                )
+                session.commit()
             return True

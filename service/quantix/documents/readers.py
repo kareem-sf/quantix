@@ -61,12 +61,21 @@ def read_file(path: Path, kind: str) -> list[PageText]:
     if kind in UNREADABLE:
         raise Unreadable(UNREADABLE[kind])
     if kind == "pdf":
-        return _pdf(path)
-    if kind == "spreadsheet":
-        return _spreadsheet(path)
-    if kind == "word":
-        return _word(path)
-    return [PageText(1, "", has_text=False)]  # an image: the office reads it by looking at it
+        pages = _pdf(path)
+    elif kind == "spreadsheet":
+        pages = _spreadsheet(path)
+    elif kind == "word":
+        pages = _word(path)
+    else:
+        return [PageText(1, "", has_text=False)]  # an image: the office reads it by looking at it
+    for page in pages:
+        page.text = clean_text(page.text)
+    return pages
+
+
+def clean_text(text: str) -> str:
+    """Some PDFs give characters as UTF-16 halves: join the pairs, and replace a half left on its own."""
+    return text.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
 
 
 def _pdf(path: Path) -> list[PageText]:

@@ -5,6 +5,8 @@ import docx
 import openpyxl
 import pytest
 
+from quantix.documents import library, readers
+
 
 def make_pdf(pages: list[list[str]]) -> bytes:
     """A small, valid PDF with one Helvetica text line per entry; an empty page stands in for a scan."""
@@ -153,3 +155,24 @@ def test_page_images_and_originals(client, tender):
 
 def test_rejects_paths_that_leave_the_package(client, tender):
     assert upload(client, tender, {"../outside.pdf": PDF}).status_code == 400
+
+
+def test_broken_characters_in_pdf_text_are_repaired():
+    split_emoji, lone_half = "😀", "\udc00"  # how some PDFs hand characters over
+    assert readers.clean_text(f"a{split_emoji}b{lone_half}c") == "a\U0001f600b�c"
+
+
+def test_one_file_that_cannot_be_saved_never_stops_the_reader(client, tender, monkeypatch):
+    real = readers.read_file
+
+    def read_file(path, kind):
+        pages = real(path, kind)
+        if "Broken text" in pages[0].text:
+            pages[0].text += " with a lone \udc00 half"  # what crashed the reader on a real package
+        return pages
+
+    monkeypatch.setattr(library.readers, "read_file", read_file)
+    upload(client, tender, {"Bad.pdf": make_pdf([["Broken text"]]), "Good.pdf": make_pdf([["Good text"]])})
+    read_all(client, tender)
+    statuses = {d["name"]: d["status"] for d in client.get(f"/tenders/{tender}/documents").json()}
+    assert statuses == {"Bad.pdf": "failed", "Good.pdf": "read"}
