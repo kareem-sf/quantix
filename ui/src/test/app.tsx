@@ -9,6 +9,7 @@ import type { BoqItem, Fact, LibraryEntry, Markups, Priced, Summary } from "../e
 import type { Decision, Message, Staff, Task } from "../office/queries";
 import type { Comparison, Measurement, Sheet } from "../takeoff/queries";
 import type { Connection, OfficeSettings } from "../settings/queries";
+import type { Company, Package } from "../subcontract/queries";
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -37,6 +38,8 @@ export interface FakeState {
   summary: Summary | null;
   markups: Markups | null;
   library: LibraryEntry[];
+  packages: Package[];
+  directory: Company[];
   decided: { id: string; approve: boolean; save_to_library?: boolean }[];
   /** Answer the next POST to this path with this error detail. */
   fail: Record<string, string>;
@@ -67,6 +70,8 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     summary: null,
     markups: null,
     library: [],
+    packages: [],
+    directory: [],
     decided: [],
     fail: {},
     ...initial,
@@ -171,6 +176,27 @@ export function fakeService(initial: Partial<FakeState> = {}) {
       state.library = state.library.filter((l) => `/library/${l.id}` !== path);
       return new Response(null, { status: 204 });
     }
+    if (path.match(/^\/tenders\/\w+\/packages$/)) return json(state.packages);
+    const choice = path.match(/^\/packages\/(\w+)\/choice$/);
+    if (choice) {
+      state.packages.find((p) => p.id === choice[1])!.selected_quote_id = body.quote_id;
+      return json(null);
+    }
+    const sent = path.match(/^\/enquiries\/(\w+)\/sent$/);
+    if (sent) {
+      for (const p of state.packages) for (const e of p.enquiries) if (e.id === sent[1]) e.status = "sent";
+      return json(null);
+    }
+    if (path === "/directory" && method === "GET") return json(state.directory);
+    if (path === "/directory" && method === "POST") {
+      const company = { id: `co${state.directory.length + 1}`, added_by: "engineer", ...body };
+      state.directory.push(company);
+      return json(company, 201);
+    }
+    if (path.startsWith("/directory/") && method === "DELETE") {
+      state.directory = state.directory.filter((c) => `/directory/${c.id}` !== path);
+      return new Response(null, { status: 204 });
+    }
     if (path.match(/^\/tenders\/\w+\/takeoff$/))
       return json({ sheets: state.sheets, measurements: state.measurements, comparison: state.comparison });
     if (path.match(/^\/documents\/\w+\/pages\/\d+\/vertices$/)) return json([[101, 101]]);
@@ -194,7 +220,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     if (path.match(/^\/tenders\/\w+\/boq$/)) return json({ items: state.items, facts: state.facts });
     if (path.match(/^\/tenders\/\w+\/gates$/)) {
       const count = (list: { status: string }[]) => list.filter((r) => r.status === "proposed").length;
-      return json({ boq: count(state.items), facts: count(state.facts), takeoff: count(state.measurements), pricing: 0 });
+      return json({ boq: count(state.items), facts: count(state.facts), takeoff: count(state.measurements), pricing: 0, subcontract: 0 });
     }
     if (path.match(/^\/tenders\/\w+\/boq\/approve-all$/)) {
       const waiting = state.items.filter((i) => i.status === "proposed");

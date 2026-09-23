@@ -665,6 +665,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tenders/{tender_id}/packages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Packages */
+        get: operations["get_packages_tenders__tender_id__packages_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/enquiries/{enquiry_id}/sent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark Sent */
+        post: operations["mark_sent_enquiries__enquiry_id__sent_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/packages/{package_id}/choice": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Choose */
+        post: operations["choose_packages__package_id__choice_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/directory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Directory */
+        get: operations["get_directory_directory_get"];
+        put?: never;
+        /** Add Company */
+        post: operations["add_company_directory_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/directory/{company_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove Company */
+        delete: operations["remove_company_directory__company_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -702,6 +788,47 @@ export interface components {
         CheckRequest: {
             /** Model */
             model: string;
+        };
+        /** Choice */
+        Choice: {
+            /** Quote Id */
+            quote_id: string;
+        };
+        /** CompanyIn */
+        CompanyIn: {
+            /** Name */
+            name: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "subcontractor" | "supplier";
+            /** Trades */
+            trades: string;
+            /** Email */
+            email?: string | null;
+            /** Phone */
+            phone?: string | null;
+        };
+        /** CompanyOut */
+        CompanyOut: {
+            /** Name */
+            name: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "subcontractor" | "supplier";
+            /** Trades */
+            trades: string;
+            /** Email */
+            email?: string | null;
+            /** Phone */
+            phone?: string | null;
+            /** Id */
+            id: string;
+            /** Added By */
+            added_by: string;
         };
         /** ComparisonOut */
         ComparisonOut: {
@@ -808,12 +935,40 @@ export interface components {
             /** Description */
             description: string | null;
         };
+        /** EnquiryOut */
+        EnquiryOut: {
+            /** Id */
+            id: string;
+            /** Company */
+            company: string;
+            /** Email */
+            email: string | null;
+            /** Subject */
+            subject: string;
+            /** Body */
+            body: string;
+            /** Status */
+            status: string;
+            /** Created By */
+            created_by: string;
+        };
         /** EstimateOut */
         EstimateOut: {
             /** Items */
             items: components["schemas"]["PricedItem"][];
             markups: components["schemas"]["MarkupsOut"] | null;
             summary: components["schemas"]["SummaryOut"];
+        };
+        /** ExclusionOut */
+        ExclusionOut: {
+            /** Description */
+            description: string;
+            /** Amount */
+            amount: string;
+            /** Page */
+            page: number;
+            /** Quote */
+            quote: string;
         };
         /** FactOut */
         FactOut: {
@@ -841,6 +996,8 @@ export interface components {
             takeoff: number;
             /** Pricing */
             pricing: number;
+            /** Subcontract */
+            subcontract: number;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1057,6 +1214,46 @@ export interface components {
             /** Waiting */
             waiting: number;
         };
+        /** PackageItem */
+        PackageItem: {
+            /** Id */
+            id: string;
+            /** Item */
+            item: string;
+            /** Description */
+            description: string;
+            /** Unit */
+            unit: string;
+            /** Quantity */
+            quantity: string | null;
+            /** Our Rate */
+            our_rate: string | null;
+        };
+        /** PackageOut */
+        PackageOut: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Kind */
+            kind: string;
+            /** Items */
+            items: components["schemas"]["PackageItem"][];
+            /** Enquiries */
+            enquiries: components["schemas"]["EnquiryOut"][];
+            /** Quotes */
+            quotes: components["schemas"]["QuoteOut"][];
+            /** Recommended Quote Id */
+            recommended_quote_id: string | null;
+            /** Recommendation */
+            recommendation: string | null;
+            /** Recommended By */
+            recommended_by: string | null;
+            /** Selected Quote Id */
+            selected_quote_id: string | null;
+            /** Created By */
+            created_by: string;
+        };
         /** PageOut */
         PageOut: {
             /** Number */
@@ -1085,6 +1282,46 @@ export interface components {
             rate: components["schemas"]["RateOut"] | null;
             /** Amount */
             amount: string | null;
+        };
+        /** QuoteOut */
+        QuoteOut: {
+            /** Id */
+            id: string;
+            /** Company */
+            company: string;
+            /** Document Id */
+            document_id: string;
+            /** Document */
+            document: string;
+            /** Cells */
+            cells: {
+                [key: string]: components["schemas"]["QuotedCell"];
+            };
+            /** Exclusions */
+            exclusions: components["schemas"]["ExclusionOut"][];
+            /** Quoted Total */
+            quoted_total: string;
+            /** Exclusions Total */
+            exclusions_total: string;
+            /** Levelled Total */
+            levelled_total: string | null;
+            /** Rank */
+            rank: number | null;
+            /** Proposed By */
+            proposed_by: string;
+        };
+        /** QuotedCell */
+        QuotedCell: {
+            /** Rate */
+            rate: string | null;
+            /** Amount */
+            amount: string | null;
+            /** Plugged */
+            plugged: boolean;
+            /** Page */
+            page: number | null;
+            /** Quote */
+            quote: string | null;
         };
         /** RateDecision */
         RateDecision: {
@@ -2797,6 +3034,208 @@ export interface operations {
             };
             path: {
                 resource_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_packages_tenders__tender_id__packages_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackageOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mark_sent_enquiries__enquiry_id__sent_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                enquiry_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    choose_packages__package_id__choice_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                package_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Choice"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_directory_directory_get: {
+        parameters: {
+            query?: {
+                q?: string;
+            };
+            header?: {
+                authorization?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_company_directory_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompanyIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_company_directory__company_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                company_id: string;
             };
             cookie?: never;
         };

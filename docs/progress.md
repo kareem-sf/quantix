@@ -158,4 +158,34 @@ The design was approved.
   build-up of 293.55 + 114.00 + 63.00 = 470.55, an amount of 146,999.82, and a summary down to 237,131.82 including
   VAT, all checked by hand.
 
-Next: subcontract and supplier quotes (packages, enquiry drafts, quote levelling, selection).
+## 23 September 2026: subcontract and supplier quotes
+
+- **Directory:** the firm's subcontractors and suppliers, kept across tenders. Staff search it and add companies
+  (for example from the tender's approved vendor list); the engineer adds and removes them on the Directory screen.
+  A company with an enquiry or quote on a tender is kept.
+- **Packages:** staff group BOQ items into subcontract or supply packages with `create_package`.
+- **Enquiries:** staff draft them with `draft_enquiry`. The engineer opens a draft in their own mail program (or
+  copies it) and marks it sent. Quantix never sends mail.
+- **Quotes:** `record_quote` keeps each quoted rate with its page and line, checked against the quote document. The
+  rate must appear in the line. Exclusions are kept with their line and the office's estimate of what they add. A
+  revised quote from the same company replaces the earlier one.
+- **Levelling (computed, never stored):** each quote's amounts are the BOQ quantity × the quoted rate, to the cent.
+  Gaps are filled with our own rate and flagged. Our rate is never one taken from the package's own quotes, even
+  after one is chosen. Exclusions are added back, and quotes are ranked on the levelled total. A gap with no rate of
+  ours leaves the total incomplete and unranked.
+- **Choice:**
+  - Staff recommend a quote with their reasons; the choice is the engineer's (a new Subcontract gate).
+  - Choosing puts the quoted rates into the estimate as approved quote rates, each with its line as evidence.
+  - The Manager is told, including any exclusions still to cover.
+  - In Fully autonomous mode the office chooses itself, marked as office-approved.
+- **Screens:**
+  - Subcontract: package tabs, the levelling table with every rate one click from its page, the recommendation,
+    enquiry drafts, and "Choose". The side panel stacks below the table on windows narrower than 1280 px.
+  - A Directory screen.
+  - A Subcontract line on the Overview.
+- **Checks:** 57 service tests, including hand-checked levelling: Gulf 21,080.00 + 34,300.00 + 5,000.00 =
+  60,380.00; Najd 20,460.00 + 37,240.00 plug = 57,700.00. Also 34 UI tests. A browser run on a scratch folder
+  showed the table, opened the mail draft, marked it sent, and chose Najd; item 3.1 then priced at 20,460.00 in the
+  estimate. That run found "Our rate" switching to the chosen quote's rate; this is fixed and covered by a test.
+
+Next: submission (requirements checklist, drafted documents, priced BOQ in the client's format, export package).

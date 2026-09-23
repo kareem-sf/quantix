@@ -12,6 +12,7 @@ from quantix.documents.models import Document
 from quantix.estimate import records as estimate
 from quantix.office import records as office
 from quantix.office.models import ENGINEER
+from quantix.subcontract import records as subcontract
 from quantix.takeoff import records as takeoff
 
 router = APIRouter(tags=["boq"])
@@ -62,6 +63,7 @@ class Gates(BaseModel):
     facts: int
     takeoff: int
     pricing: int
+    subcontract: int
 
 
 class Approved(BaseModel):
@@ -128,6 +130,7 @@ def gates(tender_id: str, session: DB) -> Gates:
         **records.waiting_counts(session, tender_id),
         takeoff=takeoff.waiting(session, tender_id),
         pricing=estimate.waiting(session, tender_id),
+        subcontract=subcontract.waiting(session, tender_id),
     )
 
 

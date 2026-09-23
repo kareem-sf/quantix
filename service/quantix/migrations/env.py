@@ -5,6 +5,7 @@ from quantix.core.db import Base
 from quantix.documents.models import Document  # noqa: F401
 from quantix.estimate.models import Rate  # noqa: F401
 from quantix.office.models import Staff  # noqa: F401
+from quantix.subcontract.models import Package  # noqa: F401
 from quantix.takeoff.models import Scale  # noqa: F401
 from quantix.tenders import Tender  # noqa: F401
 

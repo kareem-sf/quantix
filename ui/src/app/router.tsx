@@ -6,6 +6,8 @@ import { Takeoff } from "../takeoff/Takeoff";
 import { DecisionPage } from "../office/DecisionPage";
 import { Office } from "../office/Office";
 import { Settings } from "../settings/Settings";
+import { Directory } from "../subcontract/Directory";
+import { Subcontract } from "../subcontract/Subcontract";
 import { NewTender } from "../tenders/NewTender";
 import { Overview } from "../tenders/Overview";
 import { useTenders } from "../tenders/queries";
@@ -54,9 +56,11 @@ export const routes: RouteObject[] = [
       { path: "/tenders/:tenderId/office", element: <Office /> },
       { path: "/tenders/:tenderId/takeoff", element: <Takeoff /> },
       { path: "/tenders/:tenderId/estimate", element: <Estimate /> },
+      { path: "/tenders/:tenderId/subcontract", element: <Subcontract /> },
       { path: "/tenders/:tenderId/decisions/:decisionId", element: <DecisionPage /> },
       { path: "/settings", element: <Settings /> },
       { path: "/library", element: <Library /> },
+      { path: "/directory", element: <Directory /> },
     ],
   },
 ];
