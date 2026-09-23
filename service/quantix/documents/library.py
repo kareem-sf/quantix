@@ -132,8 +132,15 @@ class Reader:
             document = session.scalars(select(Document).where(Document.status == "waiting").limit(1)).first()
             if document is None:
                 return False
-            document.status = "reading"
+            # Conditional updates, so a newer copy that replaces this one meanwhile is never overwritten.
+            claimed = session.execute(
+                update(Document)
+                .where(Document.id == document.id, Document.status == "waiting")
+                .values(status="reading")
+            )
             session.commit()
+            if claimed.rowcount == 0:
+                return True
             path, kind = stored_file(self.home, document), document.kind
             try:
                 pages = readers.read_file(path, kind)
@@ -144,10 +151,6 @@ class Reader:
                 outcome, note, pages = "failed", "Quantix couldn't read this file.", []
             else:
                 outcome, note = "read", None
-            session.refresh(document)
-            if document.status == "reading":  # a newer copy may have replaced it meanwhile
-                document.status = outcome
-                document.note = note
             if outcome == "read":
                 for p in pages:
                     session.add(
@@ -162,11 +165,17 @@ class Reader:
                         )
                     )
                 scans = sum(not p.has_text for p in pages)
-                document.page_count = len(pages)
-                if kind == "pdf" and scans and document.status == "read":
-                    document.note = (
+                if kind == "pdf" and scans:
+                    note = (
                         f"{scans} of {len(pages)} pages are scans without text. "
                         "The office reads them from the page image."
                     )
+            session.execute(
+                update(Document)
+                .where(Document.id == document.id, Document.status == "reading")
+                .values(status=outcome, note=note)
+            )
+            if outcome == "read":
+                session.execute(update(Document).where(Document.id == document.id).values(page_count=len(pages)))
             session.commit()
             return True
