@@ -189,3 +189,20 @@ def test_staff_propose_items_through_their_tool(client, package, tmp_path):
     wait_for(lambda o: client.get(f"/tenders/{tender_id}/gates").json()["boq"] == 1, client, tender_id)
     [item] = client.get(f"/tenders/{tender_id}/boq").json()["items"]
     assert (item["item"], item["quantity"], item["unit"]) == ("3.1", "1240.0000", "m3")
+
+
+def test_bills_that_reuse_item_numbers_are_told_apart_by_section(client, package, qs):
+    tender_id, bill, _ = package
+    report = propose(
+        client, tender_id, qs, [line(bill, section="8485 · Earthwork"), line(bill, section="8485 · Earthwork")]
+    )
+    assert "start the section with that bill's name" in report
+    propose(client, tender_id, qs, [line(bill, section="8486 · Earthwork")])
+    with client.app.state.sessions() as session:
+        with pytest.raises(
+            ValueError, match="Item 3.1 is in more than one bill: “8485 · Earthwork”, “8486 · Earthwork”"
+        ):
+            records.find_item(session, tender_id, "3.1")
+        assert records.find_item(session, tender_id, "8486 · earthwork / 3.1").section == "8486 · Earthwork"
+        with pytest.raises(ValueError, match="There is no BOQ item 8487 / 3.1"):
+            records.find_item(session, tender_id, "8487 / 3.1")

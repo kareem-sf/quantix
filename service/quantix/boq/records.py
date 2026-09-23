@@ -18,7 +18,11 @@ ACTIVE = ("proposed", *APPROVED)
 class ItemIn(BaseModel):
     """One BOQ line as the client wrote it."""
 
-    section: str | None = Field(default=None, description="The BOQ section or bill heading, if any")
+    section: str | None = Field(
+        default=None,
+        description="The BOQ section or bill heading. When the package has several bills that reuse item numbers "
+        '(one per building or substation), start it with the bill\'s name, e.g. "8485 · Asphalt"',
+    )
     item: str = Field(description="The item number exactly as printed, e.g. 3.1 or C-2.4")
     description: str = Field(description="The item description, shortened if long, in the document's language")
     unit: str = Field(description="The unit exactly as printed, e.g. m3, م3, nr")
@@ -44,7 +48,10 @@ def propose_items(session: Session, tender_id: str, by: Staff, items: list[ItemI
             if line.quantity is not None and line.quantity not in numbers_in(line.quote):
                 raise ValueError(f"the quantity {line.quantity} is not in the quote")
             if (line.section or "", line.item.strip()) in taken:
-                raise ValueError("it is already in the BOQ")
+                raise ValueError(
+                    "it is already in the BOQ under this section; if it belongs to another bill (another building "
+                    "or substation), start the section with that bill's name"
+                )
         except ValueError as error:
             problems.append(f"item {line.item}: {error}")
             continue
@@ -69,6 +76,21 @@ def propose_items(session: Session, tender_id: str, by: Staff, items: list[ItemI
         saved += 1
     report = f"Saved {saved} BOQ items for the engineer's approval." if not autonomous else f"Saved {saved} items."
     return report + ("\nNot saved: " + "; ".join(problems) if problems else "")
+
+
+def find_item(session: Session, tender_id: str, reference: str) -> BoqItem:
+    """A BOQ item by its number, or by "<section> / <number>" when several bills share the number."""
+    section, _, number = reference.strip().rpartition(" / ")
+    query = select(BoqItem).where(
+        BoqItem.tender_id == tender_id, BoqItem.item == number.strip(), BoqItem.status.in_(ACTIVE)
+    )
+    found = [i for i in session.scalars(query) if not section or (i.section or "").lower() == section.lower()]
+    if not found:
+        raise ValueError(f"There is no BOQ item {reference}. Use list_boq to see the items.")
+    if len(found) > 1:
+        sections = ", ".join(f"“{i.section or 'no section'}”" for i in found)
+        raise ValueError(f"Item {number} is in more than one bill: {sections}. Give it as “<section> / {number}”.")
+    return found[0]
 
 
 def items(session: Session, tender_id: str) -> list[BoqItem]:

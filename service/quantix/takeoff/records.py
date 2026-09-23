@@ -9,6 +9,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from quantix.boq import records as boq
 from quantix.boq.models import APPROVED, BoqItem
 from quantix.documents import library
 from quantix.documents.models import Document, Page
@@ -143,14 +144,7 @@ def measure(
         )
     item_id = None
     if boq_item:
-        item = session.scalars(
-            select(BoqItem).where(
-                BoqItem.tender_id == tender_id, BoqItem.item == boq_item.strip(), BoqItem.status.in_(LIVE)
-            )
-        ).first()
-        if item is None:
-            raise ValueError(f"There is no BOQ item {boq_item}. Use list_boq to see the items.")
-        item_id = item.id
+        item_id = boq.find_item(session, tender_id, boq_item).id
     measurement = Measurement(
         tender_id=tender_id,
         document_id=document_id,

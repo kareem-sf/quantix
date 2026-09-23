@@ -70,14 +70,7 @@ def find_package(session: Session, tender_id: str, name: str) -> Package:
 
 
 def _item(session: Session, tender_id: str, number: str) -> BoqItem:
-    item = session.scalars(
-        select(BoqItem).where(
-            BoqItem.tender_id == tender_id, BoqItem.item == number.strip(), BoqItem.status.in_(boq.ACTIVE)
-        )
-    ).first()
-    if item is None:
-        raise ValueError(f"There is no BOQ item {number}. Use list_boq to see the items.")
-    return item
+    return boq.find_item(session, tender_id, number)
 
 
 def create_package(session: Session, tender_id: str, by: str, name: str, kind: str, item_numbers: list[str]) -> Package:

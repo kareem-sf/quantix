@@ -73,13 +73,7 @@ def propose_rate(
     library_id: str | None = None,
     status: str = "proposed",
 ) -> Rate:
-    item = session.scalars(
-        select(BoqItem).where(
-            BoqItem.tender_id == tender_id, BoqItem.item == item_number.strip(), BoqItem.status.in_(boq.ACTIVE)
-        )
-    ).first()
-    if item is None:
-        raise ValueError(f"There is no BOQ item {item_number}. Use list_boq to see the items.")
+    item = boq.find_item(session, tender_id, item_number)
     if (unit_rate is None) == (not lines):
         raise ValueError("Give either a unit rate or a build-up of lines, not both.")
     if basis == "quote":
