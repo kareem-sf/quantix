@@ -21,6 +21,7 @@ router = APIRouter(tags=["takeoff"])
 class ScaleOut(BaseModel):
     id: str
     metres_per_point: float
+    ratio: int  # 1:n at the sheet's printed size, to check against the title block
     line: list[list[float]]
     length_m: float
     dimension: str
@@ -105,6 +106,7 @@ def _scale(scale: Scale | None) -> ScaleOut | None:
     return ScaleOut(
         id=scale.id,
         metres_per_point=scale.metres_per_point,
+        ratio=records.drawing_ratio(scale.metres_per_point),
         line=scale.line,
         length_m=scale.length_m,
         dimension=scale.dimension,

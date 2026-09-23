@@ -76,6 +76,10 @@ def propose_rate(
     item = boq.find_item(session, tender_id, item_number)
     if (unit_rate is None) == (not lines):
         raise ValueError("Give either a unit rate or a build-up of lines, not both.")
+    if (unit_rate is not None and unit_rate <= 0) or any(line.rate <= 0 or line.quantity <= 0 for line in lines or []):
+        raise ValueError(
+            "A rate must be more than zero. If you have no basis for a rate yet, say so instead of proposing one."
+        )
     if basis == "quote":
         if not (document_id and page and quote):
             raise ValueError("A quoted rate needs the document, page and the quoted line.")

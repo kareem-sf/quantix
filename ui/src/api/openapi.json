@@ -5760,6 +5760,10 @@
             "type": "number",
             "title": "Metres Per Point"
           },
+          "ratio": {
+            "type": "integer",
+            "title": "Ratio"
+          },
           "line": {
             "items": {
               "items": {
@@ -5791,6 +5795,7 @@
         "required": [
           "id",
           "metres_per_point",
+          "ratio",
           "line",
           "length_m",
           "dimension",

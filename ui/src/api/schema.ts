@@ -1679,6 +1679,8 @@ export interface components {
             id: string;
             /** Metres Per Point */
             metres_per_point: number;
+            /** Ratio */
+            ratio: number;
             /** Line */
             line: number[][];
             /** Length M */

@@ -239,7 +239,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     if (sheet) return json(state.sheets.find((s) => s.document_id === sheet[1] && s.page === Number(sheet[2])));
     if (path.match(/^\/tenders\/\w+\/scales$/)) {
       state.scales.push(body);
-      return json({ id: "sc1", metres_per_point: 0.1, status: "approved", proposed_by: "engineer", ...body }, 201);
+      return json({ id: "sc1", metres_per_point: 0.1, ratio: 283, status: "approved", proposed_by: "engineer", ...body }, 201);
     }
     if (path.match(/^\/tenders\/\w+\/measurements$/)) {
       const m = { id: `m${state.measurements.length + 1}`, quantity: null, status: "approved", proposed_by: "engineer", ...body };

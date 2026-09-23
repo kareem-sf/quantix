@@ -25,6 +25,7 @@ const scaled: Sheet = {
   scale: {
     id: "sc1",
     metres_per_point: 0.1,
+    ratio: 283,
     line: [],
     length_m: 40,
     dimension: "40.00",
@@ -153,6 +154,7 @@ describe("Takeoff", () => {
     expect(await within(panel).findByText("3 nr")).toBeInTheDocument();
     expect(within(panel).getByText("Differs -40.0%")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Approve scale" })).toBeInTheDocument();
+    expect(screen.getByText("· about 1:283")).toBeInTheDocument(); // to compare with the title block
 
     await userEvent.click(within(panel).getByRole("button", { name: "Approve" }));
     await waitFor(() => expect(service.state.measurements[0].status).toBe("approved"));

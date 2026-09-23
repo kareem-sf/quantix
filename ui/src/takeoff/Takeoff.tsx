@@ -230,6 +230,9 @@ function ScaleNote({ tenderId, sheet }: { tenderId: string; sheet: Sheet }) {
   return (
     <span className="flex items-center gap-2 text-ink-2">
       Scale checked on the {sheet.scale.dimension} dimension
+      <span className="text-ink-3" title="At the sheet's printed size: compare it with the scale in the title block">
+        · about 1:{sheet.scale.ratio.toLocaleString("en-US")}
+      </span>
       {sheet.scale.status === "proposed" && (
         <button onClick={() => decide.mutate({ id: sheet.scale!.id, approve: true })} className="font-medium text-ink">
           Approve scale

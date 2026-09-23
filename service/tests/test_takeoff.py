@@ -212,6 +212,18 @@ def test_staff_measure_through_their_tools(client, sheet, tmp_path):
                     "boq_item": "5.1",
                 },
             ),
+            ToolCallPart(
+                "measure",
+                {
+                    "document_id": drawing,
+                    "page": 1,
+                    "kind": "area",
+                    "label": "Ground slab",
+                    "points": [[100 * px, 100 * px], [500 * px, 100 * px], [500 * px, 300 * px], [100 * px, 300 * px]],
+                    "unit": "m2",
+                    "boq_item": "6.1",
+                },
+            ),
         ]
         seen[:] = done
         return (
@@ -226,11 +238,13 @@ def test_staff_measure_through_their_tools(client, sheet, tmp_path):
         office.post(session, tender_id, "engineer", qs_id, "Omar, measure the external wall on A-101.")
         session.commit()
     client.app.state.office.engineer_spoke(tender_id)
-    wait_for(lambda o: client.get(f"/tenders/{tender_id}/gates").json()["takeoff"] == 2, client, tender_id)
+    wait_for(lambda o: client.get(f"/tenders/{tender_id}/gates").json()["takeoff"] == 3, client, tender_id)
 
     assert seen[0].startswith("“40.00” at left")
+    assert "about 1:283 at the sheet's printed size" in seen[1]  # 400 points = 40 m, on paper 141 mm for 40 m
     assert seen[2] == "Measured External wall: 40.000 m."
-    [m] = client.get(f"/tenders/{tender_id}/takeoff").json()["measurements"]
+    assert seen[3].startswith("Measured Ground slab: 800.000 m2. That is 16.00 times the BOQ quantity of 50 m2")
+    m = client.get(f"/tenders/{tender_id}/takeoff").json()["measurements"][0]
     assert (m["status"], m["quantity"], m["boq_item"]) == ("proposed", "40.000", "5.1")
 
 

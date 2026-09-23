@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from quantix import company
 from quantix.boq import records as boq
-from quantix.boq.models import FACT_KINDS
+from quantix.boq.models import FACT_KINDS, BoqItem
 from quantix.documents import library, readers
 from quantix.documents.models import Document
 from quantix.estimate import records as estimate
@@ -348,7 +348,11 @@ def set_scale(
         scale = takeoff.set_scale(
             session, ctx.deps.tender_id, me.id, document_id, page, line, length_m, dimension_text, status
         )
-        return f"Scale set: 1 metre is {1 / scale.metres_per_point / factor:.1f} view_page pixels."
+        return (
+            f"Scale set: 1 metre is {1 / scale.metres_per_point / factor:.1f} view_page pixels, about "
+            f"1:{takeoff.drawing_ratio(scale.metres_per_point):,} at the sheet's printed size. Check that against the "
+            "scale in the title block, and measure a second known dimension before you rely on it."
+        )
 
 
 def measure(
@@ -386,9 +390,19 @@ def measure(
             status,
         )
         q = takeoff.quantity(session, m)
-    return (
-        f"Measured {label}: {q} {unit}." if q is not None else "Saved, but the sheet has no scale yet: set_scale first."
-    )
+        item = session.get(BoqItem, m.boq_item_id) if m.boq_item_id else None
+    if q is None:
+        return "Saved, but the sheet has no scale yet: set_scale first."
+    report = f"Measured {label}: {q} {unit}."
+    if item and item.quantity and takeoff.plain_unit(item.unit) == takeoff.plain_unit(unit):
+        times = q / item.quantity
+        if times > 3 or times < Decimal("0.33"):
+            boq_quantity = f"{item.quantity:,.3f}".rstrip("0").rstrip(".")
+            report += (
+                f" That is {times:,.2f} times the BOQ quantity of {boq_quantity} {item.unit}: check the scale and "
+                "your points before going on, and raise a concern if the BOQ looks wrong."
+            )
+    return report
 
 
 def takeoff_summary(ctx: RunContext[Turn]) -> str:

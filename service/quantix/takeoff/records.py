@@ -33,6 +33,15 @@ def plain_unit(unit: str) -> str:
     return next((name for name, spellings in _UNIT_NAMES.items() if cleaned in spellings), cleaned)
 
 
+POINT_M = 0.0254 / 72  # one PDF point on paper, in metres
+
+
+def drawing_ratio(metres_per_point: float) -> int:
+    """The scale as printed on a drawing, 1:n, from the sheet at its printed size, so it can be checked against the
+    title block."""
+    return round(metres_per_point / POINT_M)
+
+
 def _page(session: Session, tender_id: str, document_id: str, number: int) -> tuple[Document, Page]:
     document = session.get(Document, document_id)
     if document is None or document.tender_id != tender_id or document.kind != "pdf":

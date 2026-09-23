@@ -141,6 +141,8 @@ def test_the_price_is_computed_from_quantities_rates_and_markups(client, tender)
 def test_every_rate_needs_a_basis_that_checks_out(client, tender):
     tender_id, priya, quote = tender
     with client.app.state.sessions() as session:
+        with pytest.raises(ValueError, match="A rate must be more than zero"):
+            estimate.propose_rate(session, tender_id, priya, "3.1", "estimate", "x" * 30, unit_rate=Decimal("0"))
         with pytest.raises(ValueError, match="The rate 2400 is not in the quoted line"):
             estimate.propose_rate(
                 session,
