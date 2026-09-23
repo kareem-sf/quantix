@@ -322,3 +322,28 @@ def test_an_ai_that_cannot_read_images_is_not_shown_drawings(client, office):
     client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Look at the conditions."})
     wait_for(lambda o: o["staff"] and seen, client, tender_id)
     assert seen[0].startswith("The office's AI can't read images, so it can't look at drawings or scans.")
+
+
+def test_a_person_asks_one_question_at_a_time(client, office):
+    tender_id, use = office
+    replies: list[str] = []
+
+    def asks_twice(messages, info):
+        if info.output_tools:
+            return office_brain(messages, info)
+        done = returns(messages)
+        replies[:] = done
+        steps = [
+            call("ask_engineer", title="Zero-quantity lines", question="Price them?", options=["Yes", "No"]),
+            call("ask_engineer", title="Zero-quantity lines, again", question="Price them?", options=["Yes", "No"]),
+            DONE,
+        ]
+        return steps[len(done)]
+
+    use(asks_twice)
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Review the BOQ."})
+    wait_for(lambda o: o["waiting"] == 1 and len(replies) == 2, client, tender_id)
+    assert replies[1] == (
+        "Your question “Zero-quantity lines” is still waiting for the engineer. Ask the next one after."
+    )
+    assert len(client.get(f"/tenders/{tender_id}/decisions").json()) == 1

@@ -1443,6 +1443,8 @@ export interface components {
         PackageItem: {
             /** Id */
             id: string;
+            /** Section */
+            section: string | null;
             /** Item */
             item: string;
             /** Description */

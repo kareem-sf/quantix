@@ -126,6 +126,7 @@ describe("Pricing", () => {
     await userEvent.type(screen.getByLabelText("Name"), "Steel fixer gang");
     await userEvent.type(screen.getByLabelText("Unit"), "hr");
     await userEvent.type(screen.getByLabelText("Rate"), "62");
+    await userEvent.type(screen.getByLabelText("Currency"), "SAR");
     await userEvent.type(screen.getByLabelText("Source"), "Payroll 2026");
     await userEvent.selectOptions(screen.getByLabelText("Kind"), "Labour");
     await userEvent.click(screen.getByRole("button", { name: "Add" }));

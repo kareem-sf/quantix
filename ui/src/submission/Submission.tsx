@@ -54,7 +54,8 @@ export function Submission() {
       <section aria-label="Submission checklist" className="flex min-w-0 grow flex-col px-8 pt-7">
         <h1 className="text-[22px] font-semibold tracking-tight">Submission</h1>
         <span className="text-ink-2">
-          {ready} of {rows.length} ready{tender.data?.due_date && ` · submit ${dueShort(tender.data.due_date).replace("due ", "by ")}`}
+          {rows.length ? `${ready} of ${rows.length} ready` : "What the tender asks you to submit"}
+          {tender.data?.due_date && ` · submit ${dueShort(tender.data.due_date).replace("due ", "by ")}`}
         </span>
 
         <div className="mt-[18px] flex gap-[18px] border-b border-line">

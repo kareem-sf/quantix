@@ -112,6 +112,14 @@ def complete(session: Session, member: Staff, task_id: str, result: str) -> Task
 
 
 def ask(session: Session, tender_id: str, by: Staff, title: str, text: str, options: list[str]) -> Decision:
+    """One question at a time per person, so a retried turn can't ask the engineer the same thing twice."""
+    waiting = session.scalars(
+        select(Decision).where(
+            Decision.tender_id == tender_id, Decision.raised_by == by.id, Decision.status == "waiting"
+        )
+    ).first()
+    if waiting:
+        raise ValueError(f"Your question “{waiting.title}” is still waiting for the engineer. Ask the next one after.")
     decision = Decision(tender_id=tender_id, raised_by=by.id, title=title.strip(), text=text.strip(), options=options)
     session.add(decision)
     session.flush()

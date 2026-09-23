@@ -52,8 +52,8 @@ const groundworks = (): Package => ({
   name: "Groundworks",
   kind: "subcontract",
   items: [
-    { id: "i1", item: "3.1", description: "Excavation", unit: "m3", quantity: "1240", our_rate: "18.50" },
-    { id: "i2", item: "6.3", description: "Waterproofing", unit: "m2", quantity: "980", our_rate: "38.00" },
+    { id: "i1", section: "8485 · Earthwork", item: "3.1", description: "Excavation", unit: "m3", quantity: "1240", our_rate: "18.50" },
+    { id: "i2", section: "8486 · Earthwork", item: "6.3", description: "Waterproofing", unit: "m2", quantity: "980", our_rate: "38.00" },
   ],
   enquiries: [
     {
@@ -87,6 +87,7 @@ describe("Subcontract", () => {
     expect(within(table).getByText("57,700.00")).toBeInTheDocument();
     expect(within(table).getByText("Gulf Groundworks excludes dewatering.")).toBeInTheDocument();
     expect(screen.getByText("Omar recommends Najd Contracting")).toBeInTheDocument();
+    expect(within(table).getByText("8486 · Earthwork")).toBeInTheDocument(); // two bills in one package
   });
 
   it("chooses the recommended quote", async () => {

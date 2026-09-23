@@ -70,6 +70,7 @@ class QuoteOut(BaseModel):
 
 class PackageItem(BaseModel):
     id: str
+    section: str | None
     item: str
     description: str
     unit: str
@@ -155,6 +156,7 @@ def _package(session: Session, package: Package) -> PackageOut:
         items=[
             PackageItem(
                 id=i.id,
+                section=i.section,
                 item=i.item,
                 description=i.description,
                 unit=i.unit,

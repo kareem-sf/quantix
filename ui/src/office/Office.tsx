@@ -209,8 +209,8 @@ function Profile(props: {
       aria-label={member.name}
       className={`flex w-[340px] shrink-0 flex-col gap-5 overflow-y-auto border-l border-line bg-white px-6 pt-7 pb-6 ${
         props.overlay
-          ? "max-xl:absolute max-xl:inset-y-0 max-xl:right-0 max-xl:z-10 max-xl:shadow-[-8px_0_24px_rgba(0,0,0,0.08)]"
-          : "max-xl:hidden"
+          ? "max-[1400px]:absolute max-[1400px]:inset-y-0 max-[1400px]:right-0 max-[1400px]:z-10 max-[1400px]:shadow-[-8px_0_24px_rgba(0,0,0,0.08)]"
+          : "max-[1400px]:hidden"
       }`}
     >
       <div className="flex items-center gap-3.5">

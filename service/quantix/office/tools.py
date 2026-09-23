@@ -188,7 +188,10 @@ def ask_engineer(ctx: RunContext[Turn], title: str, question: str, options: list
     if not 2 <= len(options) <= 4:
         raise ModelRetry("Give between 2 and 4 options.")
     with _working(ctx) as (session, me):
-        records.ask(session, ctx.deps.tender_id, me, title, question, options)
+        try:
+            records.ask(session, ctx.deps.tender_id, me, title, question, options)
+        except ValueError as already:
+            return str(already)  # not an error: carry on with other work until the engineer answers
     return "The question is waiting for the engineer."
 
 

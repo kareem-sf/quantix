@@ -59,7 +59,9 @@ export function Subcontract() {
         )}
         {selected && <Levelling tenderId={tenderId} pkg={selected} people={people} />}
       </div>
-      {selected && <Choice tenderId={tenderId} pkg={selected} people={people} />}
+      {selected && (selected.quotes.length > 0 || selected.enquiries.length > 0 || selected.recommendation) && (
+        <Choice tenderId={tenderId} pkg={selected} people={people} />
+      )}
     </div>
   );
 }
@@ -71,6 +73,7 @@ function Levelling({ tenderId, pkg, people }: { tenderId: string; pkg: Package; 
   const best = pkg.quotes.find((q) => q.rank === 1);
   const plugged = pkg.quotes.some((q) => Object.values(q.cells).some((c) => c.plugged));
   const excluding = pkg.quotes.filter((q) => q.exclusions.length > 0);
+  const bills = new Set(pkg.items.map((i) => i.section)).size > 1; // show which bill each line is from
 
   return (
     <section aria-label={pkg.name} className="flex min-w-0 flex-col overflow-x-auto pt-5 pb-6">
@@ -100,8 +103,11 @@ function Levelling({ tenderId, pkg, people }: { tenderId: string; pkg: Package; 
         {pkg.items.map((item) => (
           <div key={item.id} style={grid} className="items-center border-b border-subtle px-2 py-2.5">
             <span className="text-ink-3">{item.item}</span>
-            <span className="min-w-0 truncate" dir="auto">
-              {item.description}
+            <span className="flex min-w-0 flex-col" dir="auto">
+              <span className="line-clamp-2" title={item.description}>
+                {item.description}
+              </span>
+              {bills && item.section && <span className="text-xs text-ink-3">{item.section}</span>}
             </span>
             <span className="text-right">
               {quantity(item.quantity)} <bdi className="text-ink-3">{item.unit}</bdi>
@@ -128,28 +134,32 @@ function Levelling({ tenderId, pkg, people }: { tenderId: string; pkg: Package; 
             })}
           </div>
         ))}
-        <div style={grid} className="border-b border-subtle px-2 py-2.5 text-ink-2">
-          <span />
-          <span>Exclusions priced back in</span>
-          <span />
-          <span />
-          {pkg.quotes.map((q) => (
-            <span key={q.id} className="text-right" title={q.exclusions.map((e) => e.description).join(", ")}>
-              {q.exclusions.length ? `+${money(q.exclusions_total)}` : "none"}
-            </span>
-          ))}
-        </div>
-        <div style={grid} className="px-2 py-3 font-semibold">
-          <span />
-          <span>Levelled total</span>
-          <span />
-          <span />
-          {pkg.quotes.map((q) => (
-            <span key={q.id} className={`text-right ${q.id === best?.id ? "" : "font-normal text-ink-2"}`}>
-              {q.levelled_total === null ? "incomplete" : money(q.levelled_total)}
-            </span>
-          ))}
-        </div>
+        {pkg.quotes.length > 0 && (
+          <>
+          <div style={grid} className="border-b border-subtle px-2 py-2.5 text-ink-2">
+            <span />
+            <span>Exclusions priced back in</span>
+            <span />
+            <span />
+            {pkg.quotes.map((q) => (
+              <span key={q.id} className="text-right" title={q.exclusions.map((e) => e.description).join(", ")}>
+                {q.exclusions.length ? `+${money(q.exclusions_total)}` : "none"}
+              </span>
+            ))}
+          </div>
+          <div style={grid} className="px-2 py-3 font-semibold">
+            <span />
+            <span>Levelled total</span>
+            <span />
+            <span />
+            {pkg.quotes.map((q) => (
+              <span key={q.id} className={`text-right ${q.id === best?.id ? "" : "font-normal text-ink-2"}`}>
+                {q.levelled_total === null ? "incomplete" : money(q.levelled_total)}
+              </span>
+            ))}
+          </div>
+          </>
+        )}
       </div>
 
       <div className="mt-2 flex flex-col gap-1 text-xs text-ink-3">

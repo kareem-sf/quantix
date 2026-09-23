@@ -169,7 +169,7 @@ function SheetPicker(props: {
           const [doc, page] = e.target.value.split("|");
           if (doc) props.onOpen(doc, Number(page));
         }}
-        className="h-8 max-w-[260px] rounded-md border border-line-strong bg-white px-2 text-[13px]"
+        className="h-8 max-w-[380px] min-w-0 rounded-md border border-line-strong bg-white px-2 text-[13px]"
       >
         <option value="">Choose a sheet…</option>
         {props.sheets.length > 0 && (

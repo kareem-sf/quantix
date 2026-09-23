@@ -74,15 +74,17 @@ function AddCompany() {
   return (
     <form onSubmit={submit} className="mt-6 flex flex-col gap-2 border-t border-line pt-5">
       <h2 className="font-semibold text-ink-2">Add a company</h2>
-      <div className="flex flex-wrap gap-2">
-        <input aria-label="Company" required placeholder="Company" value={company.name} onChange={set("name")} className={`${field} grow`} />
+      <div className="grid grid-cols-[minmax(0,1fr)_150px_minmax(0,1fr)] gap-2">
+        <input aria-label="Company" required placeholder="Company" value={company.name} onChange={set("name")} className={field} />
         <select aria-label="Kind" value={company.kind} onChange={set("kind")} className={field}>
           <option value="subcontractor">Subcontractor</option>
           <option value="supplier">Supplier</option>
         </select>
-        <input aria-label="Trades" required placeholder="Trades, e.g. waterproofing" value={company.trades} onChange={set("trades")} className={`${field} grow`} />
-        <input aria-label="Email" type="email" placeholder="Email" value={company.email} onChange={set("email")} className={`${field} w-52`} />
-        <input aria-label="Phone" placeholder="Phone" value={company.phone} onChange={set("phone")} className={`${field} w-36`} />
+        <input aria-label="Trades" required placeholder="Trades, e.g. waterproofing" value={company.trades} onChange={set("trades")} className={field} />
+      </div>
+      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2">
+        <input aria-label="Email" type="email" placeholder="Email" value={company.email} onChange={set("email")} className={field} />
+        <input aria-label="Phone" placeholder="Phone" value={company.phone} onChange={set("phone")} className={field} />
         <button className="h-9 rounded-lg bg-ink px-4 text-white">Add</button>
       </div>
       {add.isError && <p className="text-attention">{add.error.message}</p>}

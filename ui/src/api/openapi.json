@@ -4921,6 +4921,17 @@
             "type": "string",
             "title": "Id"
           },
+          "section": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Section"
+          },
           "item": {
             "type": "string",
             "title": "Item"
@@ -4961,6 +4972,7 @@
         "type": "object",
         "required": [
           "id",
+          "section",
           "item",
           "description",
           "unit",
