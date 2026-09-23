@@ -1,6 +1,7 @@
 from alembic import context
 
 from quantix.boq.models import BoqItem  # noqa: F401  (registers the tables on Base.metadata)
+from quantix.company import CompanyRule  # noqa: F401
 from quantix.core.db import Base
 from quantix.documents.models import Document  # noqa: F401
 from quantix.estimate.models import Rate  # noqa: F401

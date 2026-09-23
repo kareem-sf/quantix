@@ -5,7 +5,7 @@ from pydantic_ai import Agent, UsageLimits
 from pydantic_ai.models import Model
 from sqlalchemy.orm import Session
 
-from quantix import tenders
+from quantix import company, tenders
 from quantix.documents import library
 from quantix.office import records, tools
 from quantix.office.models import ENGINEER, TEAM, Message, Staff
@@ -82,6 +82,11 @@ def situation(session: Session, member: Staff, new: list[Message]) -> str:
         f"Documents: {len(documents)} files, {sum(d.status == 'read' for d in documents)} read.",
         "Team:\n" + "\n".join(f"- {m.name}, {m.role}" + (f" (now: {m.now})" if m.now else "") for m in team),
     ]
+    rules = company.rules(session)
+    if rules:
+        parts.append(
+            "The firm's rules, which the whole office follows:\n" + "\n".join(f"- {r.topic}: {r.text}" for r in rules)
+        )
     tasks = records.open_tasks(session, member)
     if tasks:
         parts.append("Your open tasks:\n" + "\n".join(f"- {t.id}: {t.title}. {t.brief}" for t in tasks))

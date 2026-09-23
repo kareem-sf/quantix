@@ -10,6 +10,7 @@ from pathlib import Path
 from pydantic_ai import BinaryContent, ModelRetry, RunContext, ToolReturn
 from sqlalchemy.orm import Session, sessionmaker
 
+from quantix import company
 from quantix.boq import records as boq
 from quantix.boq.models import FACT_KINDS
 from quantix.documents import library, readers
@@ -509,6 +510,19 @@ def recommend_quote(ctx: RunContext[Turn], package: str, company: str, reason: s
     return "Your recommendation is waiting for the engineer."
 
 
+def search_past_tenders(ctx: RunContext[Turn], words: str) -> str:
+    """Rates the firm approved on its earlier tenders for similar items, with each tender's outcome and the date.
+    Use them as benchmarks; check that a rate is still current before relying on it."""
+    with _working(ctx, f"Looking up past tenders for “{words}”") as (session, _):
+        found = company.past_rates(session, ctx.deps.tender_id, words)
+    if not found:
+        return "No earlier tender has an approved rate for items like that."
+    return "\n".join(
+        f"{p.tender} ({p.outcome}, {p.dated:%d %b %Y}) · {p.item} {p.description} · {p.rate} per {p.unit} ({p.basis})"
+        for p in found
+    )
+
+
 def add_requirements(ctx: RunContext[Turn], requirements: list[submission.RequirementIn]) -> str:
     """Add what the tender requires the bidder to submit to the checklist: forms, bonds, certificates, schedules,
     method statements, the priced BOQ. Each with the clause that requires it."""
@@ -576,6 +590,7 @@ COMMON: list[Callable] = [
     record_quote,
     levelling,
     recommend_quote,
+    search_past_tenders,
     add_requirements,
     list_requirements,
     draft_document,
