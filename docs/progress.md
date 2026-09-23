@@ -217,4 +217,17 @@ The design was approved.
   run on a scratch folder approved a draft, marked the priced BOQ ready and built the package. The files on disk
   were checked: rates in E, amounts in F, the client's formula kept, a 3-row checklist and the Word draft.
 
-Next: past tender history and company rules.
+
+## 23 September 2026: company rules and past tenders
+
+- **Company rules:** the engineer writes the firm's rules by topic on the Company rules screen: standard markups,
+  exclusions, qualifications, house style. Every staff member reads them in their briefing each turn, so every new
+  team follows them.
+- **Tender outcome:** open, submitted, won or lost, set from the Overview.
+- **Past tenders:** staff look up the firm's approved rates for similar items on its other tenders with
+  `search_past_tenders`. Each result carries the tender's outcome, the date and the basis. Only approved rates
+  count, and staff are told to check that a rate is still current before relying on it.
+- **Checks:** 65 service tests and 40 UI tests. In the browser, two rules showed by topic, and the outcome was set
+  to Won on the Overview.
+
+Next: acceptance. A synthetic tender end to end with a live AI connection, then the Arch-Civil Rev03 package.

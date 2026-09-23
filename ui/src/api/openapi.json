@@ -178,6 +178,66 @@
             }
           }
         }
+      },
+      "patch": {
+        "tags": [
+          "tenders"
+        ],
+        "summary": "Change Tender",
+        "operationId": "change_tender_tenders__tender_id__patch",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenderChange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenderOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/ai/connections": {
@@ -3117,6 +3177,149 @@
           }
         }
       }
+    },
+    "/rules": {
+      "get": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Get Rules",
+        "operationId": "get_rules_rules_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RuleOut"
+                  },
+                  "title": "Response Get Rules Rules Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Add Rule",
+        "operationId": "add_rule_rules_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/rules/{rule_id}": {
+      "delete": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Remove Rule",
+        "operationId": "remove_rule_rules__rule_id__delete",
+        "parameters": [
+          {
+            "name": "rule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rule Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -5381,6 +5584,59 @@
         ],
         "title": "RequirementOut"
       },
+      "RuleIn": {
+        "properties": {
+          "topic": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Topic"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "topic",
+          "text"
+        ],
+        "title": "RuleIn"
+      },
+      "RuleOut": {
+        "properties": {
+          "topic": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Topic"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Text"
+          },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "topic",
+          "text",
+          "id",
+          "created_at"
+        ],
+        "title": "RuleOut"
+      },
       "Saved": {
         "properties": {
           "approved": {
@@ -5904,6 +6160,25 @@
         ],
         "title": "TaskOut"
       },
+      "TenderChange": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "open",
+              "submitted",
+              "won",
+              "lost"
+            ],
+            "title": "Outcome"
+          }
+        },
+        "type": "object",
+        "required": [
+          "outcome"
+        ],
+        "title": "TenderChange"
+      },
       "TenderCreate": {
         "properties": {
           "name": {
@@ -5954,6 +6229,16 @@
             "title": "Due Date",
             "description": "Submission deadline, when known"
           },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "open",
+              "submitted",
+              "won",
+              "lost"
+            ],
+            "title": "Outcome"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -5965,6 +6250,7 @@
           "id",
           "name",
           "due_date",
+          "outcome",
           "created_at"
         ],
         "title": "TenderOut"

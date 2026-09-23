@@ -72,6 +72,12 @@ export function Rail() {
         Company library
       </NavLink>
       <NavLink
+        to="/rules"
+        className={({ isActive }) => `rounded-md px-2 py-[7px] ${isActive ? "font-semibold" : "text-ink-2 hover:text-ink"}`}
+      >
+        Company rules
+      </NavLink>
+      <NavLink
         to="/settings"
         className={({ isActive }) => `rounded-md px-2 py-[7px] ${isActive ? "font-semibold" : "text-ink-2 hover:text-ink"}`}
       >

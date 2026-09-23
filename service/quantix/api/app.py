@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 
-from quantix.api import ai, boq, documents, estimate, office, subcontract, submission, takeoff, tenders
+from quantix.api import ai, boq, company, documents, estimate, office, subcontract, submission, takeoff, tenders
 from quantix.core.db import open_database
 from quantix.documents.library import Reader
 from quantix.office.runtime import Office
@@ -45,4 +45,5 @@ def create_app(home: Path, token: str) -> FastAPI:
     app.include_router(estimate.router, dependencies=[Depends(require_token)])
     app.include_router(subcontract.router, dependencies=[Depends(require_token)])
     app.include_router(submission.router, dependencies=[Depends(require_token)])
+    app.include_router(company.router, dependencies=[Depends(require_token)])
     return app

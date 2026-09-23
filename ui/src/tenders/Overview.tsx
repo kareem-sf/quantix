@@ -6,7 +6,7 @@ import { useGates } from "../estimate/queries";
 import { Face } from "../office/Face";
 import { TEAM, firstName, useDecisions, useMessages, useOffice, useSend } from "../office/queries";
 import { dueSentence } from "./due";
-import { useTender } from "./queries";
+import { useSetOutcome, useTender } from "./queries";
 
 export function Overview() {
   const { tenderId = "" } = useParams();
@@ -74,9 +74,12 @@ export function Overview() {
           ? "Nothing needs you right now"
           : `${waiting.length} ${waiting.length === 1 ? "decision needs" : "decisions need"} you`}
       </h1>
-      <p className="text-sm text-ink-2">
-        {dueSentence(tender.data.due_date, new Date())}
-        {state}
+      <p className="flex flex-wrap items-center gap-x-2 text-sm text-ink-2">
+        <span>
+          {dueSentence(tender.data.due_date, new Date())}
+          {state}
+        </span>
+        <Outcome tenderId={tenderId} outcome={tender.data.outcome} />
       </p>
 
       {!office.data.ai_ready && (
@@ -158,6 +161,24 @@ export function Overview() {
       <div className="grow" />
       <AskOffice tenderId={tenderId} to={manager?.id ?? TEAM} name={manager ? firstName(manager) : undefined} />
     </div>
+  );
+}
+
+/** How the tender went. Later tenders use won and lost rates as benchmarks. */
+function Outcome({ tenderId, outcome }: { tenderId: string; outcome: "open" | "submitted" | "won" | "lost" }) {
+  const set = useSetOutcome(tenderId);
+  return (
+    <select
+      aria-label="Outcome"
+      value={outcome}
+      onChange={(e) => set.mutate(e.target.value as typeof outcome)}
+      className="rounded-md bg-transparent text-ink-3 outline-none hover:text-ink"
+    >
+      <option value="open">Open</option>
+      <option value="submitted">Submitted</option>
+      <option value="won">Won</option>
+      <option value="lost">Lost</option>
+    </select>
   );
 }
 
