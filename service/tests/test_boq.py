@@ -59,7 +59,7 @@ def test_items_are_saved_only_when_the_page_backs_them(client, package, qs):
     assert report.startswith("Saved 2 BOQ items for the engineer's approval.")
     assert "item 9.9: “A9=9.9 | B9=Imaginary item” is not on Bill.xlsx, page 1" in report
     assert "item 3.1: the quantity 1300 is not in the quote" in report
-    assert "item 3.1: it is already in the BOQ" in report
+    assert "item 3.1: that line of the client's BOQ is already in" in report
 
     boq = client.get(f"/tenders/{tender_id}/boq").json()
     assert [(i["item"], i["quantity"], i["status"]) for i in boq["items"]] == [
@@ -193,11 +193,13 @@ def test_staff_propose_items_through_their_tool(client, package, tmp_path):
 
 def test_bills_that_reuse_item_numbers_are_told_apart_by_section(client, package, qs):
     tender_id, bill, _ = package
+    upload(client, tender_id, {"Bill 8486.xlsx": make_xlsx()})  # a second substation's bill, same item numbers
+    bill_8486 = read_all(client, tender_id)["Bill 8486.xlsx"]["id"]
     report = propose(
-        client, tender_id, qs, [line(bill, section="8485 · Earthwork"), line(bill, section="8485 · Earthwork")]
+        client, tender_id, qs, [line(bill, section="8485 · Earthwork"), line(bill_8486, section="8485 · Earthwork")]
     )
     assert "start the section with that bill's name" in report
-    propose(client, tender_id, qs, [line(bill, section="8486 · Earthwork")])
+    propose(client, tender_id, qs, [line(bill_8486, section="8486 · Earthwork")])
     with client.app.state.sessions() as session:
         with pytest.raises(
             ValueError, match="Item 3.1 is in more than one bill: “8485 · Earthwork”, “8486 · Earthwork”"

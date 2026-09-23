@@ -43,10 +43,12 @@ def find_requirement(session: Session, tender_id: str, title: str) -> Requiremen
 
 def add_requirements(session: Session, tender_id: str, by: str, items: list[RequirementIn]) -> str:
     """Save the requirements whose clause checks out; report the others so they can be corrected."""
-    taken = {r.title.lower() for r in requirements(session, tender_id)}
+    taken = [r.title for r in requirements(session, tender_id)]
     saved, problems = 0, []
     for item in items:
-        if item.title.strip().lower() in taken:
+        same = next((t for t in taken if office.same_subject(item.title, t)), None)
+        if same:
+            problems.append(f"{item.title}: the checklist already has “{same}”")
             continue
         try:
             check_quote(session, tender_id, item.document_id, item.page, item.quote)
@@ -64,7 +66,7 @@ def add_requirements(session: Session, tender_id: str, by: str, items: list[Requ
                 added_by=by,
             )
         )
-        taken.add(item.title.strip().lower())
+        taken.append(item.title.strip())
         saved += 1
     session.flush()
     return "\n".join([f"{saved} requirements added to the checklist.", *problems])

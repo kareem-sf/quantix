@@ -1,5 +1,6 @@
 """Proposing, checking and deciding BOQ items and tender facts."""
 
+import re
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -32,12 +33,20 @@ class ItemIn(BaseModel):
     quote: str = Field(description="The line as read_page shows it, including the item number and the quantity")
 
 
+_CELL = re.compile(r"\b[A-Z]{1,3}(\d+)=")
+
+
+def _source_line(document_id: str, page: int, quote: str) -> tuple[str, int, str]:
+    """Where a BOQ line comes from: a workbook row, or the quoted line of a page."""
+    row = _CELL.search(quote)
+    return document_id, page, f"row {row.group(1)}" if row else " ".join(quote.lower().split())
+
+
 def propose_items(session: Session, tender_id: str, by: Staff, items: list[ItemIn], autonomous: bool) -> str:
     """Save the items that check out; report the others so they can be corrected."""
-    taken = {
-        (i.section or "", i.item)
-        for i in session.scalars(select(BoqItem).where(BoqItem.tender_id == tender_id, BoqItem.status.in_(ACTIVE)))
-    }
+    active = list(session.scalars(select(BoqItem).where(BoqItem.tender_id == tender_id, BoqItem.status.in_(ACTIVE))))
+    taken = {(i.section or "", i.item) for i in active}
+    lines_in = {_source_line(i.document_id, i.page, i.quote) for i in active}  # the same client line, however filed
     position = session.scalar(select(func.max(BoqItem.position)).where(BoqItem.tender_id == tender_id)) or 0
     saved, problems = 0, []
     for line in items:
@@ -47,6 +56,8 @@ def propose_items(session: Session, tender_id: str, by: Staff, items: list[ItemI
                 raise ValueError(f"the item number {line.item} is not in the quote")
             if line.quantity is not None and line.quantity not in numbers_in(line.quote):
                 raise ValueError(f"the quantity {line.quantity} is not in the quote")
+            if _source_line(line.document_id, line.page, line.quote) in lines_in:
+                raise ValueError("that line of the client's BOQ is already in, under another section")
             if (line.section or "", line.item.strip()) in taken:
                 raise ValueError(
                     "it is already in the BOQ under this section; if it belongs to another bill (another building "
@@ -57,6 +68,7 @@ def propose_items(session: Session, tender_id: str, by: Staff, items: list[ItemI
             continue
         position += 1
         taken.add((line.section or "", line.item.strip()))
+        lines_in.add(_source_line(line.document_id, line.page, line.quote))
         session.add(
             BoqItem(
                 tender_id=tender_id,

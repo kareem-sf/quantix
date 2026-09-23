@@ -282,3 +282,19 @@ def test_staff_build_the_checklist_through_their_tools(client, tender, tmp_path)
         "Rates will go in column E and amounts in column F.",
         "- Technical · Method statement for concrete works: review",
     ]
+
+
+def test_a_requirement_already_on_the_checklist_is_not_added_twice(client, tender):
+    tender_id, layla, _, itt = tender
+    checklist(client, tender)
+    with client.app.state.sessions() as session:
+        report = submission.add_requirements(
+            session,
+            tender_id,
+            layla,
+            [requirement("Concrete works method statement", "7.6 The tenderer shall submit a method", itt)],
+        )
+    assert report == (
+        "0 requirements added to the checklist.\n"
+        "Concrete works method statement: the checklist already has “Method statement for concrete works”"
+    )
