@@ -230,4 +230,24 @@ The design was approved.
 - **Checks:** 65 service tests and 40 UI tests. In the browser, two rules showed by topic, and the outcome was set
   to Won on the Overview.
 
-Next: acceptance. A synthetic tender end to end with a live AI connection, then the Arch-Civil Rev03 package.
+
+## 23 September 2026: acceptance, synthetic tender end to end
+
+- **End-to-end test** (`service/tests/test_acceptance.py`): a synthetic tender goes through every gate on the real
+  office runtime, with only the model scripted.
+  - The engineer asks the team room to price the tender. The office appoints the Tender Manager, who hires an
+    estimator with a generated profile and briefs her.
+  - The estimator enters the BOQ and the tender's currency and VAT. The engineer approves them.
+  - She prices two items and proposes markups. The engineer approves them.
+  - She quotes and levels a waterproofing package: Gulf 34,300.00 plus a 2,000.00 exclusion = 36,300.00; Najd
+    35,770.00, ranked first. The engineer chooses Najd.
+  - She builds the submission checklist, drafts the method statement and reads the client BOQ's columns. The
+    engineer approves the draft and marks the priced BOQ ready.
+  - Every gate is then clear. The price is net 156,722.80 and total 172,395.08, with VAT of 25,859.26, all checked
+    by hand. The built package's priced BOQ adds up to the same total, with rates 20.35, 3,836.80 and 40.15 in the
+    client's column E, and nothing is left not ready.
+- **Checks:** 66 service tests, 3 runs in a row.
+- **Still to do for the MVP:**
+  - The same run with a live AI connection.
+  - The Arch-Civil Rev03 reference package in the desktop app.
+  Both need an AI key added in Settings (stored in `~/.quantix/auth.json`); none is connected yet.
