@@ -1,5 +1,6 @@
 """Reading and writing the office's records. Used by both the engineer's API and the agents' tools."""
 
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -111,6 +112,17 @@ def complete(session: Session, member: Staff, task_id: str, result: str) -> Task
     return task
 
 
+_WORD = re.compile(r"[a-z0-9.]+")
+_FILLER = {"the", "and", "for", "with", "of", "to", "on", "in", "a", "an", "or", "confirm", "approve", "decision"}
+
+
+def _same_subject(title: str, other: str) -> bool:
+    """Two question titles about the same thing: most of the shorter one's words are in the other."""
+    words = [{w for w in _WORD.findall(t.lower()) if w not in _FILLER and len(w) > 2} for t in (title, other)]
+    shorter = min(words, key=len)
+    return bool(shorter) and len(words[0] & words[1]) / len(shorter) >= 0.6
+
+
 def ask(session: Session, tender_id: str, by: Staff, title: str, text: str, options: list[str]) -> Decision:
     """One question at a time per person, so a retried turn can't ask the engineer the same thing twice."""
     waiting = session.scalars(
@@ -120,6 +132,12 @@ def ask(session: Session, tender_id: str, by: Staff, title: str, text: str, opti
     ).first()
     if waiting:
         raise ValueError(f"Your question “{waiting.title}” is still waiting for the engineer. Ask the next one after.")
+    for earlier in decisions(session, tender_id):
+        if earlier.status == "answered" and _same_subject(title, earlier.title):
+            raise ValueError(
+                f"The engineer already decided “{earlier.title}”: {earlier.answer} Act on that. If your question "
+                "is different, give it a title that says how."
+            )
     decision = Decision(tender_id=tender_id, raised_by=by.id, title=title.strip(), text=text.strip(), options=options)
     session.add(decision)
     session.flush()

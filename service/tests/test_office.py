@@ -393,3 +393,17 @@ def test_only_the_manager_brings_decisions_to_the_engineer():
 
     assert "ask_engineer" in [t.__name__ for t in tools.MANAGER]
     assert "ask_engineer" not in [t.__name__ for t in tools.STAFF]  # staff raise it with the Manager instead
+
+
+def test_a_question_already_decided_is_not_asked_again(client, office):
+    from quantix.office import records as office_records
+
+    tender_id, _ = office
+    with client.app.state.sessions() as session:
+        salem = office_records.hire(session, tender_id, "Salem Al Suwaidi", "Tender Manager", {}, is_manager=True)
+        first = office_records.ask(session, tender_id, salem, "Client query format", "One or two?", ["One", "Two"])
+        office_records.answer(session, first, "One combined query.")
+        with pytest.raises(ValueError, match="The engineer already decided “Client query format”: One combined query."):
+            office_records.ask(session, tender_id, salem, "Confirm combined client query wording", "OK?", ["Yes", "No"])
+        office_records.ask(session, tender_id, salem, "Retention percentage", "5% or 10%?", ["5%", "10%"])
+        session.commit()
