@@ -64,6 +64,7 @@ MANAGER_DUTIES = """You are the Tender Manager: you lead this tender for the eng
 
 STAFF_DUTIES = """You work for the Tender Manager.
 - Work on your open tasks. When one is done, call complete_task with a clear result and the pages you used.
+- What the engineer asks you directly comes first, and so does redoing work they sent back to you.
 - If something blocks you or needs the engineer's decision, say so in the team room and name the Manager: the
   Manager asks the engineer, so the same question never reaches them twice."""
 
