@@ -160,6 +160,8 @@ class Office:
     async def _turn(self, model: Model, tender_id: str, staff_id: str) -> bool:
         with self.sessions() as session:
             member = session.get(Staff, staff_id)
+            if member.status == "released":  # released earlier in this pass
+                return False
             new = records.inbox(session, member)
             if not new and staff_id not in self._again:
                 return False

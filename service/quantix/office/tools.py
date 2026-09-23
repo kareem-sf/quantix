@@ -168,10 +168,15 @@ def post_to_team(ctx: RunContext[Turn], text: str) -> str:
 
 
 def message_engineer(ctx: RunContext[Turn], text: str) -> str:
-    """Write to the engineer in your own chat with them."""
+    """Write to the engineer in your own chat with them. While they haven't answered your last message, this one
+    replaces it, so they read one current update: include anything from it that still matters."""
     with _working(ctx) as (session, me):
+        last = records.messages(session, ctx.deps.tender_id, me.id, limit=1)
+        replaced = bool(last) and last[0].sender == me.id
+        if replaced:
+            session.delete(last[0])
         records.post(session, ctx.deps.tender_id, me.id, me.id, text)
-    return "Sent."
+    return "Sent. It replaces your last message, which the engineer hadn't answered." if replaced else "Sent."
 
 
 def raise_concern(ctx: RunContext[Turn], text: str) -> str:

@@ -443,6 +443,47 @@ def test_a_full_team_gives_new_work_to_the_people_it_has(client, office):
     assert "Hadi Nassar" not in [m["name"] for m in client.get(f"/tenders/{tender_id}/office").json()["staff"]]
 
 
+def test_an_unanswered_update_to_the_engineer_is_replaced_by_the_next(client, office):
+    tender_id, use = office
+
+    def manager(messages, info):
+        if info.output_tools:
+            return office_brain(messages, info)
+        answered = "Noted, carry on." in prompt_of(messages)
+        steps = [call("message_engineer", text="Third.")] if answered else []
+        steps = steps or [call("message_engineer", text="First."), call("message_engineer", text="Second.")]
+        return [*steps, DONE][len(returns(messages))]
+
+    use(manager)
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Review the package."})
+    [rania] = wait_for(lambda o: o["staff"] and o["state"] == "idle", client, tender_id)["staff"]
+
+    def chat():
+        return [m["text"] for m in client.get(f"/tenders/{tender_id}/messages", params={"channel": rania["id"]}).json()]
+
+    assert chat() == ["Second."]  # one current update, not a stack of them
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": rania["id"], "text": "Noted, carry on."})
+    wait_for(lambda o: len(chat()) == 3, client, tender_id)
+    assert chat() == ["Second.", "Noted, carry on.", "Third."]  # what the engineer answered stays
+
+
+def test_someone_released_during_a_pass_does_not_take_their_turn(client, office):
+    import asyncio
+
+    from quantix.office import records as office_records
+
+    tender_id, _ = office
+    with client.app.state.sessions() as session:
+        salem = office_records.hire(session, tender_id, "Salem Al Suwaidi", "Tender Manager", {}, is_manager=True)
+        yousef = office_records.hire(session, tender_id, "Yousef Al-Mansouri", "Buyer", {})
+        office_records.assign(session, tender_id, salem, yousef, "check the market", "Small items.")  # in his inbox
+        yousef.status = "released"
+        session.commit()
+        yousef_id = yousef.id
+    office = client.app.state.office
+    assert asyncio.run(office._turn(scripted(office_brain), tender_id, yousef_id)) is False
+
+
 def test_finishing_a_task_twice_says_what_is_still_open(client, office):
     from quantix.office import records as office_records
 
