@@ -4,6 +4,7 @@ import secrets
 
 from pydantic_ai import Agent, UsageLimits
 from pydantic_ai.models import Model
+from pydantic_ai.settings import ModelSettings
 
 from quantix.ai.providers import explain
 
@@ -25,6 +26,7 @@ async def check_model(model: Model) -> tuple[bool, str]:
         model,
         instructions="This is a connection check. Call the confirm tool once with the code you are given.",
         tools=[confirm],
+        model_settings=ModelSettings(timeout=120.0),
     )
     try:
         await agent.run(f"The code is {code}.", usage_limits=UsageLimits(request_limit=3))

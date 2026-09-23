@@ -137,6 +137,7 @@ def test_removing_a_connection_clears_the_office_ai(client, models, monkeypatch)
         (NotFound(), "This model isn't available on this account."),
         (type("Limited", (Exception,), {"status_code": 429})(), "The service is limiting requests"),
         (type("APIConnectionError", (Exception,), {})(), "Couldn't reach the service."),
+        (type("APITimeoutError", (Exception,), {})(), "The AI service took too long to answer."),
     ],
 )
 def test_failures_are_explained_plainly(error, message):

@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent, UsageLimitExceeded, UsageLimits
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models import Model
+from pydantic_ai.settings import ModelSettings
 from sqlalchemy.orm import Session
 
 from quantix import company, tenders
@@ -13,6 +14,7 @@ from quantix.office.models import ENGINEER, TEAM, Message, Staff
 from quantix.office.tools import Turn
 
 STEP_LIMIT = 12  # model requests in one turn; the person picks up again on their next turn
+REQUEST_TIMEOUT = 120.0  # seconds for one model request; a stalled service must not freeze the office
 
 RULES = """How the office works:
 - You talk only through your tools. Anything else you write is not seen by anyone.
@@ -116,6 +118,7 @@ async def run_turn(
         instructions=instructions(member, autonomous),
         tools=tools.MANAGER if member.is_manager else tools.STAFF,
         retries=2,
+        model_settings=ModelSettings(timeout=REQUEST_TIMEOUT),
     )
     limits = UsageLimits(request_limit=STEP_LIMIT)
     async with agent.iter(prompt, deps=turn, usage_limits=limits, message_history=history) as run:
@@ -129,6 +132,11 @@ async def run_turn(
 
 
 async def create_persona(model: Model, brief: str) -> Persona:
-    agent = Agent(model, output_type=Persona, instructions="You create believable people for a construction office.")
+    agent = Agent(
+        model,
+        output_type=Persona,
+        instructions="You create believable people for a construction office.",
+        model_settings=ModelSettings(timeout=REQUEST_TIMEOUT),
+    )
     result = await agent.run(brief, usage_limits=UsageLimits(request_limit=2))
     return result.output
