@@ -384,3 +384,10 @@ def test_everyone_sees_what_the_engineer_decided(client, office):
         session.commit()
         brief = agents.situation(session, nora, [])
     assert "The engineer has decided:\n- Zero-quantity lines: Price them rate-only." in brief
+
+
+def test_only_the_manager_brings_decisions_to_the_engineer():
+    from quantix.office import tools
+
+    assert "ask_engineer" in [t.__name__ for t in tools.MANAGER]
+    assert "ask_engineer" not in [t.__name__ for t in tools.STAFF]  # staff raise it with the Manager instead

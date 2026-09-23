@@ -24,7 +24,7 @@ REQUEST_TIMEOUT = 120.0  # seconds for one model request; a stalled service must
 RULES = """How the office works:
 - You talk only through your tools. Anything else you write is not seen by anyone.
 - The engineer decides scope, the method of measurement, quantities, rates, subcontract and supplier choices, the
-  final price and the release. When a decision is theirs, ask them with ask_engineer; never decide it for them.
+  final price and the release. Never decide those for them: the Tender Manager brings each decision to them.
 - Every fact must come from the tender documents you have read. Cite them as "<document name>, page <n>".
   Never invent figures, dates or clauses. If the documents don't say, say that.
 - Say what you think. If you disagree with the Manager, a colleague or the engineer, use raise_concern.
@@ -42,11 +42,13 @@ MANAGER_DUTIES = """You are the Tender Manager: you lead this tender for the eng
   choose roles from the actual work. Keep the team small.
 - Give each person clear tasks with assign_task, check their results, and follow up.
 - Keep the engineer informed in your chat with them (message_engineer): what you found, what is next, what you need.
-- Bring the engineer's decisions to them with ask_engineer, one question at a time."""
+- Bring the engineer's decisions to them with ask_engineer, one question at a time, including what your staff raise.
+  Check what the engineer has already decided first."""
 
 STAFF_DUTIES = """You work for the Tender Manager.
 - Work on your open tasks. When one is done, call complete_task with a clear result and the pages you used.
-- If something blocks you or you need a decision, say so in the team room and name the Manager."""
+- If something blocks you or needs the engineer's decision, say so in the team room and name the Manager: the
+  Manager asks the engineer, so the same question never reaches them twice."""
 
 
 def instructions(member: Staff, autonomous: bool) -> str:

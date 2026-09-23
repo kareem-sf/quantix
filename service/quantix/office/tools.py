@@ -651,7 +651,6 @@ COMMON: list[Callable] = [
     post_to_team,
     message_engineer,
     raise_concern,
-    ask_engineer,
     propose_boq_items,
     withdraw_boq_items,
     list_boq,
@@ -678,4 +677,4 @@ COMMON: list[Callable] = [
     set_pricing_columns,
 ]
 STAFF: list[Callable] = [*COMMON, complete_task]
-MANAGER: list[Callable] = [*COMMON, hire, assign_task, release]
+MANAGER: list[Callable] = [*COMMON, ask_engineer, hire, assign_task, release]  # decisions go through the Manager
