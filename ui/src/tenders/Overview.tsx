@@ -5,6 +5,7 @@ import { AddDocuments } from "../documents/AddDocuments";
 import { useDocuments } from "../documents/queries";
 import { money, useEstimate, useGates } from "../estimate/queries";
 import { Face } from "../office/Face";
+import { Prose, tidy } from "../office/Prose";
 import { TEAM, firstName, useDecisions, useMessages, useOffice, useSend } from "../office/queries";
 import { Opening } from "../app/Opening";
 import { dueSentence } from "./due";
@@ -290,9 +291,10 @@ function ManagerNote({ tenderId, managerId }: { tenderId: string; managerId: str
         <span className="font-medium">
           {manager.name} <span className="font-normal text-ink-3">Tender Manager</span>
         </span>
-        <span className="line-clamp-4 text-[15px] leading-relaxed text-[#27272A]" dir="auto">
-          {latest?.text ?? manager.now ?? "Getting to know the tender."}
-        </span>
+        <Prose
+          text={tidy(latest?.text ?? manager.now ?? "Getting to know the tender.", firstName(manager)).split(/\n\s*\n/)[0]}
+          className="text-[15px] text-[#27272A] [&>*]:line-clamp-4"
+        />
         <Link to={`/tenders/${tenderId}/office?with=${manager.id}`} className="text-ink-3 hover:text-ink">
           Open your chat with {firstName(manager)}
         </Link>

@@ -2,6 +2,7 @@ import { IconChevronLeft } from "@tabler/icons-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { Face } from "./Face";
+import { Prose } from "./Prose";
 import { firstName, useAnswer, useDecisions, useOffice } from "./queries";
 
 export function DecisionPage() {
@@ -50,9 +51,7 @@ export function DecisionPage() {
               {firstName(asker)} <span className="font-normal text-ink-3">{asker.role}</span>
             </span>
           )}
-          <span className="text-[15px] text-[#27272A]" dir="auto">
-            {decision.text}
-          </span>
+          <Prose text={decision.text} signer={asker ? firstName(asker) : undefined} className="text-[15px] text-[#27272A]" />
         </span>
       </div>
 

@@ -2,6 +2,7 @@ import { IconArrowRight, IconArrowUp } from "@tabler/icons-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useParams, useSearchParams } from "react-router";
 import { Face } from "./Face";
+import { Prose } from "./Prose";
 import {
   ENGINEER,
   TEAM,
@@ -185,9 +186,13 @@ function Line({ message, author, onPerson }: { message: Message; author?: Staff;
           </span>
           {message.kind === "concern" && <span className="text-xs font-medium text-attention"> · raised a concern</span>}
         </span>
-        <span className="text-sm leading-relaxed whitespace-pre-wrap text-[#27272A] [overflow-wrap:anywhere]" dir="auto">
-          {message.text}
-        </span>
+        {mine ? (
+          <span className="text-sm leading-relaxed whitespace-pre-wrap text-[#27272A] [overflow-wrap:anywhere]" dir="auto">
+            {message.text}
+          </span>
+        ) : (
+          <Prose text={message.text} signer={author ? firstName(author) : undefined} className="text-sm text-[#27272A]" />
+        )}
       </div>
     </div>
   );
