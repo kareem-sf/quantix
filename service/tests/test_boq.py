@@ -73,7 +73,7 @@ def test_items_are_saved_only_when_the_page_backs_them(client, package, qs):
         "page": 1,
         "quote": "A2=3.1 | B2=Excavation to reduce levels | C2=m3 | D2=1240",
     }
-    assert client.get(f"/tenders/{tender_id}/gates").json() == {"boq": 2, "facts": 0}
+    assert client.get(f"/tenders/{tender_id}/gates").json() == {"boq": 2, "facts": 0, "takeoff": 0}
 
 
 def test_a_quote_may_skip_words_with_an_ellipsis(client, package, qs):
@@ -131,7 +131,7 @@ def test_an_autonomous_office_approves_its_own_items(client, package, qs):
     tender_id, bill, _ = package
     propose(client, tender_id, qs, [line(bill)], autonomous=True)
     assert client.get(f"/tenders/{tender_id}/boq").json()["items"][0]["status"] == "office_approved"
-    assert client.get(f"/tenders/{tender_id}/gates").json() == {"boq": 0, "facts": 0}
+    assert client.get(f"/tenders/{tender_id}/gates").json() == {"boq": 0, "facts": 0, "takeoff": 0}
 
 
 def test_staff_propose_items_through_their_tool(client, package, tmp_path):

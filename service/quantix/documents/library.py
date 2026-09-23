@@ -157,6 +157,8 @@ class Reader:
                             text=p.text,
                             search_text=searchable(p.text),
                             has_text=p.has_text,
+                            width=p.width,
+                            height=p.height,
                         )
                     )
                 scans = sum(not p.has_text for p in pages)

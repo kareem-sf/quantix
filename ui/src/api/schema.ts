@@ -417,6 +417,151 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tenders/{tender_id}/takeoff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Takeoff */
+        get: operations["get_takeoff_tenders__tender_id__takeoff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{document_id}/pages/{number}/sheet": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Sheet
+         * @description Any PDF page as a sheet the engineer can measure on.
+         */
+        get: operations["get_sheet_documents__document_id__pages__number__sheet_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{document_id}/pages/{number}/vertices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Vertices
+         * @description The drawing's own corners and line ends, for snapping the engineer's clicks.
+         */
+        get: operations["get_vertices_documents__document_id__pages__number__vertices_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tenders/{tender_id}/scales": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set Scale */
+        post: operations["set_scale_tenders__tender_id__scales_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tenders/{tender_id}/measurements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add Measurement */
+        post: operations["add_measurement_tenders__tender_id__measurements_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/measurements/{measurement_id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide Measurement */
+        post: operations["decide_measurement_measurements__measurement_id__decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scales/{scale_id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide Scale */
+        post: operations["decide_scale_scales__scale_id__decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/measurements/{measurement_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Measurement
+         * @description The engineer removes a measurement to redo it. It is kept as rejected, not erased.
+         */
+        delete: operations["delete_measurement_measurements__measurement_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -454,6 +599,27 @@ export interface components {
         CheckRequest: {
             /** Model */
             model: string;
+        };
+        /** ComparisonOut */
+        ComparisonOut: {
+            /** Boq Item Id */
+            boq_item_id: string | null;
+            /** Item */
+            item: string | null;
+            /** Description */
+            description: string;
+            /** Boq Quantity */
+            boq_quantity: string | null;
+            /** Boq Unit */
+            boq_unit: string | null;
+            /** Takeoff */
+            takeoff: string | null;
+            /** Unit */
+            unit: string;
+            /** Result */
+            result: string;
+            /** Difference */
+            difference: string | null;
         };
         /** ConnectionCreate */
         ConnectionCreate: {
@@ -561,6 +727,8 @@ export interface components {
             boq: number;
             /** Facts */
             facts: number;
+            /** Takeoff */
+            takeoff: number;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -588,6 +756,55 @@ export interface components {
             /** Reason */
             reason: string | null;
             source: components["schemas"]["Source"];
+        };
+        /** MeasurementIn */
+        MeasurementIn: {
+            /** Document Id */
+            document_id: string;
+            /** Page */
+            page: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "length" | "area" | "count";
+            /** Label */
+            label: string;
+            /** Points */
+            points: number[][];
+            /** Unit */
+            unit: string;
+            /** Multiplier */
+            multiplier?: number | string | null;
+            /** Boq Item */
+            boq_item?: string | null;
+        };
+        /** MeasurementOut */
+        MeasurementOut: {
+            /** Id */
+            id: string;
+            /** Document Id */
+            document_id: string;
+            /** Page */
+            page: number;
+            /** Kind */
+            kind: string;
+            /** Label */
+            label: string;
+            /** Points */
+            points: number[][];
+            /** Unit */
+            unit: string;
+            /** Multiplier */
+            multiplier: string | null;
+            /** Quantity */
+            quantity: string | null;
+            /** Boq Item */
+            boq_item: string | null;
+            /** Status */
+            status: string;
+            /** Proposed By */
+            proposed_by: string;
         };
         /** MessageIn */
         MessageIn: {
@@ -653,6 +870,36 @@ export interface components {
             /** Has Text */
             has_text: boolean;
         };
+        /** ScaleIn */
+        ScaleIn: {
+            /** Document Id */
+            document_id: string;
+            /** Page */
+            page: number;
+            /** Line */
+            line: number[][];
+            /** Length M */
+            length_m: number;
+            /** Dimension */
+            dimension: string;
+        };
+        /** ScaleOut */
+        ScaleOut: {
+            /** Id */
+            id: string;
+            /** Metres Per Point */
+            metres_per_point: number;
+            /** Line */
+            line: number[][];
+            /** Length M */
+            length_m: number;
+            /** Dimension */
+            dimension: string;
+            /** Status */
+            status: string;
+            /** Proposed By */
+            proposed_by: string;
+        };
         /** SearchHit */
         SearchHit: {
             /** Document Id */
@@ -678,6 +925,20 @@ export interface components {
             /** Office Mode */
             office_mode?: ("engineer" | "autonomous") | null;
             office_ai?: components["schemas"]["OfficeAI"] | null;
+        };
+        /** Sheet */
+        Sheet: {
+            /** Document Id */
+            document_id: string;
+            /** Name */
+            name: string;
+            /** Page */
+            page: number;
+            /** Width */
+            width: number;
+            /** Height */
+            height: number;
+            scale: components["schemas"]["ScaleOut"] | null;
         };
         /** Source */
         Source: {
@@ -708,6 +969,15 @@ export interface components {
             status: string;
             /** Now */
             now: string | null;
+        };
+        /** Takeoff */
+        Takeoff: {
+            /** Sheets */
+            sheets: components["schemas"]["Sheet"][];
+            /** Measurements */
+            measurements: components["schemas"]["MeasurementOut"][];
+            /** Comparison */
+            comparison: components["schemas"]["ComparisonOut"][];
         };
         /** TaskOut */
         TaskOut: {
@@ -1726,6 +1996,286 @@ export interface operations {
                 content: {
                     "application/json": unknown;
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_takeoff_tenders__tender_id__takeoff_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Takeoff"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_sheet_documents__document_id__pages__number__sheet_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                document_id: string;
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Sheet"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_vertices_documents__document_id__pages__number__vertices_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                document_id: string;
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": number[][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_scale_tenders__tender_id__scales_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScaleIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScaleOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_measurement_tenders__tender_id__measurements_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MeasurementIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeasurementOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_measurement_measurements__measurement_id__decision_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                measurement_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecisionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_scale_scales__scale_id__decision_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                scale_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecisionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_measurement_measurements__measurement_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                measurement_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
