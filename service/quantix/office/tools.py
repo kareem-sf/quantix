@@ -14,6 +14,7 @@ from quantix.boq import records as boq
 from quantix.boq.models import FACT_KINDS
 from quantix.documents import library, readers
 from quantix.documents.models import Document
+from quantix.estimate import records as estimate
 from quantix.office import records
 from quantix.office.models import TEAM, Staff
 from quantix.takeoff import records as takeoff
@@ -336,6 +337,85 @@ def takeoff_summary(ctx: RunContext[Turn]) -> str:
     )
 
 
+def search_library(ctx: RunContext[Turn], words: str) -> str:
+    """Search the firm's rate library (labour, plant, material, subcontract and unit rates from earlier tenders).
+    Check each entry's date before relying on it."""
+    with _working(ctx, f"Checking the rate library for “{words}”") as (session, _):
+        rows = estimate.library(session, words)[:25]
+    if not rows:
+        return "Nothing in the library matches. Price it from a quote, or estimate it and say how."
+    return "\n".join(
+        f"{r.id} · {r.kind} · {r.name} · {r.rate} {r.currency} per {r.unit} · dated {r.dated} · {r.source}"
+        for r in rows
+    )
+
+
+def propose_rate(
+    ctx: RunContext[Turn],
+    boq_item: str,
+    basis: str,
+    note: str,
+    unit_rate: Decimal | None = None,
+    lines: list[estimate.LineIn] | None = None,
+    document_id: str | None = None,
+    page: int | None = None,
+    quote: str | None = None,
+    library_id: str | None = None,
+) -> str:
+    """Price one BOQ item, for the engineer's approval: either a unit_rate, or a build-up of lines (labour, plant,
+    material, subcontract per one unit of the item, with wastage). basis is how you know the price: "quote" (give
+    the document, page and the quoted line), "library" (give the library_id) or "estimate" (your own judgement:
+    put the outputs, prices and assumptions in the note). Quantix computes the rate and the amount."""
+    with _working(ctx, f"Pricing item {boq_item}") as (session, me):
+        status = "office_approved" if ctx.deps.autonomous else "proposed"
+        rate = estimate.propose_rate(
+            session,
+            ctx.deps.tender_id,
+            me.id,
+            boq_item,
+            basis,
+            note,
+            unit_rate,
+            lines,
+            document_id,
+            page,
+            quote,
+            library_id,
+            status,
+        )
+        return f"Item {boq_item} priced at {estimate.rate_of(rate)} per unit."
+
+
+def propose_markups(
+    ctx: RunContext[Turn], preliminaries: Decimal, overheads: Decimal, profit: Decimal, adjustment: Decimal, note: str
+) -> str:
+    """Propose the tender's markups as fractions (0.08 is 8%): preliminaries on the net cost, overheads, profit, and
+    a lump-sum adjustment. Explain them in the note. Quantix computes the totals."""
+    with _working(ctx, "Proposing the markups") as (session, me):
+        status = "office_approved" if ctx.deps.autonomous else "proposed"
+        estimate.propose_markups(
+            session, ctx.deps.tender_id, me.id, preliminaries, overheads, profit, adjustment, note, status
+        )
+        total = estimate.summary(session, ctx.deps.tender_id).total
+    return f"Proposed. The price with these markups is {total}."
+
+
+def estimate_summary(ctx: RunContext[Turn]) -> str:
+    """The price so far, as Quantix computes it: net cost, markups, total, VAT, and the items still unpriced."""
+    with _working(ctx, "Checking the estimate") as (session, _):
+        s = estimate.summary(session, ctx.deps.tender_id)
+    lines = [
+        f"{s.priced} of {s.items} items priced ({s.waiting} waiting for the engineer).",
+        f"Net {s.net} {s.currency}; preliminaries {s.preliminaries}; overheads {s.overheads}; profit {s.profit}; "
+        f"adjustment {s.adjustment}; total {s.total}.",
+    ]
+    if s.vat is not None:
+        lines.append(f"VAT {s.vat}; total with VAT {s.total_with_vat}.")
+    if s.unpriced:
+        lines.append("Not priced yet: " + ", ".join(s.unpriced[:60]))
+    return "\n".join(lines)
+
+
 COMMON: list[Callable] = [
     list_documents,
     search_documents,
@@ -352,6 +432,10 @@ COMMON: list[Callable] = [
     set_scale,
     measure,
     takeoff_summary,
+    search_library,
+    propose_rate,
+    propose_markups,
+    estimate_summary,
 ]
 STAFF: list[Callable] = [*COMMON, complete_task]
 MANAGER: list[Callable] = [*COMMON, hire, assign_task, release]

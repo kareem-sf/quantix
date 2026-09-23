@@ -562,6 +562,109 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tenders/{tender_id}/estimate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Estimate */
+        get: operations["get_estimate_tenders__tender_id__estimate_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/rates/{rate_id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide Rate */
+        post: operations["decide_rate_rates__rate_id__decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tenders/{tender_id}/rates/approve-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve All Rates */
+        post: operations["approve_all_rates_tenders__tender_id__rates_approve_all_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/markups/{markups_id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide Markups */
+        post: operations["decide_markups_markups__markups_id__decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Library */
+        get: operations["get_library_library_get"];
+        put?: never;
+        /** Add To Library */
+        post: operations["add_to_library_library_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{resource_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove From Library */
+        delete: operations["remove_from_library_library__resource_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -705,6 +808,13 @@ export interface components {
             /** Description */
             description: string | null;
         };
+        /** EstimateOut */
+        EstimateOut: {
+            /** Items */
+            items: components["schemas"]["PricedItem"][];
+            markups: components["schemas"]["MarkupsOut"] | null;
+            summary: components["schemas"]["SummaryOut"];
+        };
         /** FactOut */
         FactOut: {
             /** Id */
@@ -729,6 +839,8 @@ export interface components {
             facts: number;
             /** Takeoff */
             takeoff: number;
+            /** Pricing */
+            pricing: number;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -756,6 +868,90 @@ export interface components {
             /** Reason */
             reason: string | null;
             source: components["schemas"]["Source"];
+        };
+        /** LibraryIn */
+        LibraryIn: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "labour" | "plant" | "material" | "subcontract" | "unit_rate";
+            /** Name */
+            name: string;
+            /** Unit */
+            unit: string;
+            /** Rate */
+            rate: number | string;
+            /** Currency */
+            currency: string;
+            /** Source */
+            source: string;
+            /**
+             * Dated
+             * Format: date
+             */
+            dated: string;
+        };
+        /** LibraryOut */
+        LibraryOut: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "labour" | "plant" | "material" | "subcontract" | "unit_rate";
+            /** Name */
+            name: string;
+            /** Unit */
+            unit: string;
+            /** Rate */
+            rate: string;
+            /** Currency */
+            currency: string;
+            /** Source */
+            source: string;
+            /**
+             * Dated
+             * Format: date
+             */
+            dated: string;
+            /** Id */
+            id: string;
+        };
+        /** LineOut */
+        LineOut: {
+            /** Kind */
+            kind: string;
+            /** Resource */
+            resource: string;
+            /** Quantity */
+            quantity: string;
+            /** Unit */
+            unit: string;
+            /** Rate */
+            rate: string;
+            /** Wastage */
+            wastage: string;
+            /** Cost */
+            cost: string;
+        };
+        /** MarkupsOut */
+        MarkupsOut: {
+            /** Id */
+            id: string;
+            /** Preliminaries */
+            preliminaries: string;
+            /** Overheads */
+            overheads: string;
+            /** Profit */
+            profit: string;
+            /** Adjustment */
+            adjustment: string;
+            /** Note */
+            note: string;
+            /** Status */
+            status: string;
+            /** Proposed By */
+            proposed_by: string;
         };
         /** MeasurementIn */
         MeasurementIn: {
@@ -870,6 +1066,72 @@ export interface components {
             /** Has Text */
             has_text: boolean;
         };
+        /** PricedItem */
+        PricedItem: {
+            /** Id */
+            id: string;
+            /** Section */
+            section: string | null;
+            /** Item */
+            item: string;
+            /** Description */
+            description: string;
+            /** Unit */
+            unit: string;
+            /** Quantity */
+            quantity: string | null;
+            /** Item Status */
+            item_status: string;
+            rate: components["schemas"]["RateOut"] | null;
+            /** Amount */
+            amount: string | null;
+        };
+        /** RateDecision */
+        RateDecision: {
+            /** Approve */
+            approve: boolean;
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Save To Library
+             * @default false
+             */
+            save_to_library: boolean;
+        };
+        /** RateOut */
+        RateOut: {
+            /** Id */
+            id: string;
+            /** Basis */
+            basis: string;
+            /** Rate */
+            rate: string;
+            /** Unit Rate */
+            unit_rate: string | null;
+            /** Lines */
+            lines: components["schemas"]["LineOut"][] | null;
+            /** Source Document */
+            source_document: string | null;
+            /** Document Id */
+            document_id: string | null;
+            /** Page */
+            page: number | null;
+            /** Quote */
+            quote: string | null;
+            /** Library Id */
+            library_id: string | null;
+            /** Note */
+            note: string;
+            /** Status */
+            status: string;
+            /** Proposed By */
+            proposed_by: string;
+        };
+        /** Saved */
+        Saved: {
+            /** Approved */
+            approved: number;
+        };
         /** ScaleIn */
         ScaleIn: {
             /** Document Id */
@@ -969,6 +1231,37 @@ export interface components {
             status: string;
             /** Now */
             now: string | null;
+        };
+        /** SummaryOut */
+        SummaryOut: {
+            /** Currency */
+            currency: string;
+            /** Priced */
+            priced: number;
+            /** Items */
+            items: number;
+            /** Waiting */
+            waiting: number;
+            /** Net */
+            net: string;
+            /** Preliminaries */
+            preliminaries: string;
+            /** Overheads */
+            overheads: string;
+            /** Profit */
+            profit: string;
+            /** Adjustment */
+            adjustment: string;
+            /** Total */
+            total: string;
+            /** Vat Rate */
+            vat_rate: string | null;
+            /** Vat */
+            vat: string | null;
+            /** Total With Vat */
+            total_with_vat: string | null;
+            /** Unpriced */
+            unpriced: string[];
         };
         /** Takeoff */
         Takeoff: {
@@ -2265,6 +2558,245 @@ export interface operations {
             };
             path: {
                 measurement_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_estimate_tenders__tender_id__estimate_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EstimateOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_rate_rates__rate_id__decision_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                rate_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RateDecision"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_all_rates_tenders__tender_id__rates_approve_all_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Saved"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_markups_markups__markups_id__decision_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                markups_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecisionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_library_library_get: {
+        parameters: {
+            query?: {
+                q?: string;
+            };
+            header?: {
+                authorization?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_to_library_library_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LibraryIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_from_library_library__resource_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                resource_id: string;
             };
             cookie?: never;
         };

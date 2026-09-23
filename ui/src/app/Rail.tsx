@@ -58,6 +58,12 @@ export function Rail() {
       {tenderId && <People tenderId={tenderId} />}
       <div className="grow" />
       <NavLink
+        to="/library"
+        className={({ isActive }) => `rounded-md px-2 py-[7px] ${isActive ? "font-semibold" : "text-ink-2 hover:text-ink"}`}
+      >
+        Company library
+      </NavLink>
+      <NavLink
         to="/settings"
         className={({ isActive }) => `rounded-md px-2 py-[7px] ${isActive ? "font-semibold" : "text-ink-2 hover:text-ink"}`}
       >

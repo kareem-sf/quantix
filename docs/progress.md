@@ -132,4 +132,30 @@ The design was approved.
   synthetic plan set the scale and measured the slab through the real screen, with exact results. The layout was
   fixed for narrow windows.
 
-Next: estimating (unit rates with sources, build-ups, markups, the company rate library).
+## 23 September 2026: estimating
+
+- **Rates:** staff price each BOQ item with `propose_rate`, either as a unit rate or as a first-principles build-up
+  of labour, plant, material and subcontract lines per unit, with wastage. Every rate states its basis:
+  - a quote: the document, page and quoted line are checked, and the rate must be in the quote;
+  - the company library: the entry must exist;
+  - the office's own estimate: its reasoning is required in the note.
+  Estimates stay marked as estimates.
+- **Arithmetic:** Quantix computes line costs, the rate, the amount (BOQ quantity × rate, to the cent), the net, then
+  preliminaries, overheads and profit (each on the running subtotal), the adjustment, and VAT from the approved VAT
+  fact.
+- **Gates:** rates and markups wait for the engineer. Approving replaces an item's older rate. Approve all, and
+  rejections go back to the estimator.
+- **Company library:** rates kept across tenders. Approving a rate can save its resources, or the unit rate, to the
+  library. The engineer can add or remove entries, but an entry a rate is based on is kept. Staff search it with
+  `search_library`.
+- **Screens:**
+  - Estimate: rate and amount columns, the net, a status per row, and an item panel with the build-up arithmetic,
+    the basis with its page link, and "Save to the company library".
+  - Markups and summary: the price breakdown and markup approval.
+  - Company library screen.
+  - The panels become a drawer on windows narrower than 1280 px.
+- **Checks:** 52 service tests (3 runs in a row) and 30 UI tests. A browser run on a scratch folder showed a seeded
+  build-up of 293.55 + 114.00 + 63.00 = 470.55, an amount of 146,999.82, and a summary down to 237,131.82 including
+  VAT, all checked by hand.
+
+Next: subcontract and supplier quotes (packages, enquiry drafts, quote levelling, selection).

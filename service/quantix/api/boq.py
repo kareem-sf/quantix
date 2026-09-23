@@ -9,6 +9,7 @@ from quantix.api.tenders import DB
 from quantix.boq import records
 from quantix.boq.models import FACT_KINDS, BoqItem, Fact
 from quantix.documents.models import Document
+from quantix.estimate import records as estimate
 from quantix.office import records as office
 from quantix.office.models import ENGINEER
 from quantix.takeoff import records as takeoff
@@ -60,6 +61,7 @@ class Gates(BaseModel):
     boq: int
     facts: int
     takeoff: int
+    pricing: int
 
 
 class Approved(BaseModel):
@@ -122,7 +124,11 @@ def get_boq(tender_id: str, session: DB) -> Boq:
 @router.get("/tenders/{tender_id}/gates")
 def gates(tender_id: str, session: DB) -> Gates:
     _tender(session, tender_id)
-    return Gates(**records.waiting_counts(session, tender_id), takeoff=takeoff.waiting(session, tender_id))
+    return Gates(
+        **records.waiting_counts(session, tender_id),
+        takeoff=takeoff.waiting(session, tender_id),
+        pricing=estimate.waiting(session, tender_id),
+    )
 
 
 @router.post("/boq/{item_id}/decision")
