@@ -16,6 +16,7 @@ class Tender(Base):
     owner_id: Mapped[str] = mapped_column(String(64), default=LOCAL_OWNER)
     name: Mapped[str] = mapped_column(String(200))
     due_date: Mapped[date | None] = mapped_column(Date)
+    outcome: Mapped[str] = mapped_column(String(20), default="open")  # open | submitted | won | lost
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=lambda: datetime.now(UTC))
 
 
