@@ -19,3 +19,12 @@ export function useCreateTender() {
     onSuccess: () => client.invalidateQueries({ queryKey: ["tenders"] }),
   });
 }
+
+export function useSetOutcome(id: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (outcome: "open" | "submitted" | "won" | "lost") =>
+      must(await api.PATCH("/tenders/{tender_id}", { params: { path: { tender_id: id } }, body: { outcome } })),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["tenders"] }),
+  });
+}

@@ -1,6 +1,6 @@
 from collections.abc import Iterator
 from datetime import date, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
@@ -30,7 +30,12 @@ class TenderOut(BaseModel):
     id: str
     name: str
     due_date: date | None = Field(description="Submission deadline, when known")
+    outcome: Literal["open", "submitted", "won", "lost"]
     created_at: datetime
+
+
+class TenderChange(BaseModel):
+    outcome: Literal["open", "submitted", "won", "lost"]
 
 
 @router.get("")
@@ -48,4 +53,14 @@ def get_tender(tender_id: str, session: DB) -> TenderOut:
     tender = service.get_tender(session, tender_id)
     if tender is None:
         raise HTTPException(status_code=404, detail="Tender not found.")
+    return TenderOut.model_validate(tender)
+
+
+@router.patch("/{tender_id}")
+def change_tender(tender_id: str, body: TenderChange, session: DB) -> TenderOut:
+    tender = service.get_tender(session, tender_id)
+    if tender is None:
+        raise HTTPException(status_code=404, detail="Tender not found.")
+    tender.outcome = body.outcome
+    session.commit()
     return TenderOut.model_validate(tender)
