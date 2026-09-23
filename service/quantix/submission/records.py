@@ -33,7 +33,11 @@ def find_requirement(session: Session, tender_id: str, title: str) -> Requiremen
     wanted = title.strip().lower()
     found = next((r for r in requirements(session, tender_id) if r.title.lower() == wanted), None)
     if found is None:
-        raise ValueError(f"There is no requirement called {title}. Use list_requirements to see them.")
+        raise ValueError(
+            f"There is no requirement called {title}. Use list_requirements to see them. For a letter to the client, "
+            "such as a clarification query, first add it with add_requirements in the section Correspondence, citing "
+            "the page it is about."
+        )
     return found
 
 

@@ -4,7 +4,7 @@ import logging
 import time
 
 from pydantic_ai import Agent, UsageLimitExceeded, UsageLimits
-from pydantic_ai.exceptions import ModelAPIError
+from pydantic_ai.exceptions import ModelAPIError, ToolRetryError, UnexpectedModelBehavior
 from pydantic_ai.messages import ModelMessage, RetryPromptPart, ToolCallPart
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
@@ -160,6 +160,12 @@ async def run_turn(
             if not passing(error):
                 raise
             raise CutShort(error, run.all_messages()) from error
+        except (UnexpectedModelBehavior, ToolRetryError) as error:
+            # A reply the model couldn't get right ends this person's turn, not the office's work.
+            log.info("%s: turn ended early: %s", member.name, str(error)[:300])
+            if "output retries" in str(error):
+                return None  # an empty answer: they had nothing more to do
+            return run.all_messages()  # a tool call that kept failing: the next turn sees why
     return None
 
 

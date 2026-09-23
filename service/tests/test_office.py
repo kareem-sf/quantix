@@ -33,7 +33,10 @@ def scripted(brain) -> FunctionModel:
     """The brain as a model the office can stream from, as it does from a real service."""
 
     async def stream(messages, info):
-        for index, part in enumerate(brain(messages, info).parts):
+        response = brain(messages, info)
+        if not response.parts:
+            yield ""  # an empty answer, as models sometimes give when they have nothing to add
+        for index, part in enumerate(response.parts):
             if isinstance(part, TextPart):
                 yield part.content
             elif isinstance(part, ToolCallPart):
@@ -347,3 +350,22 @@ def test_a_person_asks_one_question_at_a_time(client, office):
         "Your question “Zero-quantity lines” is still waiting for the engineer. Ask the next one after."
     )
     assert len(client.get(f"/tenders/{tender_id}/decisions").json()) == 1
+
+
+def test_an_empty_or_failing_reply_ends_the_turn_not_the_office(client, office):
+    tender_id, use = office
+    calls = []
+
+    def stumbles(messages, info):
+        if info.output_tools:
+            return office_brain(messages, info)
+        calls.append(1)
+        if len(calls) <= 3:
+            return call("read_page", document_id="no-such-document", page=1)  # fails every time
+        return ModelResponse(parts=[])  # then answers with nothing at all
+
+    use(stumbles)
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Review the package."})
+    state = wait_for(lambda o: o["staff"] and len(calls) > 4, client, tender_id)
+    assert state["state"] == "idle"
+    assert not [m for m in team_room(client, tender_id) if m["text"].startswith("The office stopped")]
