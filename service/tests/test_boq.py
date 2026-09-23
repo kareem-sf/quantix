@@ -161,10 +161,10 @@ def test_staff_propose_items_through_their_tool(client, package, tmp_path):
                             "name": "Rania Farouk",
                             "discipline": "Civil",
                             "experience_years": 19,
-                            "background": "b",
-                            "working_style": "w",
-                            "opinions": "o",
-                            "voice": "v",
+                            "background": "Priced civil works for schools and clinics.",
+                            "working_style": "Checks every figure twice.",
+                            "opinions": "Distrusts quantities nobody has measured.",
+                            "voice": "Short and direct.",
                         },
                     )
                 ]
@@ -206,3 +206,23 @@ def test_bills_that_reuse_item_numbers_are_told_apart_by_section(client, package
         assert records.find_item(session, tender_id, "8486 · earthwork / 3.1").section == "8486 · Earthwork"
         with pytest.raises(ValueError, match="There is no BOQ item 8487 / 3.1"):
             records.find_item(session, tender_id, "8487 / 3.1")
+
+
+def test_staff_withdraw_their_own_undecided_lines(client, package, qs):
+    tender_id, bill, _ = package
+    propose(client, tender_id, qs, [line(bill, section="Earthwork")])
+    with client.app.state.sessions() as session:
+        from quantix.office.models import Staff
+
+        someone = office.hire(session, tender_id, "Layla Nasser", "Estimator", {})
+        assert "Not withdrawn: Earthwork / 3.1: only lines you entered" in records.withdraw_items(
+            session, tender_id, someone, ["Earthwork / 3.1"], "Wrong bill."
+        )
+        omar = session.get(Staff, qs)
+        assert records.withdraw_items(session, tender_id, omar, ["Earthwork / 3.1"], "Wrong bill.") == (
+            "Withdrew 1 BOQ items."
+        )
+        session.commit()
+    assert client.get(f"/tenders/{tender_id}/boq").json()["items"] == []
+    assert client.get(f"/tenders/{tender_id}/gates").json()["boq"] == 0
+    assert propose(client, tender_id, qs, [line(bill, section="8485 · Earthwork")]).startswith("Saved 1")

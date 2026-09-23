@@ -22,7 +22,9 @@ log = logging.getLogger("quantix.office")
 
 OFFICE = "office"  # the sender of the office's own notices; never used for anything an agent says
 TURN_BUDGET = 40  # turns without hearing from the engineer before the office pauses
-CARRY_ON = "You ran out of steps in your last turn. Carry on from where you stopped, and report what you have."
+CARRY_ON = "Your last turn was cut short. Carry on from where you stopped, and report what you have."
+RETRIES = 2  # turns cut short by a passing AI failure that are tried again before the office pauses
+RETRY_WAIT = 5.0  # seconds before the first retry; each further one waits longer
 
 
 def office_model(home: Path) -> Model | None:
@@ -47,6 +49,7 @@ class Office:
         self._working: str | None = None  # the tender being worked on right now
         self._again: set[str] = set()  # people whose last turn ran out of steps
         self._carry: dict[str, list] = {}  # their conversation, so the next turn carries on from it
+        self._failures: dict[str, int] = {}  # turns in a row cut short by the AI service, per tender
 
     # The engineer's side -------------------------------------------------------------------------------------
 
@@ -158,7 +161,18 @@ class Office:
         turn = Turn(self.home, self.sessions, tender_id, staff_id, autonomous, self._stop_event(tender_id))
         self._turns[tender_id] = self._turns.get(tender_id, 0) + 1
         try:
-            conversation = await agents.run_turn(model, turn, member, prompt, autonomous, history)
+            try:
+                conversation = await agents.run_turn(model, turn, member, prompt, autonomous, history)
+            except agents.CutShort as cut:
+                failures = self._failures[tender_id] = self._failures.get(tender_id, 0) + 1
+                if failures > RETRIES:
+                    raise cut.error from cut.error.__cause__  # keep the provider's own error as the cause
+                log.info("%s's turn was cut short (%s); trying again", member.name, providers.explain(cut.error))
+                self._again.add(staff_id)
+                self._carry[staff_id] = cut.conversation
+                await asyncio.sleep(RETRY_WAIT * failures)
+                return True
+            self._failures.pop(tender_id, None)
             if conversation is not None:
                 self._again.add(staff_id)
                 if history is None:  # one continuation in a row; after that the next turn starts from the records

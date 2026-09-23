@@ -174,10 +174,10 @@ def test_staff_measure_through_their_tools(client, sheet, tmp_path):
         "name": "Rania Farouk",
         "discipline": "Civil",
         "experience_years": 19,
-        "background": "b",
-        "working_style": "w",
-        "opinions": "o",
-        "voice": "v",
+        "background": "Priced civil works for schools and clinics.",
+        "working_style": "Checks every figure twice.",
+        "opinions": "Distrusts quantities nobody has measured.",
+        "voice": "Short and direct.",
     }
     seen: list[str] = []
 

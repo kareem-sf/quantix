@@ -1,5 +1,6 @@
 """The tools office agents work with. Every tool records what the person is doing, from the real call."""
 
+import re
 import threading
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -7,6 +8,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from pydantic_ai import BinaryContent, ModelRetry, RunContext, ToolReturn
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -21,6 +23,41 @@ from quantix.office.models import TEAM, Staff
 from quantix.subcontract import records as subcontract
 from quantix.submission import records as submission
 from quantix.takeoff import records as takeoff
+
+FOREIGN_SCRIPT = re.compile("[぀-ヿ㐀-鿿가-힯]")  # Chinese, Japanese, Korean
+
+
+class Persona(BaseModel):
+    """A generated person for the office. Checked, because a weak model sometimes writes placeholders."""
+
+    name: str = Field(description="Full name that suits the region of the tender")
+    discipline: str
+    experience_years: int = Field(ge=2, le=45)
+    background: str = Field(description="Two sentences about their career")
+    working_style: str = Field(description="How they work, in one or two sentences")
+    opinions: str = Field(description="Professional views they hold and will voice")
+    voice: str = Field(description="How they speak and write")
+
+    @field_validator("name")
+    @classmethod
+    def _full_name(cls, name: str) -> str:
+        if len(name.split()) < 2:
+            raise ValueError("give a full name, first and last")
+        return name.strip()
+
+    @field_validator("discipline", "background", "working_style", "opinions", "voice")
+    @classmethod
+    def _plain_english(cls, text: str) -> str:
+        if FOREIGN_SCRIPT.search(text):
+            raise ValueError("write it in plain English only")
+        return text.strip()
+
+    @field_validator("background", "working_style", "opinions", "voice")
+    @classmethod
+    def _real_words(cls, text: str) -> str:
+        if len(text.split()) < 2 or re.search(r"\w_\w", text):
+            raise ValueError("write real words, not a label or placeholder")
+        return text
 
 
 class Stopped(Exception):
@@ -174,6 +211,11 @@ def hire(
         "opinions": opinions,
         "voice": voice,
     }
+    try:
+        Persona(name=name, **profile)
+    except ValidationError as error:
+        problems = "; ".join(f"{e['loc'][0]}: {e['msg']}" for e in error.errors())
+        raise ModelRetry(f"Make them a real person. {problems}.") from error
     with _working(ctx, f"Hiring a {role}") as (session, me):
         member = records.hire(session, ctx.deps.tender_id, name, role, profile)
         member.now = "Just joined the team"
@@ -209,6 +251,13 @@ def propose_boq_items(ctx: RunContext[Turn], items: list[boq.ItemIn]) -> str:
     quote that includes the item number and the quantity. Lines that don't check out come back with the reason."""
     with _working(ctx, f"Entering {len(items)} BOQ items") as (session, me):
         return boq.propose_items(session, ctx.deps.tender_id, me, items[:40], ctx.deps.autonomous)
+
+
+def withdraw_boq_items(ctx: RunContext[Turn], items: list[str], reason: str) -> str:
+    """Withdraw BOQ lines you entered that the engineer hasn't decided yet, for example to re-enter them under the
+    right section. Refer to each as "<section> / <item>" when an item number is in more than one bill."""
+    with _working(ctx, f"Withdrawing {len(items)} BOQ items") as (session, me):
+        return boq.withdraw_items(session, ctx.deps.tender_id, me, items, reason)
 
 
 def list_boq(ctx: RunContext[Turn]) -> str:
@@ -573,6 +622,7 @@ COMMON: list[Callable] = [
     raise_concern,
     ask_engineer,
     propose_boq_items,
+    withdraw_boq_items,
     list_boq,
     propose_fact,
     find_on_page,

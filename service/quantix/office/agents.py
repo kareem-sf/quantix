@@ -3,8 +3,8 @@
 import logging
 import time
 
-from pydantic import BaseModel, Field
 from pydantic_ai import Agent, UsageLimitExceeded, UsageLimits
+from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import ModelMessage, RetryPromptPart, ToolCallPart
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
@@ -14,7 +14,7 @@ from quantix import company, tenders
 from quantix.documents import library
 from quantix.office import records, tools
 from quantix.office.models import ENGINEER, TEAM, Message, Staff
-from quantix.office.tools import Turn
+from quantix.office.tools import Persona, Turn
 
 log = logging.getLogger("quantix.office")
 
@@ -44,18 +44,6 @@ MANAGER_DUTIES = """You are the Tender Manager: you lead this tender for the eng
 STAFF_DUTIES = """You work for the Tender Manager.
 - Work on your open tasks. When one is done, call complete_task with a clear result and the pages you used.
 - If something blocks you or you need a decision, say so in the team room and name the Manager."""
-
-
-class Persona(BaseModel):
-    """A generated person for the office."""
-
-    name: str = Field(description="Full name that suits the region of the tender")
-    discipline: str
-    experience_years: int
-    background: str = Field(description="Two sentences about their career")
-    working_style: str = Field(description="How they work, in one or two sentences")
-    opinions: str = Field(description="Professional views they hold and will voice")
-    voice: str = Field(description="How they speak and write")
 
 
 def instructions(member: Staff, autonomous: bool) -> str:
@@ -112,6 +100,24 @@ def situation(session: Session, member: Staff, new: list[Message]) -> str:
     return "\n\n".join(parts)
 
 
+class CutShort(Exception):
+    """The AI service failed in the middle of a turn in a way worth retrying. Carries the turn so far."""
+
+    def __init__(self, error: ModelAPIError, conversation: list[ModelMessage]):
+        super().__init__(str(error))
+        self.error = error
+        self.conversation = conversation
+
+
+def passing(error: ModelAPIError) -> bool:
+    """A failure that usually clears on its own: a timeout, a dropped connection, rate limiting, a server error."""
+    status = getattr(error, "status_code", None)
+    if isinstance(status, int):
+        return status == 429 or status >= 500
+    cause = type(error.__cause__).__name__.lower() if error.__cause__ else ""
+    return "timeout" in cause or "connect" in cause
+
+
 async def run_turn(
     model: Model, turn: Turn, member: Staff, prompt: str, autonomous: bool, history: list[ModelMessage] | None = None
 ) -> list[ModelMessage] | None:
@@ -147,6 +153,10 @@ async def run_turn(
                     log.info("%s: answered in %.1f s, calling %s", member.name, time.monotonic() - asked, calls)
         except UsageLimitExceeded:
             return run.all_messages()
+        except ModelAPIError as error:
+            if not passing(error):
+                raise
+            raise CutShort(error, run.all_messages()) from error
     return None
 
 
@@ -154,8 +164,9 @@ async def create_persona(model: Model, brief: str) -> Persona:
     agent = Agent(
         model,
         output_type=Persona,
-        instructions="You create believable people for a construction office.",
+        instructions="You create believable people for a construction office. Write in plain English.",
         model_settings=ModelSettings(timeout=REQUEST_TIMEOUT),
+        retries=3,  # a profile that fails its checks goes back to the model
     )
-    result = await agent.run(brief, usage_limits=UsageLimits(request_limit=2))
+    result = await agent.run(brief, usage_limits=UsageLimits(request_limit=4))
     return result.output

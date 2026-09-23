@@ -4,11 +4,13 @@ import re
 import time
 
 import pytest
+from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart, UserPromptPart
 from pydantic_ai.models.function import DeltaToolCall, FunctionModel
 from test_documents import PDF, read_all, upload
 
 from quantix import settings
+from quantix.office import runtime
 from quantix.office.models import TEAM
 
 
@@ -217,7 +219,7 @@ def test_running_out_of_steps_carries_on_without_losing_what_was_read(client, of
         if info.output_tools:
             return office_brain(messages, info)
         latest = [p.content for m in messages for p in m.parts if isinstance(p, UserPromptPart)][-1]
-        if "ran out of steps" not in latest:
+        if "cut short" not in latest:
             return call("read_page", document_id=document_id, page=1)  # never finishes on its own
         if any(p.tool_name == "message_engineer" for m in messages for p in m.parts if isinstance(p, ToolReturnPart)):
             return DONE
@@ -231,3 +233,72 @@ def test_running_out_of_steps_carries_on_without_losing_what_was_read(client, of
     chat = client.get(f"/tenders/{tender_id}/messages", params={"channel": rania["id"]}).json()
     assert [m["text"] for m in chat] == ["I read 12 pages before I ran out of steps."]
     assert rania["now"] is None
+
+
+def timed_out() -> ModelAPIError:
+    try:
+        raise type("APITimeoutError", (Exception,), {})()
+    except Exception as cause:
+        try:
+            raise ModelAPIError("scripted", "Request timed out.") from cause
+        except ModelAPIError as error:
+            return error
+
+
+def test_a_passing_ai_failure_is_retried_with_the_turn_so_far(client, office, monkeypatch):
+    tender_id, use = office
+    monkeypatch.setattr(runtime, "RETRY_WAIT", 0)
+    failed = []
+
+    def flaky(messages, info):
+        if info.output_tools:
+            return office_brain(messages, info)
+        if not returns(messages):
+            return call("list_documents")
+        if not failed:
+            failed.append(1)
+            raise timed_out()
+        if any(p.tool_name == "message_engineer" for m in messages for p in m.parts if isinstance(p, ToolReturnPart)):
+            return DONE
+        return call("message_engineer", text=f"Carried on with {len(returns(messages))} earlier result.")
+
+    use(flaky)
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Review the package."})
+    state = wait_for(lambda o: o["staff"] and o["state"] == "idle", client, tender_id)
+    chat = client.get(f"/tenders/{tender_id}/messages", params={"channel": state["staff"][0]["id"]}).json()
+    assert [m["text"] for m in chat] == ["Carried on with 1 earlier result."]
+
+
+def test_the_office_pauses_when_the_ai_keeps_failing(client, office, monkeypatch):
+    tender_id, use = office
+    monkeypatch.setattr(runtime, "RETRY_WAIT", 0)
+
+    def down(messages, info):
+        if info.output_tools:
+            return office_brain(messages, info)
+        raise timed_out()
+
+    use(down)
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Review the package."})
+    wait_for(lambda o: o["state"] == "paused", client, tender_id)
+    assert team_room(client, tender_id)[-1]["text"].startswith(
+        "The office stopped: The AI service took too long to answer."
+    )
+
+
+def test_a_placeholder_profile_is_sent_back():
+    from pydantic import ValidationError
+
+    from quantix.office.tools import Persona
+
+    with pytest.raises(ValidationError) as caught:  # what a weak model wrote for the real package's Manager
+        Persona(
+            name="Salem Al Suwaidi",
+            discipline="Tender management",
+            experience_years=50,
+            background="Character_Overview",
+            working_style="Runs his desk like a site command post.",
+            opinions="Do not touch the \u8fdb\u53d6 rates.",
+            voice="Blunt and dry.",
+        )
+    assert sorted(e["loc"][0] for e in caught.value.errors()) == ["background", "experience_years", "opinions"]
