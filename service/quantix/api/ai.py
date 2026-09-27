@@ -3,10 +3,13 @@ from typing import Annotated, Any, Literal
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, StringConstraints, model_validator
+from pydantic import BaseModel, Field, StringConstraints, model_validator
 
-from quantix import settings
+from quantix import settings, tenders
 from quantix.ai import check, connections, providers
+from quantix.api.tenders import DB
+from quantix.office import records
+from quantix.review import scorecard
 
 router = APIRouter(tags=["ai"])
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -59,11 +62,13 @@ class OfficeAI(BaseModel):
 class Settings(BaseModel):
     office_mode: Literal["engineer", "autonomous"]
     office_ai: OfficeAI | None
+    tender_allowance: int | None  # the most AI tokens one tender's office may use
 
 
 class SettingsUpdate(BaseModel):
     office_mode: Literal["engineer", "autonomous"] | None = None
     office_ai: OfficeAI | None = None
+    tender_allowance: int | None = Field(default=None, ge=1)
 
 
 def _out(connection: dict[str, Any]) -> ConnectionOut:
@@ -138,3 +143,37 @@ def update_settings(body: SettingsUpdate, home: Home) -> Settings:
         if not c["checks"].get(office_ai["model"], {}).get("ok"):
             raise HTTPException(status_code=400, detail="Check this model before the office uses it.")
     return Settings(**settings.save(home, **values))
+
+
+class ModelScore(BaseModel):
+    model: str
+    turns: int
+    finished: int  # turns that ended done, rather than cut short or failed
+    calls: int
+    calls_sent_back: int  # tool calls Quantix sent back with a reason
+    accepted: int  # records filed on its turns that the Tender Manager or the engineer accepted
+    sent_back: int  # records filed on its turns that were sent back
+    tokens: int
+
+
+class TenderUsage(BaseModel):
+    tender_id: str
+    name: str
+    tokens: int
+
+
+class Usage(BaseModel):
+    models: list[ModelScore]  # the most recently used first
+    tenders: list[TenderUsage]
+
+
+@router.get("/ai/usage")
+def usage(session: DB) -> Usage:
+    """How each AI model has done in the office, and the tokens each tender's office has used."""
+    return Usage(
+        models=[ModelScore(**vars(s)) for s in scorecard.scores(session)],
+        tenders=[
+            TenderUsage(tender_id=t.id, name=t.name, tokens=records.tokens_used(session, t.id))
+            for t in tenders.list_tenders(session)
+        ],
+    )

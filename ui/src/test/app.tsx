@@ -8,11 +8,11 @@ import type { SearchHit, TenderDocument } from "../documents/queries";
 import type { BoqItem, Fact, LibraryEntry, Markups, Priced, Summary } from "../estimate/queries";
 import type { Decision, Message, Staff, Task } from "../office/queries";
 import type { Comparison, Measurement, Sheet } from "../takeoff/queries";
-import type { Connection, OfficeSettings } from "../settings/queries";
+import type { Connection, OfficeSettings, Usage } from "../settings/queries";
 import type { Rule } from "../company/queries";
 import type { Company, Package } from "../subcontract/queries";
 import type { Requirement } from "../submission/queries";
-import type { Finding } from "../review/queries";
+import type { Finding, Lesson } from "../review/queries";
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -53,6 +53,10 @@ export interface FakeState {
   findings: Record<string, Finding[]>;
   /** The tender audit. */
   audit: Finding[];
+  /** What the office learned on the tender. */
+  lessons: Lesson[];
+  /** How each AI has done, and what each tender used. */
+  usage: Usage;
   /** Answer the next POST to this path with this error detail. */
   fail: Record<string, string>;
 }
@@ -63,7 +67,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     tenders: [],
     rules: [],
     connections: [],
-    settings: { office_mode: "engineer", office_ai: null },
+    settings: { office_mode: "engineer", office_ai: null, tender_allowance: null },
     models: ["model-b", "model-a"],
     documents: [],
     pages: {},
@@ -92,6 +96,8 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     reopened: [],
     findings: {},
     audit: [],
+    lessons: [],
+    usage: { models: [], tenders: [] },
     fail: {},
     ...initial,
   };
@@ -279,6 +285,15 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     }
     if (path.match(/^\/tenders\/\w+\/review$/)) return json([]);
     if (path.match(/^\/tenders\/\w+\/audit$/)) return json(state.audit);
+    if (path.match(/^\/tenders\/\w+\/lessons$/)) return json(state.lessons.filter((l) => l.status !== "dropped"));
+    const lesson = state.lessons.find((l) => path === `/lessons/${l.id}`);
+    if (lesson && method === "PATCH") {
+      lesson.status = body.status;
+      if (body.status === "kept")
+        state.rules.push({ id: `r${state.rules.length + 1}`, topic: lesson.topic, text: lesson.text, created_at: "" });
+      return json(lesson);
+    }
+    if (path === "/ai/usage") return json(state.usage);
     const checked = path.match(/^\/records\/\w+\/(\w+)\/findings$/);
     if (checked) return json(state.findings[checked[1]] ?? []);
     const reopened = path.match(/^\/records\/(\w+)\/(\w+)\/reopen$/);

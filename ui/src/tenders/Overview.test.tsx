@@ -108,3 +108,31 @@ describe("Overview", () => {
     await waitFor(() => expect(router.state.location.pathname).not.toBe("/tenders/t1"));
   });
 });
+
+describe("What the office learned", () => {
+  const lesson = (id: string, text: string, source: string) =>
+    ({ id, text, topic: "Rates", source, status: "tender", created_at: "2026-09-27T10:00:00Z" }) as const;
+  const cubic = "A rate per m3 doesn't fall with a thinner layer: price the cubic metre.";
+
+  it("keeps a lesson as a company rule for later tenders, or drops it", async () => {
+    const service = fakeService({
+      tenders: [tender],
+      documents: [doc],
+      lessons: [
+        lesson("l1", cubic, "the rate for BOQ item C.2.7.3"),
+        lesson("l2", "Road lines are laid by machine, several hundred metres an hour.", "the rate for BOQ item C.9.1"),
+      ],
+    });
+    openApp("/tenders/t1");
+
+    expect(await screen.findByRole("heading", { name: "What the office learned" })).toBeInTheDocument();
+    expect(screen.getByText("From the rate for BOQ item C.2.7.3")).toBeInTheDocument();
+    await userEvent.click(screen.getAllByRole("button", { name: "Keep for later tenders" })[0]);
+    expect(await screen.findByRole("link", { name: "Kept as a company rule" })).toHaveAttribute("href", "/rules");
+    expect(service.state.rules.map((r) => [r.topic, r.text])).toEqual([["Rates", cubic]]);
+
+    await userEvent.click(screen.getByRole("button", { name: "Drop" }));
+    await waitFor(() => expect(screen.queryByText(/Road lines/)).not.toBeInTheDocument());
+    expect(screen.getByText(cubic)).toBeInTheDocument();
+  });
+});

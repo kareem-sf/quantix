@@ -76,3 +76,10 @@ export function useUpdateSettings() {
     onSuccess: refresh,
   });
 }
+
+export type Usage = components["schemas"]["Usage"];
+
+/** How each AI model has done in the office, and the tokens each tender's office has used. */
+export function useUsage() {
+  return useQuery({ queryKey: ["usage"], queryFn: async () => must(await api.GET("/ai/usage")) });
+}

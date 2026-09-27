@@ -659,3 +659,34 @@ def test_the_turn_budget_is_kept_across_a_restart(client, office, tmp_path, monk
         wait_for(lambda o: o["state"] == "paused", again, tender_id)
     assert team_room(client, tender_id)[-1]["text"].startswith("The office paused after a long stretch of work.")
     assert asked == []
+
+
+def test_the_office_pauses_once_the_tender_has_used_its_ai_allowance(client, office):
+    from quantix.office import records as office_records
+
+    tender_id, use = office
+    asked = []
+    use(lambda messages, info: asked.append(1) or DONE)
+    with client.app.state.sessions() as session:
+        rania = office_records.hire(session, tender_id, "Rania Farouk", "Tender Manager", {}, is_manager=True)
+        session.flush()
+        session.add(
+            TurnRecord(
+                tender_id=tender_id,
+                staff_id=rania.id,
+                model="scripted",
+                ended="done",
+                input_tokens=900,
+                output_tokens=100,
+            )
+        )
+        session.commit()
+    assert client.patch("/settings", json={"tender_allowance": 1000}).json()["tender_allowance"] == 1000
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Price the asphalt."})
+    wait_for(lambda o: o["state"] == "paused", client, tender_id)
+    assert team_room(client, tender_id)[-1]["text"] == runtime.ALLOWANCE_USED
+    assert asked == []
+
+    client.patch("/settings", json={"tender_allowance": 2000})  # raised: the next message carries on
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Carry on."})
+    wait_for(lambda o: asked, client, tender_id)

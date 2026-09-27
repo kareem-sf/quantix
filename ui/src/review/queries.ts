@@ -50,3 +50,34 @@ export function useReopen() {
     onSuccess: () => client.invalidateQueries(),
   });
 }
+
+export type Lesson = components["schemas"]["LessonOut"];
+
+/** What the office learned on the tender from work that needed correcting; the Manager adds them as he reviews. */
+export function useLessons(tenderId: string) {
+  return useQuery({
+    queryKey: ["lessons", tenderId],
+    queryFn: async () =>
+      must(await api.GET("/tenders/{tender_id}/lessons", { params: { path: { tender_id: tenderId } } })),
+    refetchInterval: 2000,
+  });
+}
+
+/** Keep a lesson as a company rule for later tenders, or drop it. */
+export function useDecideLesson(tenderId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: { id: string; status: "kept" | "dropped" }) =>
+      must(
+        await api.PATCH("/lessons/{lesson_id}", {
+          params: { path: { lesson_id: body.id } },
+          body: { status: body.status },
+        }),
+      ),
+    onSuccess: () =>
+      Promise.all([
+        client.invalidateQueries({ queryKey: ["lessons", tenderId] }),
+        client.invalidateQueries({ queryKey: ["rules"] }),
+      ]),
+  });
+}

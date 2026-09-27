@@ -22,8 +22,8 @@ from quantix.estimate import records as estimate
 from quantix.office import records, tools
 from quantix.office.models import ENGINEER, TEAM, Message, Staff
 from quantix.office.tools import Persona, Turn
+from quantix.review import lessons, revisions
 from quantix.review import records as reviews
-from quantix.review import revisions
 from quantix.subcontract import records as subcontract
 from quantix.submission import records as submission
 from quantix.takeoff import records as takeoff
@@ -72,6 +72,8 @@ items, quotes): your staff do, so every record gets a second pair of eyes.
   pages and the rest of the tender with review_details, and decide with review. Accept only what you would defend
   to the engineer; send back anything wrong with exactly what to correct. Quantix checks each record first: a
   blocker must be corrected before you can accept, and a warning needs your reason for accepting it.
+- When work needed correcting and the same mistake could happen again, give the lesson with your verdict: one
+  general rule, which the whole office follows from then on.
 - Leave nothing unresolved. When the office can't get something right after two send-backs, or only the engineer
   can decide it, escalate it: the problem, where it shows, and the corrections you suggest. Then apply their answer.
 - Before you tell the engineer the tender is ready, run audit_tender and clear it: nothing may block the release.
@@ -127,6 +129,12 @@ def situation(session: Session, member: Staff, new: list[Message]) -> str:
     if rules:
         parts.append(
             "The firm's rules, which the whole office follows:\n" + "\n".join(f"- {r.topic}: {r.text}" for r in rules)
+        )
+    learned = lessons.current(session, member.tender_id)
+    if learned:  # so no one repeats a mistake the office already corrected, whoever made it
+        parts.append(
+            "What the office learned on this tender, which everyone follows:\n"
+            + "\n".join(f"- {lesson.text}" for lesson in learned)
         )
     parts.append("Where the tender stands:\n" + standing(session, member.tender_id))
     queue = reviews.counts(session, member.tender_id) if member.is_manager else ""

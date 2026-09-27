@@ -753,7 +753,8 @@ def review(ctx: RunContext[Turn], verdicts: list[reviews.Verdict]) -> str:
     """Decide on records in your review queue, as many as you like at once. Accept only what you would defend to
     the engineer, saying what you checked. You can't accept a record while Quantix finds a blocker in it; accept a
     warning only with warnings_reason saying why it needs no correction. Send back anything wrong, saying exactly
-    what to correct: it goes to whoever made it, in the team room."""
+    what to correct: it goes to whoever made it, in the team room. When work needed correcting and the mistake
+    could happen again, add the lesson: the whole office follows it from then on."""
     with _working(ctx, "Reviewing the team's work") as (session, me):
         return reviews.review(session, ctx.deps.home, ctx.deps.tender_id, me, verdicts, ctx.deps.autonomous)
 

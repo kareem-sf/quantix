@@ -200,6 +200,12 @@ def unfinished(session: Session, staff_id: str) -> bool:
     return last is not None and last.ended in UNFINISHED
 
 
+def tokens_used(session: Session, tender_id: str) -> int:
+    """The AI tokens the tender's office has used in its turns, read and written."""
+    used = select(func.sum(TurnRecord.input_tokens + TurnRecord.output_tokens)).where(TurnRecord.tender_id == tender_id)
+    return session.scalar(used) or 0
+
+
 def turns_since_engineer(session: Session, tender_id: str) -> int:
     """The office's turns since the engineer last wrote to it or answered it."""
     query = select(func.max(Message.created_at)).where(Message.tender_id == tender_id, Message.sender == ENGINEER)

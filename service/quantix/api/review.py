@@ -1,11 +1,15 @@
+from datetime import datetime
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from quantix import tenders
 from quantix.api.tenders import DB
 from quantix.office import records as office
 from quantix.office.models import Staff
-from quantix.review import audit, records
+from quantix.review import audit, lessons, records
+from quantix.review.models import Lesson
 
 router = APIRouter(tags=["review"])
 
@@ -105,3 +109,41 @@ def tender_audit(tender_id: str, session: DB, request: Request) -> list[FindingO
             )
         )
     return out
+
+
+class LessonOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    text: str
+    topic: str
+    source: str  # the work it came from, e.g. "the rate for BOQ item 3.1"
+    status: str  # tender: the office follows it on this tender | kept: a company rule too | dropped
+    created_at: datetime
+
+
+class LessonDecision(BaseModel):
+    status: Literal["kept", "dropped"]
+
+
+@router.get("/tenders/{tender_id}/lessons")
+def tender_lessons(tender_id: str, session: DB) -> list[LessonOut]:
+    """What the office learned on this tender from work that needed correcting, and whether the engineer kept it."""
+    if tenders.get_tender(session, tender_id) is None:
+        raise HTTPException(status_code=404, detail="Tender not found.")
+    found = lessons.lessons(session, tender_id, (lessons.TENDER, lessons.KEPT))
+    return [LessonOut.model_validate(lesson) for lesson in found]
+
+
+@router.patch("/lessons/{lesson_id}")
+def decide_lesson(lesson_id: str, body: LessonDecision, session: DB) -> LessonOut:
+    """The engineer keeps a lesson as a company rule for later tenders, or drops it."""
+    lesson = session.get(Lesson, lesson_id)
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="Not found.")
+    try:
+        lessons.decide(session, lesson, body.status)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    session.commit()
+    return LessonOut.model_validate(lesson)

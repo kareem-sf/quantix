@@ -639,6 +639,50 @@
         }
       }
     },
+    "/ai/usage": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Usage",
+        "description": "How each AI model has done in the office, and the tokens each tender's office has used.",
+        "operationId": "usage_ai_usage_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Usage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/tenders/{tender_id}/documents": {
       "post": {
         "tags": [
@@ -3655,6 +3699,126 @@
           }
         }
       }
+    },
+    "/tenders/{tender_id}/lessons": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "summary": "Tender Lessons",
+        "description": "What the office learned on this tender from work that needed correcting, and whether the engineer kept it.",
+        "operationId": "tender_lessons_tenders__tender_id__lessons_get",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LessonOut"
+                  },
+                  "title": "Response Tender Lessons Tenders  Tender Id  Lessons Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/lessons/{lesson_id}": {
+      "patch": {
+        "tags": [
+          "review"
+        ],
+        "summary": "Decide Lesson",
+        "description": "The engineer keeps a lesson as a company rule for later tenders, or drops it.",
+        "operationId": "decide_lesson_lessons__lesson_id__patch",
+        "parameters": [
+          {
+            "name": "lesson_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Lesson Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LessonDecision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LessonOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4905,6 +5069,62 @@
         ],
         "title": "ItemOut"
       },
+      "LessonDecision": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "kept",
+              "dropped"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "LessonDecision"
+      },
+      "LessonOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "topic": {
+            "type": "string",
+            "title": "Topic"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "text",
+          "topic",
+          "source",
+          "status",
+          "created_at"
+        ],
+        "title": "LessonOut"
+      },
       "LibraryIn": {
         "properties": {
           "kind": {
@@ -5437,6 +5657,54 @@
           "checked_at"
         ],
         "title": "ModelCheck"
+      },
+      "ModelScore": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "turns": {
+            "type": "integer",
+            "title": "Turns"
+          },
+          "finished": {
+            "type": "integer",
+            "title": "Finished"
+          },
+          "calls": {
+            "type": "integer",
+            "title": "Calls"
+          },
+          "calls_sent_back": {
+            "type": "integer",
+            "title": "Calls Sent Back"
+          },
+          "accepted": {
+            "type": "integer",
+            "title": "Accepted"
+          },
+          "sent_back": {
+            "type": "integer",
+            "title": "Sent Back"
+          },
+          "tokens": {
+            "type": "integer",
+            "title": "Tokens"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model",
+          "turns",
+          "finished",
+          "calls",
+          "calls_sent_back",
+          "accepted",
+          "sent_back",
+          "tokens"
+        ],
+        "title": "ModelScore"
       },
       "OfficeAI": {
         "properties": {
@@ -6562,12 +6830,24 @@
                 "type": "null"
               }
             ]
+          },
+          "tender_allowance": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tender Allowance"
           }
         },
         "type": "object",
         "required": [
           "office_mode",
-          "office_ai"
+          "office_ai",
+          "tender_allowance"
         ],
         "title": "Settings"
       },
@@ -6597,6 +6877,18 @@
                 "type": "null"
               }
             ]
+          },
+          "tender_allowance": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tender Allowance"
           }
         },
         "type": "object",
@@ -7073,6 +7365,53 @@
           "created_at"
         ],
         "title": "TenderOut"
+      },
+      "TenderUsage": {
+        "properties": {
+          "tender_id": {
+            "type": "string",
+            "title": "Tender Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "tokens": {
+            "type": "integer",
+            "title": "Tokens"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tender_id",
+          "name",
+          "tokens"
+        ],
+        "title": "TenderUsage"
+      },
+      "Usage": {
+        "properties": {
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelScore"
+            },
+            "type": "array",
+            "title": "Models"
+          },
+          "tenders": {
+            "items": {
+              "$ref": "#/components/schemas/TenderUsage"
+            },
+            "type": "array",
+            "title": "Tenders"
+          }
+        },
+        "type": "object",
+        "required": [
+          "models",
+          "tenders"
+        ],
+        "title": "Usage"
       },
       "ValidationError": {
         "properties": {

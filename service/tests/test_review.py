@@ -1,6 +1,7 @@
 """The Tender Manager reviews everything his staff propose before it reaches the engineer."""
 
 import re
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -18,9 +19,9 @@ from test_office import scripted, wait_for
 from quantix import settings
 from quantix.boq import records as boq
 from quantix.estimate import records as estimate
+from quantix.office import agents, tools
 from quantix.office import records as office
-from quantix.office import tools
-from quantix.office.models import Staff
+from quantix.office.models import Staff, TurnRecord
 from quantix.review import records as reviews
 
 QUOTES = (
@@ -171,10 +172,10 @@ def test_the_manager_wakes_for_new_work_in_his_queue(client, office_with_work, t
     assert len(manager_prompts) == 1  # the same queue doesn't wake him again
 
 
-def decide(client, tender_id, manager_id, record_id, accept, note) -> str:
+def decide(client, tender_id, manager_id, record_id, accept, note, lesson=None) -> str:
     with client.app.state.sessions() as session:
         [ref] = [p.ref for p in reviews.pending(session, tender_id) if p.record.id == record_id]
-        verdict = reviews.Verdict(record=ref, accept=accept, note=note)
+        verdict = reviews.Verdict(record=ref, accept=accept, note=note, lesson=lesson)
         manager = session.get(Staff, manager_id)
         report = reviews.review(session, client.app.state.home, tender_id, manager, [verdict], autonomous=False)
         session.commit()
@@ -328,3 +329,116 @@ def test_a_task_is_done_only_once_its_work_is_filed(client, office_with_work, tm
         [task] = office.open_tasks(session, session.get(Staff, omar_id))
         assert task.brief == "Quote the quantity as printed."
         assert reviews.filed_since(session, omar_id, task.created_at) == ""  # the redo counts from the new send-back
+
+
+UNIT = "Enter each unit exactly as the client's bill prints it, never translated."
+METHOD = "Take the method of measurement from the conditions, not from the bill's preamble."
+
+
+def test_a_lesson_from_work_sent_back_is_followed_by_the_whole_office(client, office_with_work):
+    tender_id, rania_id, omar_id = office_with_work
+    bill = read_all(client, tender_id)["Bill.xlsx"]["id"]
+    excavation, slab = client.get(f"/tenders/{tender_id}/boq").json()["items"]
+    [fact] = client.get(f"/tenders/{tender_id}/boq").json()["facts"]
+
+    report = decide(client, tender_id, rania_id, excavation["id"], True, "Quantity matches row 2.", lesson=UNIT)
+    assert report.endswith("a lesson comes from work that needed correcting. Give it when you send something back, "
+                           "or when you accept its corrected version.")  # fmt: skip
+    report = decide(client, tender_id, rania_id, slab["id"], False, "Use the unit as printed.", lesson=UNIT)
+    assert report.endswith(f"Lesson kept: the whole office follows “{UNIT}” from now on.")
+    similar = "Enter every unit exactly as the client's bill prints it."
+    report = decide(client, tender_id, rania_id, fact["id"], False, "Read the conditions again.", lesson=similar)
+    assert report.endswith(f"Lesson not kept: the office already follows: “{UNIT}”")
+
+    with client.app.state.sessions() as session:  # Omar enters the line again, corrected
+        line = boq.ItemIn(item="4.2", description="Slab", unit="م3", quantity=Decimal("312.4"), document_id=bill,
+                          page=1, quote=QUOTES[1])  # fmt: skip
+        boq.propose_items(session, tender_id, session.get(Staff, omar_id), [line])
+        session.commit()
+    redone = next(i for i in client.get(f"/tenders/{tender_id}/boq").json()["items"] if i["item"] == "4.2")
+    evidence = "Quote the whole row of the bill, with its item number and quantity, as the evidence."
+    report = decide(client, tender_id, rania_id, redone["id"], True, "The unit is as printed now.", lesson=evidence)
+    assert report.endswith(f"Lesson kept: the whole office follows “{evidence}” from now on.")
+    with client.app.state.sessions() as session:
+        conditions = read_all(client, tender_id)["Conditions.pdf"]["id"]
+        boq.propose_fact(session, tender_id, session.get(Staff, omar_id), "method_of_measurement", "Re-measured",
+                         conditions, 1, "Tender")  # fmt: skip
+        session.commit()
+    [fact] = client.get(f"/tenders/{tender_id}/boq").json()["facts"]
+    report = decide(client, tender_id, rania_id, fact["id"], False, "Quote the clause itself.", lesson="Check units.")
+    assert report.endswith("is too short to follow. Say it as a rule the whole office can apply.")
+
+    with client.app.state.sessions() as session:  # someone who joins later doesn't make the same mistake
+        salma = office.hire(session, tender_id, "Salma Nasser", "Estimator", {})
+        session.commit()
+        briefing = agents.situation(session, salma, [])
+    assert f"What the office learned on this tender, which everyone follows:\n- {UNIT}\n- {evidence}" in briefing
+
+
+def test_the_engineer_keeps_a_lesson_as_a_company_rule_or_drops_it(client, office_with_work):
+    tender_id, rania_id, omar_id = office_with_work
+    excavation, slab = client.get(f"/tenders/{tender_id}/boq").json()["items"]
+    [fact] = client.get(f"/tenders/{tender_id}/boq").json()["facts"]
+    decide(client, tender_id, rania_id, slab["id"], False, "Use the unit as printed.", lesson=UNIT)
+    decide(client, tender_id, rania_id, fact["id"], False, "Read the conditions, page 1.", lesson=METHOD)
+
+    unit, method = client.get(f"/tenders/{tender_id}/lessons").json()
+    assert (unit["text"], unit["topic"], unit["source"], unit["status"]) == (UNIT, "BOQ", "BOQ item 4.2", "tender")
+    assert (method["topic"], method["source"]) == ("Tender facts", "the method of measurement")
+    assert client.patch(f"/lessons/{unit['id']}", json={"status": "kept"}).json()["status"] == "kept"
+    assert [(r["topic"], r["text"]) for r in client.get("/rules").json()] == [("BOQ", UNIT)]
+    assert client.patch(f"/lessons/{method['id']}", json={"status": "dropped"}).status_code == 200
+    assert [lesson["status"] for lesson in client.get(f"/tenders/{tender_id}/lessons").json()] == ["kept"]
+    refused = client.patch(f"/lessons/{unit['id']}", json={"status": "dropped"})
+    assert (refused.status_code, refused.json()["detail"]) == (400, "This lesson has already been kept or dropped.")
+
+    with client.app.state.sessions() as session:
+        briefing = agents.situation(session, session.get(Staff, omar_id), [])
+    assert f"- BOQ: {UNIT}" in briefing  # a company rule now, which every team follows
+    assert "What the office learned" not in briefing and METHOD not in briefing
+    report = decide(client, tender_id, rania_id, excavation["id"], False, "Check the quantity.", lesson=METHOD)
+    assert report.endswith(f"Lesson not kept: the engineer dropped a lesson like it: “{METHOD}”")
+
+
+def test_settings_show_how_each_ai_has_done_from_the_turns_and_the_reviews(client, office_with_work):
+    tender_id, rania_id, omar_id = office_with_work
+    excavation, slab = client.get(f"/tenders/{tender_id}/boq").json()["items"]
+    calls = [{"tool": "read_page", "sent_back": "No document has that id."}, {"tool": "list_boq", "sent_back": None}]
+    with client.app.state.sessions() as session:  # Omar's earlier turn on another AI, then the one he filed in
+        early, later = datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 6, 1, tzinfo=UTC)
+        session.add(
+            TurnRecord(
+                tender_id=tender_id,
+                staff_id=omar_id,
+                model="model-old",
+                started_at=early,
+                ended="out_of_steps",
+                calls=[],
+                input_tokens=400,
+                output_tokens=100,
+            )
+        )
+        session.add(
+            TurnRecord(
+                tender_id=tender_id,
+                staff_id=omar_id,
+                model="model-a",
+                started_at=later,
+                ended="done",
+                calls=calls,
+                input_tokens=1000,
+                output_tokens=200,
+            )
+        )
+        session.commit()
+    decide(client, tender_id, rania_id, excavation["id"], True, "Quantity matches row 2.")
+    decide(client, tender_id, rania_id, slab["id"], False, "Use the unit as printed.")
+
+    usage = client.get("/ai/usage").json()
+    score = {"calls": 0, "calls_sent_back": 0, "accepted": 0, "sent_back": 0}
+    assert usage["models"] == [  # the fact still with the Manager counts neither way
+        {"model": "model-a", "turns": 1, "finished": 1, **score, "calls": 2, "calls_sent_back": 1, "accepted": 1,
+         "sent_back": 1, "tokens": 1200},
+        {"model": "model-old", "turns": 1, "finished": 0, **score, "tokens": 500},
+    ]  # fmt: skip
+    assert usage["tenders"] == [{"tender_id": tender_id, "name": "Synthetic school", "tokens": 1700}]

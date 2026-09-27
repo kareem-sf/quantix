@@ -22,7 +22,7 @@ from quantix.estimate import records as estimate
 from quantix.estimate.models import Markups, Rate
 from quantix.office import records as office
 from quantix.office.models import ENGINEER, TEAM, Decision, Staff
-from quantix.review import checks
+from quantix.review import checks, lessons
 from quantix.review.models import Acceptance
 from quantix.subcontract import records as subcontract
 from quantix.subcontract.models import Company, Enquiry, Package, Quote
@@ -324,13 +324,19 @@ class Verdict(BaseModel):
         default=None,
         description="Accepting a record Quantix warned about: why each warning doesn't need correcting",
     )
+    lesson: str | None = Field(
+        default=None,
+        description="Only for work that needed correcting (you send it back, or accept its corrected version): the "
+        "general rule that stops the same mistake anywhere else, in one sentence the whole office can follow from "
+        "now on. Not about this record alone; leave it out for a one-off slip",
+    )
 
 
 def review(
     session: Session, home: Path, tender_id: str, manager: Staff, verdicts: list[Verdict], autonomous: bool
 ) -> str:
     """Apply the Manager's verdicts. One that can't be applied is reported, the others still count."""
-    accepted_n, sent_back, problems = 0, 0, []
+    accepted_n, sent_back, problems, learned = 0, 0, [], []
     for verdict in verdicts:
         try:
             if len(verdict.note.split()) < 3:
@@ -338,6 +344,7 @@ def review(
             p = find(session, tender_id, verdict.record)
             if escalation(session, p.record.id):
                 raise ValueError("you escalated it to the engineer; apply their answer when it comes")
+            source, corrected = _named(session, p), not verdict.accept or _corrected(session, tender_id, p)
             if verdict.accept:
                 _accept(session, home, tender_id, p, manager, verdict, autonomous)
                 accepted_n += 1
@@ -346,9 +353,28 @@ def review(
                 sent_back += 1
         except ValueError as error:
             problems.append(f"{verdict.record}: {error}")
+            continue
+        if verdict.lesson and verdict.lesson.strip():
+            learned.append(
+                lessons.learn(session, tender_id, manager.id, p.kind, source, verdict.lesson)
+                if corrected
+                else f"Lesson not kept for {verdict.record}: a lesson comes from work that needed correcting. Give "
+                "it when you send something back, or when you accept its corrected version."
+            )
     where = "approved by the office" if autonomous else "waiting for the engineer"
     report = f"Accepted {accepted_n} ({where}). Sent back {sent_back}."
-    return report + ("\nNot done:\n" + "\n".join(problems) if problems else "")
+    return report + ("\nNot done:\n" + "\n".join(problems) if problems else "") + "".join(f"\n{t}" for t in learned)
+
+
+def _corrected(session: Session, tender_id: str, p: Pending) -> bool:
+    """Whether this is the corrected version of work that was sent back before, by the Manager or the engineer."""
+    if p.kind not in REVIEWED_KINDS:
+        return False
+    model = REVIEWED_KINDS[p.kind][0]
+    query = select(model.id).where(
+        model.tender_id == tender_id, _same_work(p.kind, p.record), model.id != p.record.id, model.status == "rejected"
+    )
+    return session.scalars(query.limit(1)).first() is not None
 
 
 def _accept(
@@ -498,16 +524,20 @@ def _own_sources(session: Session, p: Pending) -> list[dict[str, Any]]:
     return found
 
 
-def _title(session: Session, p: Pending) -> str:
+def _named(session: Session, p: Pending) -> str:
+    """The record as a sentence names it, e.g. "the rate for BOQ item 3.1"."""
     r = p.record
     if p.kind in REVIEWED_KINDS:
-        text = REVIEWED_KINDS[p.kind][1].label(session, r)
-    elif p.kind == "checklist":
-        text = f"the checklist item “{r.title}”"
-    elif p.kind == "enquiry":
-        text = f"the enquiry “{r.subject}”"
-    else:
-        text = f"the recommendation for {r.name}"
+        return REVIEWED_KINDS[p.kind][1].label(session, r)
+    if p.kind == "checklist":
+        return f"the checklist item “{r.title}”"
+    if p.kind == "enquiry":
+        return f"the enquiry “{r.subject}”"
+    return f"the recommendation for {r.name}"
+
+
+def _title(session: Session, p: Pending) -> str:
+    text = _named(session, p)
     return text[0].upper() + text[1:]
 
 

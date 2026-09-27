@@ -8,7 +8,7 @@ import { Face } from "../office/Face";
 import { Prose, tidy } from "../office/Prose";
 import { TEAM, firstName, useDecisions, useMessages, useOffice, useSend } from "../office/queries";
 import { Opening } from "../app/Opening";
-import { useAudit } from "../review/queries";
+import { useAudit, useDecideLesson, useLessons } from "../review/queries";
 import { dueSentence } from "./due";
 import { usePackages } from "../subcontract/queries";
 import { useSubmission } from "../submission/queries";
@@ -160,6 +160,7 @@ export function Overview() {
         </div>
       )}
       {current.length > 0 && <Audit tenderId={tenderId} />}
+      <Lessons tenderId={tenderId} />
       <DeleteTender tenderId={tenderId} name={tender.data.name} />
 
       <div className="grow" />
@@ -225,6 +226,53 @@ function Audit({ tenderId }: { tenderId: string }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/** What the Manager learned from work that needed correcting. The office follows it on this tender; the engineer can
+ * keep it as a company rule for later tenders, or drop it. */
+function Lessons({ tenderId }: { tenderId: string }) {
+  const lessons = useLessons(tenderId);
+  const decide = useDecideLesson(tenderId);
+  if (!lessons.data?.length) return null;
+  return (
+    <div className="mt-9 flex flex-col">
+      <h2 className="pb-2 font-semibold text-ink-2">What the office learned</h2>
+      <p className="px-1 pb-2 text-ink-2">From work that needed correcting. Everyone on this tender follows them.</p>
+      <ul className="flex flex-col">
+        {lessons.data.map((lesson) => (
+          <li key={lesson.id} className="flex items-start gap-4 border-t border-line px-1 py-2.5 leading-normal">
+            <span className="flex min-w-0 grow flex-col gap-0.5">
+              <span dir="auto">{lesson.text}</span>
+              <span className="text-ink-3">From {lesson.source}</span>
+            </span>
+            {lesson.status === "kept" ? (
+              <Link to="/rules" className="shrink-0 text-ink-3 hover:text-ink">
+                Kept as a company rule
+              </Link>
+            ) : (
+              <span className="flex shrink-0 gap-3">
+                <button
+                  onClick={() => decide.mutate({ id: lesson.id, status: "kept" })}
+                  disabled={decide.isPending}
+                  className="font-medium text-ink hover:underline"
+                >
+                  Keep for later tenders
+                </button>
+                <button
+                  onClick={() => decide.mutate({ id: lesson.id, status: "dropped" })}
+                  disabled={decide.isPending}
+                  className="text-ink-3 hover:text-ink"
+                >
+                  Drop
+                </button>
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+      {decide.isError && <p className="px-1 pt-2 text-attention">{decide.error.message}</p>}
     </div>
   );
 }

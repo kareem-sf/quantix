@@ -61,7 +61,12 @@ Each domain module owns its models, its service functions and the agent tools th
   message, and the turn budget counts the turns since the engineer last wrote. A stopped or paused office is
   kept on the tender (`office_paused`), so it stays stopped after a restart. The conversation of a turn cut short
   is kept in memory for the next turn; after a restart the person carries on from the records instead. The rows
-  also explain the work, and let two AI models be compared on it. They are never shown in the work areas.
+  also explain the work. They are never shown in the work areas.
+- **AI allowance and scorecard.** `tender_allowance` in `settings.json` caps the tokens (read and written, from
+  `turns`) a tender's office may use. Before each turn the scheduler pauses the tender once it has used them, with
+  a plain notice in the team room. `quantix/review/scorecard.py` reads `turns` and the review outcomes of the records
+  filed in each turn: a record belongs to the filer's latest turn that started before it. `GET /ai/usage` serves both
+  to Settings.
 - **Real conversation.** Agents talk only through `message`, `post_to_team` and `raise_concern`. The team room is
   exactly those records.
 - **Proposals, review and gates.** Agents never write domain records. Staff propose through each module's tools,
@@ -87,6 +92,12 @@ Each domain module owns its models, its service functions and the agent tools th
   the rows already entered. The Manager accepts audit warnings by a short name (a hash of the key) through
   `audit_tender`. `GET /tenders/{id}/audit` serves the Overview. The build endpoint fills the package's not-ready list
   from the audit's blockers.
+- **Lessons.** A `Verdict` may carry a `lesson`, kept in `lessons` (`quantix/review/lessons.py`), only for work that
+  needed correcting: a send-back, or the accepted version of work sent back before. Quantix turns away a lesson the
+  office already follows, one already among the company rules, or one like a lesson the engineer dropped. That test
+  is the same word overlap as for repeated questions. Every briefing on the tender lists the tender's lessons. The
+  engineer keeps one (`PATCH /lessons/{id}`), which copies it into `company_rules` under a topic from the record's
+  kind, or drops it.
 - **Evidence.** A cited location must exist and must have been read in that agent's run.
 - **Newer copies.** A changed file with the same path replaces the older copy (`replaced`). As the reader saves
   the newer copy, in the same transaction, `quantix/review/revisions.py` moves the work that cites an older copy

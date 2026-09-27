@@ -50,6 +50,10 @@ to do the work, not a tool to operate.
 
   The Overview shows the audit under "Before release", the build button counts its blockers, and the built package
   lists them as not ready.
+- **Lessons.** When work needed correcting, the Manager can state the lesson with his review: one general rule
+  that stops the same mistake elsewhere. The whole office on the tender follows it from then on, including people
+  hired later. The Overview lists the lessons under "What the office learned". The engineer keeps one as a company
+  rule for later tenders, or drops it, and the office won't learn a dropped lesson again.
 - **Staff.** Hired by the Manager for this tender's actual needs, with a generated name, role, discipline,
   experience, background, temperament, speaking style and professional opinions, and a locally drawn portrait.
   They speak in their own voice, disagree, raise concerns and push back on the Manager or the engineer.
@@ -93,14 +97,17 @@ choices · Markups and final price · Release.
 ## Company knowledge (persists across tenders)
 
 A master resource and rate library, the subcontractor and supplier directory, past tenders for benchmarking, and
-company rules and preferences (markups, standard exclusions and qualifications, house style). Every new team reads
-them. Dated information is revalidated before reuse.
+company rules and preferences (markups, standard exclusions and qualifications, house style), including the
+lessons the engineer kept. Every new team reads them. Dated information is revalidated before reuse.
 
 ## AI
 
 API keys for Anthropic, OpenAI, Google, xAI and one OpenAI-compatible endpoint. ChatGPT/Codex and Grok subscriptions
 through their official clients only. The tender chooses its connection; the Manager may give staff other models
-from the connections already allowed. There are no spending controls in the MVP; each agent turn has a step limit.
+from the connections already allowed. Each agent turn has a step limit. In Settings the engineer can set an AI
+allowance per tender, in tokens: the office pauses on a tender once it has used it. Settings also shows how each
+AI model has done in the office: turns finished, tool calls Quantix sent back, work accepted and tokens per
+accepted record. No provider, model or token details appear in the work areas.
 
 ## Language and platform
 
@@ -109,8 +116,8 @@ built so a hosted web version with several users can follow.
 
 ## Later (not in the MVP)
 
-Tender programme, cash flow, DWG reading, Arabic interface, web version and firm accounts, AI spending controls,
-supplier email sending.
+Tender programme, cash flow, DWG reading, Arabic interface, web version and firm accounts, AI spending in money
+rather than tokens, supplier email sending.
 
 ## Done when
 

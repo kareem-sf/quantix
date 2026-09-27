@@ -449,3 +449,49 @@ and nothing flagged it, so a price could still rest on a superseded bill or draw
 - **Checks:** 3 new service tests: a revised bill with a row added above and a changed quantity, a drawing revised
   around one measurement, and revised conditions changing a fact and a checklist item. The service suite, Ruff and
   the format check pass for these files.
+
+## 27 September 2026: lessons, the AI scorecard and an allowance per tender
+
+This adds the three harness layers from "Harness engineering" that Quantix still lacked: feedback, observability
+and an operational cap. Tool control, a separate checker and memory kept in the records were already in place. Model routing
+stays out: the engineer chose one office AI for everyone.
+
+On the real tender, more work was sent back than approved, and nothing of it outlived the tender:
+
+| Record | Approved | Sent back |
+| --- | --- | --- |
+| Rates | 26 | 29 |
+| Drafts | 9 | 19 |
+| Markups | 1 | 7 |
+| Scales | 2 | 6 |
+| Measurements | 1 | 6 |
+
+The firm's rules held 0 lessons from any of it.
+
+- **Lessons.**
+  - With a verdict on work that needed correcting (a send-back, or the accepted version of work sent back
+    before), the Manager can give the lesson: one general rule.
+  - Quantix refuses a lesson that is too short, one the office already follows, one already among the company
+    rules, or one like a lesson the engineer dropped.
+  - Every briefing on the tender lists the lessons, so someone hired later doesn't repeat the mistake.
+  - The Overview shows them under "What the office learned". "Keep for later tenders" copies a lesson into the
+    company rules, under a topic from its kind of work (Rates, Takeoff, BOQ…). "Drop" takes it out of the
+    briefings.
+  - Migration 0016 adds `lessons`.
+- **How each AI has done.** Settings reads the turn records. For each model it shows turns finished, tool calls
+  Quantix sent back, work accepted (records filed on its turns that the Manager or the engineer accepted, out of
+  those accepted or sent back) and tokens per accepted record. A record belongs to its filer's latest turn that
+  started before it. Records filed before turns were recorded aren't counted. `GET /ai/usage`.
+- **An AI allowance per tender.**
+  - `tender_allowance` in Settings, in millions of tokens (read and written), with no limit by default.
+  - Before each turn, the office pauses on a tender that has used it and says so in the team room. Raising it and
+    sending a message carries on.
+  - Settings lists each tender's use against the allowance. The spec's "Later" now says money rather than tokens.
+- **On the real tender:** the running app applied migration 0016. The one turn recorded so far, 27,955 tokens on
+  openai-gpt-5-4-mini, shows in Settings.
+- **Not done:** week-on-week drift for each model waits for enough turn records to compare.
+- **Checks:**
+  - 4 new service tests: a lesson followed by a later hire, the engineer keeping and dropping lessons, the scorecard,
+    and the allowance pausing and resuming the office. 130 service tests pass.
+  - 3 new interface tests. 60 interface tests pass, and so does the typecheck.
+  - Three `test_office.py` tests sometimes time out in a full run, at HEAD too, on a `wait_for` between turns.

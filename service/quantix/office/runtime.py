@@ -29,6 +29,10 @@ TURN_BUDGET = 40  # turns without hearing from the engineer before the office pa
 CARRY_ON = "Your last turn was cut short. Carry on from where you stopped, and report what you have."
 RETRIES = 2  # turns cut short by a passing AI failure that are tried again before the office pauses
 RETRY_WAIT = 5.0  # seconds before the first retry; each further one waits longer
+ALLOWANCE_USED = (
+    "The office paused: this tender has used the AI allowance set in Settings. Raise it there, then send a message "
+    "to carry on."
+)
 
 
 def office_model(home: Path) -> Model | None:
@@ -153,10 +157,15 @@ class Office:
             for staff_id in people:
                 with self.sessions() as session:
                     spent = records.turns_since_engineer(session, tender_id)
+                    used = records.tokens_used(session, tender_id)
                 if spent >= TURN_BUDGET:
                     self._pause(
                         tender_id, "The office paused after a long stretch of work. Send a message to carry on."
                     )
+                    return False
+                allowance = settings.load(self.home)["tender_allowance"]
+                if allowance and used >= allowance:
+                    self._pause(tender_id, ALLOWANCE_USED)
                     return False
                 if await self._turn(model, tender_id, staff_id):
                     worked = True

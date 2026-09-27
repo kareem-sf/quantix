@@ -10,6 +10,7 @@ import {
   useRemoveConnection,
   useSettings,
   useUpdateSettings,
+  useUsage,
   type Connection,
   type Provider,
 } from "./queries";
@@ -25,9 +26,13 @@ export function Settings() {
       <OfficeMode />
       <Connections />
       <OfficeAI />
+      <Scorecard />
+      <Allowance />
     </div>
   );
 }
+
+const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -263,6 +268,101 @@ function OfficeAI() {
         </select>
       )}
       {update.isError && <p className="text-attention">{update.error.message}</p>}
+    </Section>
+  );
+}
+
+/** How each AI the office worked with has done, from its turns and the reviews of what it filed. */
+function Scorecard() {
+  const usage = useUsage();
+  const models = usage.data?.models ?? [];
+  const cell = "py-2 pl-3 text-right";
+  return (
+    <Section title="How each AI has done">
+      {models.length === 0 ? (
+        <p className="text-ink-2">Nothing yet. Each turn the office works is counted here.</p>
+      ) : (
+        <>
+          <p className="leading-normal text-ink-3">
+            Work accepted counts the records filed on its turns that the Tender Manager or you accepted, out of those
+            accepted or sent back.
+          </p>
+          <table className="w-full text-[13px] tabular-nums">
+            <thead className="text-ink-3">
+              <tr>
+                <th className="py-1.5 text-left font-normal">Model</th>
+                <th className="pl-3 text-right font-normal">Turns finished</th>
+                <th className="pl-3 text-right font-normal">Calls sent back</th>
+                <th className="pl-3 text-right font-normal">Work accepted</th>
+                <th className="pl-3 text-right font-normal">Tokens per accepted record</th>
+              </tr>
+            </thead>
+            <tbody>
+              {models.map((m) => (
+                <tr key={m.model} className="border-t border-subtle">
+                  <td className="py-2 break-all">{m.model}</td>
+                  <td className={cell}>
+                    {m.finished} of {m.turns}
+                  </td>
+                  <td className={cell}>{m.calls ? `${Math.round((100 * m.calls_sent_back) / m.calls)}%` : "–"}</td>
+                  <td className={cell}>{m.accepted + m.sent_back ? `${m.accepted} of ${m.accepted + m.sent_back}` : "–"}</td>
+                  <td className={cell}>{m.accepted ? compact.format(m.tokens / m.accepted) : "–"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </Section>
+  );
+}
+
+/** The most AI tokens one tender's office may use before it pauses, and what each tender has used. */
+function Allowance() {
+  const settings = useSettings();
+  const update = useUpdateSettings();
+  const usage = useUsage();
+  const allowance = settings.data?.tender_allowance ?? null;
+  const [draft, setDraft] = useState<string | null>(null); // millions of tokens, as typed
+  const shown = draft ?? (allowance ? String(allowance / 1_000_000) : "");
+  const valid = shown.trim() === "" || Number(shown) > 0;
+
+  function save(event: FormEvent) {
+    event.preventDefault();
+    const tender_allowance = shown.trim() ? Math.round(Number(shown) * 1_000_000) : null;
+    update.mutate({ tender_allowance }, { onSuccess: () => setDraft(null) });
+  }
+
+  return (
+    <Section title="AI allowance per tender">
+      <p className="leading-normal text-ink-3">
+        The office pauses on a tender once it has used this many AI tokens, read and written. It checks before each
+        turn, so a turn under way finishes. Leave it empty for no limit.
+      </p>
+      <form onSubmit={save} className="flex items-center gap-2">
+        <input
+          aria-label="Allowance in million tokens"
+          inputMode="decimal"
+          value={shown}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="No limit"
+          className={`${input} w-28 text-right tabular-nums`}
+        />
+        <span className="text-ink-2">million tokens</span>
+        <button disabled={draft === null || !valid || update.isPending} className={secondary}>
+          Save
+        </button>
+      </form>
+      {!valid && <p className="text-attention">Give the allowance as a number of millions, such as 20 or 2.5.</p>}
+      {update.isError && <p className="text-attention">{update.error.message}</p>}
+      {usage.data?.tenders.map((t) => (
+        <p key={t.tender_id} className="flex justify-between border-t border-subtle pt-2 tabular-nums">
+          <span>{t.name}</span>
+          <span className={allowance && t.tokens >= allowance ? "text-attention" : "text-ink-2"}>
+            {compact.format(t.tokens)} used{allowance ? ` of ${compact.format(allowance)}` : ""}
+          </span>
+        </p>
+      ))}
     </Section>
   );
 }

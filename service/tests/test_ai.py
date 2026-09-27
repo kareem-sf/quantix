@@ -128,7 +128,7 @@ def test_the_check_finds_out_whether_a_model_reads_images(client, models, monkey
 
 
 def test_the_office_only_uses_a_checked_model(client, models, monkeypatch, tmp_path):
-    assert client.get("/settings").json() == {"office_mode": "engineer", "office_ai": None}
+    assert client.get("/settings").json() == {"office_mode": "engineer", "office_ai": None, "tender_allowance": None}
     connection = add(client).json()
     office_ai = {"connection_id": connection["id"], "model": "model-a"}
 
@@ -142,6 +142,7 @@ def test_the_office_only_uses_a_checked_model(client, models, monkeypatch, tmp_p
     assert client.patch("/settings", json={"office_mode": "autonomous"}).json() == {
         "office_mode": "autonomous",
         "office_ai": office_ai,
+        "tender_allowance": None,
     }
     assert json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))["office_mode"] == "autonomous"
 
