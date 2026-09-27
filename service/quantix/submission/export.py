@@ -7,7 +7,6 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
-import docx
 import openpyxl
 from sqlalchemy.orm import Session
 
@@ -18,7 +17,7 @@ from quantix.core.review import APPROVED
 from quantix.documents import library
 from quantix.documents.models import Document
 from quantix.estimate import records as estimate
-from quantix.submission import records
+from quantix.submission import package, pdf, records, word
 
 
 @dataclass
@@ -35,8 +34,12 @@ def exports_dir(home: Path) -> Path:
     return home / "exports"
 
 
-def _safe(name: str) -> str:
-    return re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", name).strip()[:120] or "Tender"
+def _safe(name: str, limit: int = 60) -> str:
+    """A file or folder name Windows accepts, short enough that the package's paths stay under its 260 characters."""
+    name = " ".join(re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", name).split())
+    if len(name) > limit:
+        name = name[:limit].rsplit(" ", 1)[0]  # at a word, not through one
+    return name or "Tender"
 
 
 def submitted_rates(session: Session, tender_id: str, spread: bool) -> tuple[dict[str, Decimal], Decimal]:
@@ -112,21 +115,16 @@ def _quantix_format(
     return "Priced BOQ.xlsx"
 
 
-def _draft_file(folder: Path, title: str, body: str) -> str:
-    document = docx.Document()
-    document.add_heading(title, level=1)
-    for paragraph in re.split(r"\n\s*\n", body):
-        document.add_paragraph(paragraph.strip())
-    name = f"{_safe(title)}.docx"
-    document.save(folder / name)
-    return name
-
-
 def build(home: Path, session: Session, tender_id: str, spread: bool, now: datetime) -> Built:
+    """The package: the combined submission PDF and the priced BOQ at the top, each document as Word and PDF under
+    Documents, the client queries under Correspondence, and the checklist under Internal, which is never sent."""
     tender = tenders.get_tender(session, tender_id)
     folder = exports_dir(home) / f"{_safe(tender.name)} {now:%Y-%m-%d %H%M}"
-    folder.mkdir(parents=True, exist_ok=True)
+    for part in ("Documents", "Correspondence", "Internal"):
+        (folder / part).mkdir(parents=True, exist_ok=True)
     built = Built(folder=folder.name)
+    head = package.letterhead(home, tender.name)
+    opening = package.facts(head, now)
 
     items = boq.items(session, tender_id)
     rates, built.factor = submitted_rates(session, tender_id, spread)
@@ -138,7 +136,11 @@ def build(home: Path, session: Session, tender_id: str, spread: bool, now: datet
     if any(i.id not in covered for i in items):
         uncovered = [i for i in items if i.id not in covered]
         built.files.append(_quantix_format(session, folder, uncovered, rates, summary.currency))
+    priced = package.priced(session, items, rates, summary, opening, spread)
+    pdf.write(priced, head, folder / "Priced BOQ.pdf")
+    built.files.append("Priced BOQ.pdf")
 
+    submitted = [priced]
     checklist = openpyxl.Workbook()
     sheet = checklist.active
     sheet.title = "Checklist"
@@ -146,13 +148,20 @@ def build(home: Path, session: Session, tender_id: str, spread: bool, now: datet
     for requirement in records.requirements(session, tender_id):
         state, file = records.state(session, requirement), None
         current = records.current_draft(session, requirement.id)
+        part = "Correspondence" if requirement.section.strip().lower() == "correspondence" else "Documents"
         if requirement.file_name:
-            file = f"{_safe(requirement.title)} - {requirement.file_name}"
+            file = f"{part}/{_safe(requirement.title)} - {requirement.file_name}"
             shutil.copyfile(records.attachments_dir(home, requirement) / requirement.file_name, folder / file)
-        elif current is not None and current.status in APPROVED:
-            file = _draft_file(folder, current.title, current.body)
-        if file:
             built.files.append(file)
+        elif current is not None and current.status in APPROVED:
+            document = package.draft(session, current, opening)
+            file = f"{part}/{_safe(current.title)}"
+            word.write(document, head, folder / f"{file}.docx")
+            pdf.write(document, head, folder / f"{file}.pdf")
+            built.files += [f"{file}.docx", f"{file}.pdf"]
+            file = f"{file}.docx"
+            if part == "Documents":
+                submitted.append(document)
         source = session.get(Document, requirement.document_id) if requirement.document_id else None
         label = {
             "ready": "Ready",
@@ -171,6 +180,10 @@ def build(home: Path, session: Session, tender_id: str, spread: bool, now: datet
                 file,
             ]
         )
-    checklist.save(folder / "Checklist.xlsx")
-    built.files.append("Checklist.xlsx")
+    checklist.save(folder / "Internal" / "Checklist.xlsx")
+    built.files.append("Internal/Checklist.xlsx")
+
+    combined = f"{_safe(tender.name)} - Submission.pdf"
+    pdf.write_package(submitted, head, opening, folder / combined)
+    built.files.insert(0, combined)
     return built

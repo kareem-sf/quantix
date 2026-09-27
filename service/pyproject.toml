@@ -18,6 +18,10 @@ dependencies = [
     "numpy>=2.5",
     "onnxruntime>=1.30",
     "tokenizers>=0.23",
+    "markdown-it-py>=4.0",
+    "fpdf2>=2.8",
+    "uharfbuzz>=0.50",
+    "python-pptx>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -36,6 +40,7 @@ include = ["quantix*"]
 
 [tool.setuptools.package-data]
 "quantix.migrations" = ["script.py.mako", "versions/*.py"]
+"quantix.submission" = ["fonts/*.ttf", "fonts/OFL.txt"]
 
 [tool.ruff]
 line-length = 120

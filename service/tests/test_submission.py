@@ -4,6 +4,7 @@ from decimal import Decimal
 
 import docx
 import openpyxl
+import pypdfium2 as pdfium
 import pytest
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 from test_documents import make_pdf, read_all, upload
@@ -200,7 +201,12 @@ def test_a_work_schedule_takes_its_quantities_from_the_boq(client, tender):
 def test_without_the_client_columns_each_priced_line_names_its_bill_and_row(client, tender, tmp_path):
     tender_id = tender[0]
     built = client.post(f"/tenders/{tender_id}/export", json={"spread_markups": False}).json()
-    assert built["files"] == ["Priced BOQ.xlsx", "Checklist.xlsx"]
+    assert built["files"] == [
+        "Synthetic school - Submission.pdf",
+        "Priced BOQ.xlsx",
+        "Priced BOQ.pdf",
+        "Internal/Checklist.xlsx",
+    ]
     sheet = openpyxl.load_workbook(tmp_path / "exports" / built["folder"] / "Priced BOQ.xlsx").active
     assert [list(row) for row in sheet.iter_rows(values_only=True)] == [
         ["Bill", "Row", "Item", "Description", "Unit", "Quantity", "Rate", "Amount"],
@@ -252,7 +258,14 @@ def test_the_package_is_built_in_the_client_format_with_markups_in_the_rates(cli
         "133048.08",
         "133048.08",
     )
-    assert built["files"] == ["Priced Bill.xlsx", "Method statement.docx", "Checklist.xlsx"]
+    assert built["files"] == [
+        "Synthetic school - Submission.pdf",
+        "Priced Bill.xlsx",
+        "Priced BOQ.pdf",
+        "Documents/Method statement.docx",
+        "Documents/Method statement.pdf",
+        "Internal/Checklist.xlsx",
+    ]
     assert built["not_ready"] == [  # the tender audit's blockers
         "2 pieces of work wait for the Tender Manager's review.",  # the checklist items the office added
         "Currency isn't recorded from the tender documents.",
@@ -270,9 +283,14 @@ def test_the_package_is_built_in_the_client_format_with_markups_in_the_rates(cli
         [None, None],
     ]
     assert hashlib.sha256(stored.read_bytes()).hexdigest() == before  # the supplied file is unchanged
-    paragraphs = [p.text for p in docx.Document(folder / "Method statement.docx").paragraphs]
-    assert paragraphs == ["Method statement", "Pour sequence.", "Curing."]
-    rows = list(openpyxl.load_workbook(folder / "Checklist.xlsx").active.values)
+    statement = docx.Document(folder / "Documents" / "Method statement.docx")
+    assert [(p.style.name, p.text) for p in statement.paragraphs if p.text] == [
+        ("Title", "Method statement"),
+        ("Normal", "Pour sequence."),
+        ("Normal", "Curing."),
+    ]
+    assert [row.cells[0].text for row in statement.tables[0].rows] == ["Tender", "Date"]  # the title block
+    rows = list(openpyxl.load_workbook(folder / "Internal" / "Checklist.xlsx").active.values)
     assert rows[1:] == [
         ("Commercial", "Bid bond, 1% of the tender price", "ITT.pdf, page 1", "Missing", None),
         (
@@ -280,7 +298,7 @@ def test_the_package_is_built_in_the_client_format_with_markups_in_the_rates(cli
             "Method statement for concrete works",
             "ITT.pdf, page 1",
             "Ready · approved by the office after the Tender Manager's review, not reviewed by you",
-            "Method statement.docx",
+            "Documents/Method statement.docx",
         ),
     ]
 
@@ -379,3 +397,81 @@ def test_the_engineer_removes_a_duplicate_from_the_checklist(client, tender):
     titles = [r["title"] for r in client.get(f"/tenders/{tender_id}/submission").json()["requirements"]]
     assert titles == ["Bid bond, 1% of the tender price"]
     assert client.get(f"/tenders/{tender_id}/gates").json()["submission"] == 0  # its draft went with it
+
+
+def pdf_text(path) -> list[str]:
+    document = pdfium.PdfDocument(path)
+    return [document[n].get_textpage().get_text_range() for n in range(len(document))]
+
+
+def test_each_document_is_laid_out_on_the_letterhead_and_the_submission_is_one_pdf(client, tender, tmp_path):
+    tender_id, layla, _, itt = tender
+    firm = {"name": "Gulf Builders Co.", "address": "King Fahd Road, Riyadh", "cr_number": "", "vat_number": "300"}
+    client.put("/company", json=firm)
+    checklist(client, tender)
+    body = """## Sequence
+
+1. Excavate the footings
+2. Pour the slab
+   - in two bays
+
+| Pour | Volume m3 |
+|---|---:|
+| Slab | 312.4 |
+"""
+    with client.app.state.sessions() as session:
+        method = submission.find_requirement(session, tender_id, "Method statement for concrete works")
+        submission.draft(session, method, layla, "Method statement", body, "office_approved")
+        query = requirement("Clarification query", "7.1 The priced bill", itt, section="Correspondence")
+        submission.add_requirements(session, tender_id, "engineer", [query])
+        found = submission.find_requirement(session, tender_id, "Clarification query")
+        submission.draft(session, found, layla, "Clarification query", "Please confirm the bond wording.", "approved")
+        session.commit()
+
+    built = client.post(f"/tenders/{tender_id}/export", json={"spread_markups": True}).json()
+    assert "Correspondence/Clarification query.docx" in built["files"]  # sent by the engineer's own email
+    folder = tmp_path / "exports" / built["folder"]
+    statement = docx.Document(folder / "Documents" / "Method statement.docx")
+    header = statement.sections[0].header.tables[0].rows[0].cells[0]
+    assert [p.text for p in header.paragraphs] == ["Gulf Builders Co.", "King Fahd Road, Riyadh", "VAT 300"]
+    assert [(p.style.name, p.text) for p in statement.paragraphs if p.text][1:] == [
+        ("Heading 1", "Sequence"),
+        ("List Number", "Excavate the footings"),
+        ("List Number", "Pour the slab"),
+        ("List Bullet 2", "in two bays"),
+    ]
+    table = statement.tables[1]
+    assert [[c.text for c in row.cells] for row in table.rows] == [["Pour", "Volume m3"], ["Slab", "312.4"]]
+
+    pages = pdf_text(folder / "Synthetic school - Submission.pdf")
+    assert "Tender submission" in pages[0] and "Gulf Builders Co." in pages[0]
+    contents = pages[1]
+    assert "Priced bill of quantities" in contents and "Method statement" in contents
+    assert "Clarification query" not in "".join(pages)  # a query isn't part of the submission
+    priced = "".join(pdf_text(folder / "Priced BOQ.pdf"))
+    assert "Subtotal, Bill" in priced and "Total" in priced
+
+
+def test_the_work_programme_is_laid_out_from_quantix_durations(client, tender, tmp_path):
+    tender_id, layla, _, itt = tender
+    activity = submission.ActivityIn
+    with client.app.state.sessions() as session:
+        wanted = requirement("Work programme", "7.1 The priced bill", itt)
+        submission.add_requirements(session, tender_id, "engineer", [wanted])
+        programme = submission.find_requirement(session, tender_id, "Work programme")
+        lines = [activity(boq_item="3.1", output=Decimal(100), crews=2), activity(boq_item="6.3", output=500, crews=1)]
+        rows = submission.durations(session, tender_id, lines)
+        text = submission.schedule_text(rows, "Excavation first, then waterproofing.", 9)
+        record = submission.schedule_record(rows, 9)
+        submission.draft(session, programme, layla, "Work programme", text, "approved", schedule=record)
+        session.commit()
+
+    built = client.post(f"/tenders/{tender_id}/export", json={"spread_markups": True}).json()
+    schedule = docx.Document(tmp_path / "exports" / built["folder"] / "Documents" / "Work programme.docx")
+    assert [[c.text for c in row.cells] for row in schedule.tables[1].rows] == [
+        ["Bill", "Item", "Description", "Quantity", "Unit", "Output a day", "Crews", "Days"],
+        ["Bill", "3.1", "Excavation", "1,240", "m3", "100", "2", "7"],
+        ["Bill", "6.3", "Waterproofing", "980", "m2", "500", "1", "2"],
+    ]
+    texts = [p.text for p in schedule.paragraphs if p.text]
+    assert "Excavation first, then waterproofing." in texts and texts[-1] == "Overall duration: 9 working days"
