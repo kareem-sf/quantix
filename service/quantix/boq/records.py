@@ -162,7 +162,14 @@ def propose_fact(
     if kind not in FACT_KINDS:
         raise ValueError(f"Facts can be: {', '.join(FACT_KINDS)}.")
     check_quote(session, tender_id, document_id, page, quote)
-    for older in session.scalars(select(Fact).where(Fact.tender_id == tender_id, Fact.kind == kind)):
+    earlier = list(session.scalars(select(Fact).where(Fact.tender_id == tender_id, Fact.kind == kind)))
+    settled = next((f for f in earlier if f.status == "approved"), None)
+    if settled is not None:
+        raise ValueError(
+            f"The engineer approved the {FACT_KINDS[kind].lower()}: {settled.value}. If the documents say otherwise, "
+            "say why with raise_concern."
+        )
+    for older in earlier:
         if older.status == "proposed" or (autonomous and older.status in APPROVED):
             older.status = "replaced"
     fact = Fact(

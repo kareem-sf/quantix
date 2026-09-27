@@ -240,6 +240,18 @@ def test_approving_keeps_one_rate_and_can_save_it_to_the_library(client, tender)
     )
 
 
+def test_approved_markups_stay_settled(client, tender):
+    tender_id, priya, _ = tender
+    zero = Decimal(0)
+    with client.app.state.sessions() as session:
+        markups = estimate.propose_markups(session, tender_id, priya, [], Decimal("0.06"), Decimal("0.08"), zero, "x")
+        session.commit()
+        markups_id = markups.id
+    client.post(f"/markups/{markups_id}/decision", json={"approve": True})
+    with client.app.state.sessions() as session, pytest.raises(ValueError, match="The engineer approved the markups"):
+        estimate.propose_markups(session, tender_id, priya, [], Decimal("0.05"), Decimal("0.08"), zero, "Again.")
+
+
 def test_a_new_proposal_replaces_the_one_still_waiting(client, tender):
     tender_id, priya, _ = tender
     first = price(

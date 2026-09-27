@@ -208,6 +208,11 @@ def propose_markups(
     for name, value in (("overheads", overheads), ("profit", profit)):
         if not 0 <= value < 1:
             raise ValueError(f"Give {name} as a fraction between 0 and 1, e.g. 0.06 for 6%.")
+    current = current_markups(session, tender_id)
+    if current is not None and current.status == "approved" and by != ENGINEER:
+        raise ValueError(
+            "The engineer approved the markups. If you think they need changing, say why with raise_concern."
+        )
     for older in session.scalars(select(Markups).where(Markups.tender_id == tender_id, Markups.status == "proposed")):
         older.status = "replaced"
     markups = Markups(

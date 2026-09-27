@@ -131,6 +131,10 @@ def test_facts_need_their_source_and_the_newest_approved_wins(client, package, q
     )
     client.post(f"/facts/{fact['id']}/decision", json={"approve": True})
     assert client.get(f"/tenders/{tender_id}/boq").json()["facts"][0]["status"] == "approved"
+    with client.app.state.sessions() as session, pytest.raises(ValueError, match="The engineer approved the method"):
+        records.propose_fact(
+            session, tender_id, session.get(Staff, qs), "method_of_measurement", "1%", conditions, 1, "Tender", False
+        )
 
 
 def test_an_autonomous_office_approves_its_own_items(client, package, qs):
