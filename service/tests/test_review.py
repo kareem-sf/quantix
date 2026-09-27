@@ -95,6 +95,10 @@ def test_the_manager_accepts_or_sends_back_each_record(client, office_with_work)
         rania_id,
         "Omar, I sent back BOQ item 4.2: Use the unit as printed, m3, not م3.",
     )
+    tasks = client.get(f"/tenders/{tender_id}/tasks").json()  # the redo is Omar's to do, as an open task
+    assert [(t["staff_id"], t["title"], t["brief"], t["status"]) for t in tasks] == [
+        (omar_id, "Redo BOQ item 4.2", "Use the unit as printed, m3, not م3.", "open")
+    ]
     gates = client.get(f"/tenders/{tender_id}/gates").json()
     assert (gates["manager"], gates["boq"]) == (1, 1)  # the fact still waits for him; the line waits for the engineer
 

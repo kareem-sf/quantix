@@ -51,8 +51,9 @@ def post(session: Session, tender_id: str, sender: str, channel: str, text: str,
 
 
 def send_back(session: Session, tender_id: str, record: Any, what: str, reason: str | None, by: str) -> None:
-    """Send a proposal back to whoever made it. The note goes to the team room, naming them, so they redo it and the
-    Tender Manager sees what came back. `by` is the engineer, or the Manager reviewing his staff's work."""
+    """Send a proposal back to whoever made it. The note goes to the team room, naming them, and the redo becomes
+    one of their open tasks, so they know it is theirs to do. `by` is the engineer, or the Manager reviewing his
+    staff's work."""
     now = datetime.now(UTC)
     record.status, record.reason = "rejected", reason
     if by == ENGINEER:
@@ -64,6 +65,14 @@ def send_back(session: Session, tender_id: str, record: Any, what: str, reason: 
     person = session.get(Staff, record.proposed_by)
     to = f"{person.first_name}, " if person else ""
     post(session, tender_id, by, TEAM, f"{to}I sent back {what}" + (f": {reason}" if reason else "."))
+    if person is not None and person.status == "active" and not person.is_manager:
+        title, brief = f"Redo {what}", reason or "See the team room."
+        query = select(Task).where(Task.staff_id == person.id, Task.status == "open", Task.title == title)
+        earlier = session.scalars(query).first()
+        if earlier is not None:
+            earlier.brief = brief  # sent back again: the newest correction is the one to follow
+        else:
+            session.add(Task(tender_id=tender_id, staff_id=person.id, title=title, brief=brief))
 
 
 def messages(session: Session, tender_id: str, channel: str, limit: int = 200) -> list[Message]:

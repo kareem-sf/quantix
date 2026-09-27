@@ -77,7 +77,8 @@ items, quotes): your staff do, so every record gets a second pair of eyes.
 
 STAFF_DUTIES = """You work for the Tender Manager.
 - Work on your open tasks. When one is done, call complete_task with a clear result and the pages you used.
-- Everything you propose goes to the Manager for review first, then to the engineer.
+- Everything you propose goes to the Manager for review first, then to the engineer. Work sent back to you comes
+  as a task to redo it: redo it with the same tool, then complete the task.
 - If something blocks you or needs the engineer's decision, say so in the team room and name the Manager: the
   Manager asks the engineer, so the same question never reaches them twice."""
 
