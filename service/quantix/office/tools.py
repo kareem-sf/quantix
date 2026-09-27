@@ -664,6 +664,24 @@ def list_requirements(ctx: RunContext[Turn]) -> str:
     return "\n".join(rows) or "The checklist is empty. Add requirements with add_requirements."
 
 
+def work_out_durations(ctx: RunContext[Turn], activities: list[submission.ActivityIn]) -> str:
+    """Durations for a work schedule: for each BOQ line, the output you assume for one crew in a day and the
+    number of crews. Quantix takes the quantity from the BOQ and works out the days. Put the result in your draft
+    with the sequence and overlaps you plan, and state the outputs as your assumptions."""
+    with _working(ctx, "Working out the programme durations") as (session, _):
+        rows = submission.durations(session, ctx.deps.tender_id, activities)
+
+    def amount(value: Decimal) -> str:
+        return f"{value:,.3f}".rstrip("0").rstrip(".")
+
+    lines = [
+        f"{r.reference} | {r.description[:70]} | {amount(r.quantity)} {r.unit} | "
+        f"{amount(r.output)} {r.unit} a day × {r.crews} crew{'s' if r.crews > 1 else ''} | {r.days} days"
+        for r in rows
+    ]
+    return "\n".join([*lines, f"{sum(r.days for r in rows)} days if every line ran one after another."])
+
+
 def draft_document(ctx: RunContext[Turn], requirement: str, title: str, text: str) -> str:
     """Draft a submission document for a checklist requirement, such as a method statement, a covering letter or a
     schedule. Base it on the tender documents and the approved figures; leave signatures and anything only the
@@ -717,6 +735,7 @@ COMMON: list[Callable] = [
     search_past_tenders,
     add_requirements,
     list_requirements,
+    work_out_durations,
     draft_document,
     set_pricing_columns,
 ]

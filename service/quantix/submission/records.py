@@ -1,13 +1,17 @@
 """The submission checklist, drafts for review and the client BOQ's pricing columns."""
 
+import math
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from quantix.boq import records as boq
 from quantix.boq.models import APPROVED
 from quantix.documents import library
 from quantix.documents.evidence import check_quote
@@ -22,6 +26,38 @@ class RequirementIn(BaseModel):
     document_id: str
     page: int
     quote: str = Field(description="The clause that requires it, as read_page shows it")
+
+
+class ActivityIn(BaseModel):
+    """One line of a work schedule."""
+
+    boq_item: str = Field(description='The BOQ line as list_boq shows it, e.g. "8486 · Earthwork / C.1.2"')
+    output: Decimal = Field(gt=0, description="What one crew does in a day, in the line's unit")
+    crews: int = Field(ge=1, le=50)
+
+
+@dataclass
+class Duration:
+    reference: str
+    description: str
+    quantity: Decimal
+    unit: str
+    output: Decimal
+    crews: int
+    days: int
+
+
+def durations(session: Session, tender_id: str, activities: list[ActivityIn]) -> list[Duration]:
+    """Days per line of a work schedule, from the BOQ quantity and the assumed output and crews."""
+    rows = []
+    for activity in activities:
+        item = boq.find_item(session, tender_id, activity.boq_item)
+        quantity = item.quantity or Decimal(0)
+        days = math.ceil(quantity / (activity.output * activity.crews)) if quantity > 0 else 0
+        rows.append(
+            Duration(boq.reference(item), item.description, quantity, item.unit, activity.output, activity.crews, days)
+        )
+    return rows
 
 
 def requirements(session: Session, tender_id: str) -> list[Requirement]:

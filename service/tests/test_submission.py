@@ -164,6 +164,23 @@ def test_drafts_wait_for_review_and_the_engineer_marks_what_they_provide(client,
     assert client.get(f"/tenders/{tender_id}/submission").json()["requirements"][0]["file_name"] == "Bond.pdf"
 
 
+def test_a_work_schedule_takes_its_quantities_from_the_boq(client, tender):
+    tender_id, _, _, _ = tender
+    activity = submission.ActivityIn
+    with client.app.state.sessions() as session:
+        rows = submission.durations(
+            session,
+            tender_id,
+            [activity(boq_item="3.1", output=Decimal(100), crews=2), activity(boq_item="6.3", output=500, crews=1)],
+        )
+        assert [(r.reference, r.quantity, r.days) for r in rows] == [
+            ("3.1", Decimal("1240"), 7),  # 1,240 m3 at 200 a day is 6.2: a started day counts
+            ("6.3", Decimal("980"), 2),
+        ]
+        with pytest.raises(ValueError, match="There is no BOQ item 9.9"):
+            submission.durations(session, tender_id, [activity(boq_item="9.9", output=1, crews=1)])
+
+
 def test_pricing_columns_come_from_the_client_header(client, tender):
     tender_id, layla, bill, itt = tender
     with client.app.state.sessions() as session:
