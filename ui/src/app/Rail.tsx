@@ -1,4 +1,6 @@
-import { Link, NavLink, useParams } from "react-router";
+import { IconAddressBook, IconBook2, IconChevronUp, IconListCheck, IconSettings } from "@tabler/icons-react";
+import { useEffect, useRef, useState } from "react";
+import { Link, NavLink, useLocation, useParams } from "react-router";
 import { Face } from "../office/Face";
 import { firstName, useOffice } from "../office/queries";
 import { dueShort } from "../tenders/due";
@@ -12,6 +14,13 @@ const STAGES = [
   ["Estimate", "/estimate"],
   ["Subcontract", "/subcontract"],
   ["Submission", "/submission"],
+] as const;
+
+const SETTINGS = [
+  ["Directory", "/directory", IconAddressBook],
+  ["Company library", "/library", IconBook2],
+  ["Company rules", "/rules", IconListCheck],
+  ["Settings", "/settings", IconSettings],
 ] as const;
 
 export function Rail() {
@@ -60,41 +69,73 @@ export function Rail() {
         ))}
         {tenderId && <People tenderId={tenderId} />}
       </div>
-      <div className="flex flex-col gap-0.5 border-t border-line px-3 pt-2.5">
-        <NavLink
-          to="/directory"
-          className={({ isActive }) =>
-            `rounded-md px-2 py-[7px] ${isActive ? "font-semibold" : "text-ink-2 hover:text-ink"}`
-          }
-        >
-          Directory
-        </NavLink>
-        <NavLink
-          to="/library"
-          className={({ isActive }) =>
-            `rounded-md px-2 py-[7px] ${isActive ? "font-semibold" : "text-ink-2 hover:text-ink"}`
-          }
-        >
-          Company library
-        </NavLink>
-        <NavLink
-          to="/rules"
-          className={({ isActive }) =>
-            `rounded-md px-2 py-[7px] ${isActive ? "font-semibold" : "text-ink-2 hover:text-ink"}`
-          }
-        >
-          Company rules
-        </NavLink>
-        <NavLink
-          to="/settings"
-          className={({ isActive }) =>
-            `rounded-md px-2 py-[7px] ${isActive ? "font-semibold" : "text-ink-2 hover:text-ink"}`
-          }
-        >
-          Settings
-        </NavLink>
+      <div className="border-t border-line px-3 pt-2.5">
+        <SettingsMenu />
       </div>
     </nav>
+  );
+}
+
+function SettingsMenu() {
+  const [open, setOpen] = useState(false);
+  const menu = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  const { pathname } = useLocation();
+  const here = SETTINGS.some(([, path]) => pathname.startsWith(path));
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (e: MouseEvent) => {
+      if (!menu.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setOpen(false);
+      button.current?.focus();
+    };
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={menu} className="relative">
+      {open && (
+        <div
+          id="settings-screens"
+          className="absolute inset-x-0 bottom-full z-10 mb-1.5 flex flex-col gap-0.5 rounded-lg border border-line-strong bg-white p-1 shadow-[0_8px_24px_rgb(0_0_0/0.08)] transition-[opacity,translate] duration-150 starting:translate-y-1 starting:opacity-0"
+        >
+          {SETTINGS.map(([label, path, Icon]) => (
+            <NavLink
+              key={path}
+              to={path}
+              onClick={() => setOpen(false)}
+              className={({ isActive }) =>
+                `flex items-center gap-2 rounded-md px-2 py-[7px] ${isActive ? "bg-selected font-medium text-ink" : "text-ink-2 hover:bg-selected/60 hover:text-ink"}`
+              }
+            >
+              <Icon size={16} stroke={1.75} className="text-ink-3" />
+              {label}
+            </NavLink>
+          ))}
+        </div>
+      )}
+      <button
+        ref={button}
+        type="button"
+        aria-expanded={open}
+        aria-controls="settings-screens"
+        onClick={() => setOpen((o) => !o)}
+        className={`flex w-full items-center gap-2 rounded-md px-2 py-[7px] hover:bg-selected/60 ${open || here ? "text-ink" : "text-ink-2 hover:text-ink"} ${open ? "bg-selected/60" : ""}`}
+      >
+        <IconSettings size={16} stroke={1.75} className="text-ink-3" />
+        <span className="grow text-left">Settings</span>
+        <IconChevronUp size={14} className={`text-ink-3 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+    </div>
   );
 }
 

@@ -41,6 +41,35 @@ describe("Quantix shell", () => {
     expect(await screen.findByText("Couldn’t create the tender: The disk is full.")).toBeInTheDocument();
   });
 
+  it("opens the settings screens in a floating menu", async () => {
+    fakeService();
+    const router = openApp("/library");
+    const sidebar = screen.getByRole("navigation", { name: "Quantix" });
+    const settings = within(sidebar).getByRole("button", { name: "Settings" });
+
+    expect(settings).toHaveAttribute("aria-expanded", "false");
+    expect(within(sidebar).queryByRole("link", { name: "Directory" })).not.toBeInTheDocument();
+    await userEvent.click(settings);
+    expect(settings).toHaveAttribute("aria-expanded", "true");
+    for (const name of ["Directory", "Company rules", "Settings"]) {
+      expect(within(sidebar).getByRole("link", { name })).toBeInTheDocument();
+    }
+    expect(within(sidebar).getByRole("link", { name: "Company library" })).toHaveAttribute("aria-current", "page");
+
+    await userEvent.click(within(sidebar).getByRole("link", { name: "Company rules" }));
+    expect(router.state.location.pathname).toBe("/rules");
+    expect(settings).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(settings);
+    await userEvent.click(screen.getByRole("main"));
+    expect(settings).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(settings);
+    await userEvent.keyboard("{Escape}");
+    expect(settings).toHaveAttribute("aria-expanded", "false");
+    expect(settings).toHaveFocus();
+  });
+
   it("says so when a tender doesn't exist", async () => {
     fakeService();
     openApp("/tenders/missing");
