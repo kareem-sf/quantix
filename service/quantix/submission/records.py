@@ -83,6 +83,12 @@ def current_draft(session: Session, requirement_id: str) -> Draft | None:
 def draft(session: Session, requirement: Requirement, by: str, title: str, body: str, status="proposed") -> Draft:
     if not body.strip():
         raise ValueError("The draft is empty.")
+    current = current_draft(session, requirement.id)
+    if current is not None and current.status == "approved" and by != ENGINEER:
+        raise ValueError(
+            f"The engineer approved “{current.title}” for this requirement; a new draft doesn't replace it. "
+            "If you think it needs changing, say why with raise_concern."
+        )
     for older in session.scalars(
         select(Draft).where(Draft.requirement_id == requirement.id, Draft.status.in_(("proposed", *APPROVED)))
     ):

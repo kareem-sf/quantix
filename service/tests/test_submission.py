@@ -148,6 +148,8 @@ def test_drafts_wait_for_review_and_the_engineer_marks_what_they_provide(client,
         )
         session.commit()
     client.post(f"/drafts/{third.id}/decision", json={"approve": True})
+    with client.app.state.sessions() as session, pytest.raises(ValueError, match="The engineer approved “Method"):
+        submission.draft(session, session.get(submission.Requirement, method["id"]), layla, "Method statement", "v4")
     client.post(f"/requirements/{bond['id']}/ready", json={"ready": True, "note": "The bank issues it on Monday."})
     rows = client.get(f"/tenders/{tender_id}/submission").json()["requirements"]
     assert [r["state"] for r in rows] == ["ready", "ready"]
