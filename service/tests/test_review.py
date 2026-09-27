@@ -60,7 +60,7 @@ def refs(client, tender_id) -> dict[str, str]:
 
 def test_the_manager_leads_and_reviews_but_never_produces_records():
     names = {t.__name__ for t in tools.MANAGER}
-    assert {"review_queue", "review_details", "review", "hire", "assign_task", "ask_engineer"} <= names
+    assert {"review_queue", "open_record", "review", "hire", "assign_task", "ask_engineer"} <= names
     produce = {t.__name__ for t in tools.PRODUCE}
     assert not names & produce  # every record has a producer and a different reviewer
     assert "propose_rate" in produce and "review" not in {t.__name__ for t in tools.STAFF}

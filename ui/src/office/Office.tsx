@@ -15,6 +15,7 @@ import {
   type Message,
   type Staff,
 } from "./queries";
+import { Sources } from "./Sources";
 
 export function Office() {
   const { tenderId = "" } = useParams();
@@ -192,6 +193,12 @@ function Line({ message, author, onPerson }: { message: Message; author?: Staff;
           </span>
         ) : (
           <Prose text={message.text} signer={author ? firstName(author) : undefined} className="text-sm text-[#27272A]" />
+        )}
+        {message.sources && message.sources.length > 0 && (
+          <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-ink-3">
+            <span>From</span>
+            <Sources sources={message.sources} />
+          </div>
         )}
       </div>
     </div>

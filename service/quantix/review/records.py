@@ -211,7 +211,7 @@ def flags(found: list[checks.Finding]) -> str:
 
 
 def findings_text(found: list[checks.Finding]) -> str:
-    """The findings, for review_details."""
+    """The findings, for open_record."""
     if not found:
         return ""
     lines = []
@@ -372,7 +372,7 @@ def _corrected(session: Session, tender_id: str, p: Pending) -> bool:
         return False
     model = REVIEWED_KINDS[p.kind][0]
     query = select(model.id).where(
-        model.tender_id == tender_id, _same_work(p.kind, p.record), model.id != p.record.id, model.status == "rejected"
+        model.tender_id == tender_id, same_work(p.kind, p.record), model.id != p.record.id, model.status == "rejected"
     )
     return session.scalars(query.limit(1)).first() is not None
 
@@ -406,7 +406,7 @@ def _accept(
         subcontract.select_quote(session, r, session.get(Quote, r.recommended_quote_id), status="office_approved")
 
 
-def _same_work(kind: str, record: Any) -> Any:
+def same_work(kind: str, record: Any) -> Any:
     """What finds earlier versions of the same work: the same line, sheet, requirement or fact."""
     if kind == "rate":
         return Rate.boq_item_id == record.boq_item_id
@@ -431,7 +431,7 @@ def _sent_back_before(session: Session, tender_id: str, p: Pending) -> list[str]
     if p.kind not in REVIEWED_KINDS:
         return []
     model = REVIEWED_KINDS[p.kind][0]
-    query = select(model).where(model.tender_id == tender_id, _same_work(p.kind, p.record))
+    query = select(model).where(model.tender_id == tender_id, same_work(p.kind, p.record))
     versions = list(session.scalars(query.order_by(model.created_at)))
     answers = select(Decision.decided_at).where(
         Decision.subject_id.in_([v.id for v in versions]), Decision.status == "answered"

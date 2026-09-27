@@ -5704,6 +5704,20 @@
             "type": "string",
             "title": "Text"
           },
+          "sources": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DecisionSource"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sources"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -5717,6 +5731,7 @@
           "channel",
           "kind",
           "text",
+          "sources",
           "created_at"
         ],
         "title": "MessageOut"

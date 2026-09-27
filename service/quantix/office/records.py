@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from quantix.office.models import ENGINEER, TEAM, Decision, Message, Staff, Task, TurnRecord
+from quantix.office.models import ENGINEER, TEAM, Decision, Message, Opened, Staff, Task, TurnRecord
 
 MAX_STAFF = 8
 # How a turn ended that leaves the person's work unfinished, so they carry on: cut short, or Quantix itself stopped
@@ -46,8 +46,18 @@ def hire(session: Session, tender_id: str, name: str, role: str, profile: dict[s
     return member
 
 
-def post(session: Session, tender_id: str, sender: str, channel: str, text: str, kind: str = "message") -> Message:
-    message = Message(tender_id=tender_id, sender=sender, channel=channel, kind=kind, text=text.strip())
+def post(
+    session: Session,
+    tender_id: str,
+    sender: str,
+    channel: str,
+    text: str,
+    kind: str = "message",
+    sources: list[dict[str, Any]] | None = None,
+) -> Message:
+    message = Message(
+        tender_id=tender_id, sender=sender, channel=channel, kind=kind, text=text.strip(), sources=sources or None
+    )
     session.add(message)
     session.flush()
     return message
@@ -191,6 +201,33 @@ def answer(session: Session, decision: Decision, text: str) -> None:
     """Record the engineer's answer and tell whoever asked, in their chat with the engineer."""
     decision.status, decision.answer, decision.decided_at = "answered", text.strip(), datetime.now(UTC)
     post(session, decision.tender_id, ENGINEER, decision.raised_by, f"About “{decision.title}”: {text.strip()}")
+
+
+def note_opened(session: Session, tender_id: str, staff_id: str, kind: str, ref: str) -> None:
+    """Remember that someone opened a page ("page", "<document id>:<n>") or a record (its kind and id)."""
+    query = select(Opened).where(Opened.staff_id == staff_id, Opened.kind == kind, Opened.ref == ref)
+    found = session.scalars(query).first()
+    if found is None:
+        session.add(Opened(tender_id=tender_id, staff_id=staff_id, kind=kind, ref=ref))
+    else:
+        found.at = datetime.now(UTC)
+
+
+def has_opened(session: Session, staff_id: str, kind: str, ref: str) -> bool:
+    query = select(Opened.id).where(Opened.staff_id == staff_id, Opened.kind == kind, Opened.ref == ref)
+    return session.scalars(query.limit(1)).first() is not None
+
+
+def new_task(session: Session, member: Staff) -> bool:
+    """Whether the person has an open task given, sent back or set by themselves since their last turn began. It
+    wakes them once; after that the task waits in their briefing like any other. Someone who hasn't taken a turn
+    yet is woken by the message that gave them the task."""
+    query = select(TurnRecord.started_at).where(TurnRecord.staff_id == member.id).order_by(TurnRecord.id.desc())
+    since = session.scalars(query.limit(1)).first()
+    if since is None:
+        return False
+    tasks = select(Task.id).where(Task.staff_id == member.id, Task.status == "open", Task.created_at > since)
+    return session.scalars(tasks.limit(1)).first() is not None
 
 
 def unfinished(session: Session, staff_id: str) -> bool:

@@ -52,7 +52,23 @@ class Message(Base):
     channel: Mapped[str] = mapped_column(String(32))  # TEAM, or a staff id for that person's chat with the engineer
     kind: Mapped[str] = mapped_column(String(20), default="message")  # message | concern | task | note
     text: Mapped[str] = mapped_column(Text)
+    # what an answer to the engineer rests on: [{label, document_id?, page?, boq_item_id?}], each one the sender opened
+    sources: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
+
+
+class Opened(Base):
+    """A document page or a record someone in the office opened. What they cite must be something they opened, and
+    the engineer sees how much of the package the office itself read."""
+
+    __tablename__ = "opened"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tender_id: Mapped[str] = mapped_column(ForeignKey("tenders.id", ondelete="CASCADE"))
+    staff_id: Mapped[str] = mapped_column(ForeignKey("staff.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(20))  # page, or a record's kind: rate, boq, draft, ...
+    ref: Mapped[str] = mapped_column(String(80))  # "<document id>:<page>", or the record's id
+    at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)  # the last time they opened it
 
 
 class Task(Base):

@@ -67,8 +67,17 @@ Each domain module owns its models, its service functions and the agent tools th
   a plain notice in the team room. `quantix/review/scorecard.py` reads `turns` and the review outcomes of the records
   filed in each turn: a record belongs to the filer's latest turn that started before it. `GET /ai/usage` serves both
   to Settings.
-- **Real conversation.** Agents talk only through `message`, `post_to_team` and `raise_concern`. The team room is
-  exactly those records.
+- **Real conversation.** Agents talk only through `message_engineer`, `post_to_team` and `raise_concern`. The team
+  room is exactly those records. A reply to the engineer (they wrote last) carries its `sources`, each something the
+  sender opened, or `next_steps`: up to 3 open at a time, each becomes the sender's own "Follow up" task. An open
+  task given, sent back or set since someone's last turn began wakes them once. The chat shows the sources as
+  links (`messages.sources`, the same shape as a decision's sources).
+- **Looking up the office's work.** `quantix/review/lookup.py` opens any record by its reference or BOQ line: what
+  it says and rests on, with Quantix's figures, who made and decided it, the checks while it is undecided, and
+  every other version of the same work with why it was sent back. It also finds records by words and lists the
+  priced BOQ a page at a time. Agents reach it through `open_record`, `find_records` and `priced_boq`.
+- **What was opened.** `opened` keeps each page and record a person opened (their tools write it), and the summaries
+  they called. It is what their sources are checked against.
 - **Proposals, review and gates.** Agents never write domain records. Staff propose through each module's tools,
   which validate and recompute every number, and the record starts as `proposed`: in the Tender Manager's review
   queue (`quantix/review`). The Manager has no production tools. He accepts a record (`reviewed`, waiting at the

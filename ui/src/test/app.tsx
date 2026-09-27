@@ -156,6 +156,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
         channel: body.channel,
         kind: "message",
         text: body.text,
+        sources: null,
         created_at: "2026-09-23T10:00:00Z",
       };
       state.messages.push(message);

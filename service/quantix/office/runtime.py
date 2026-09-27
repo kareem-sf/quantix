@@ -194,7 +194,12 @@ class Office:
                 reviews.has_new(session, tender_id, member.reviewed_up_to)
                 or revisions.news(session, tender_id, member.reviewed_up_to)
             )
-            if not new and not to_review and not records.unfinished(session, staff_id):
+            if (
+                not new
+                and not to_review
+                and not records.unfinished(session, staff_id)
+                and not records.new_task(session, member)
+            ):
                 return False
             history = self._carry.pop(staff_id, None)
             prompt = agents.situation(session, member, new)

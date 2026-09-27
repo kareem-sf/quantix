@@ -516,3 +516,35 @@ Contracting" was refused with "Add it with add_company first", which is how one 
   `companies.aliases`.
 - **Checks:** 2 new service tests and 1 new interface test. The service suite, interface suite, typecheck, Ruff and
   the format check pass. On the running app, every read route answers both real tenders without a server error.
+
+## 27 September 2026: the office answers from its own records
+
+The engineer asked Salem, the Tender Manager on the real tender, how the general backfill (C.1.2) was priced, five
+times between 16:51 and 17:02. Each turn ended by his own choice after 4 to 8 of his 12 steps with "Next I will
+verify…", and nothing ever did the next step. The approved build-up was in the database the whole time, but no tool
+could open it: `review_details` found only records still in his queue, `estimate_summary` gave totals and `list_boq`
+had no rates. Across the tender, 40 of his 108 messages to the engineer promised work, and in 24 of them the
+engineer spoke next.
+
+- **Opening settled work.** `open_record` opens any record by its reference or BOQ line, settled or not: a rate's
+  build-up with Quantix's line costs and amount, a BOQ line's source, rate, measurements and package, a draft's
+  text, a quote's lines, who made it, what the Manager and the engineer decided and why, and every other version of
+  the same work with why it was sent back. It replaces `review_details`. `find_records` finds BOQ lines (with their
+  rates), facts, checklist items, measurements, packages and quotes by words. `priced_boq` lists the priced BOQ 60
+  lines at a time, with the total of the lines asked for.
+- **An answer rests on what was opened.** A message to the engineer that replies to them needs `sources` (records,
+  BOQ lines, pages or summaries the sender opened, checked against the new `opened` log) or `next_steps`. A reply
+  with neither is sent back: answer now, or list the work. The chat shows the sources as links to the page or the
+  BOQ line.
+- **A promise is a task.** Each next step becomes the sender's own "Follow up" task, at most 3 open at once. An open
+  task given, sent back or set since a person's last turn began now wakes them once. The Manager can complete his
+  follow-ups.
+- **The rules** say the office's own records, not the tender documents, hold what was entered, priced or decided,
+  and that a question is answered in the same turn.
+- **Smaller fixes.** `propose_boq_items` names the lines past 40 it didn't enter. `view_page` opens image documents
+  (.png, .jpg, .tif), which no agent could read before.
+- Migration 0018 adds `opened` and `messages.sources`. Rehearsed on a copy of the real database: every row count
+  unchanged. On that copy `open_record("Earthwork / C.1.2")` gives the approved 36.95 per m³ build-up, its assumptions
+  and the four earlier versions with the reasons two were sent back.
+- **Checks:** 6 new service tests and 1 new interface test. 138 service tests pass, the interface suite and
+  typecheck pass, Ruff and the format check pass.

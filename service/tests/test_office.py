@@ -485,7 +485,9 @@ def test_an_unanswered_update_to_the_engineer_is_replaced_by_the_next(client, of
         if info.output_tools:
             return office_brain(messages, info)
         answered = "Noted, carry on." in prompt_of(messages)
-        steps = [call("message_engineer", text="Third.")] if answered else []
+        # a reply to the engineer rests on something the Manager looked at
+        steps = [call("estimate_summary"), call("message_engineer", text="Third.", sources=["estimate_summary"])]
+        steps = steps if answered else []
         steps = steps or [call("message_engineer", text="First."), call("message_engineer", text="Second.")]
         return [*steps, DONE][len(returns(messages))]
 

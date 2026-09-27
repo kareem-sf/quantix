@@ -6,6 +6,7 @@ import { isChecked } from "../review/queries";
 import { Face } from "./Face";
 import { Prose } from "./Prose";
 import { firstName, useAnswer, useDecisions, useOffice } from "./queries";
+import { Sources } from "./Sources";
 
 export function DecisionPage() {
   const { tenderId = "", decisionId = "" } = useParams();
@@ -60,18 +61,7 @@ export function DecisionPage() {
       {decision.sources && decision.sources.length > 0 && (
         <div className="flex flex-col gap-1.5">
           <span className="font-semibold text-ink-2">Where it shows</span>
-          {decision.sources.map((s) => {
-            const to = s.document_id
-              ? `/tenders/${tenderId}/documents?doc=${s.document_id}&page=${s.page}`
-              : s.boq_item_id && `/tenders/${tenderId}/estimate?item=${s.boq_item_id}`;
-            return to ? (
-              <Link key={s.label} to={to} className="self-start underline underline-offset-4">
-                {s.label}
-              </Link>
-            ) : (
-              <span key={s.label}>{s.label}</span>
-            );
-          })}
+          <Sources sources={decision.sources} />
         </div>
       )}
       {isChecked(decision.subject_kind) && decision.subject_id && (

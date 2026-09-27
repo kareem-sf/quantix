@@ -30,6 +30,7 @@ const said = (id: number, sender: string, channel: string, text: string, kind = 
   channel,
   kind,
   text,
+  sources: null,
   created_at: at,
 });
 const question: Decision = {
@@ -150,6 +151,32 @@ describe("Office", () => {
     const profile = await screen.findByRole("complementary", { name: "Omar Haddad" });
     expect(within(profile).getByText("Never trusts a BOQ quantity.")).toBeInTheDocument();
     expect(within(profile).getByText("Idle")).toBeInTheDocument();
+  });
+
+  it("shows what an answer rests on, each opening its source", async () => {
+    const answer: Message = {
+      ...said(2, "s1", "s1", "Built up from a fixing gang, rebar with 5% wastage, tie wire and a bending machine."),
+      sources: [
+        { label: "The rate for BOQ item 4.3", boq_item_id: "b43" },
+        { label: "Bill.xlsx, page 1", document_id: "d1", page: 1 },
+        { label: "Where the tender stands" },
+      ],
+    };
+    fakeService({
+      tenders: [tender],
+      settings: ready,
+      staff: [rania, omar],
+      messages: [said(1, "engineer", "s1", "How did you price the slab reinforcement?"), answer],
+    });
+    openApp("/tenders/t1/office?with=s1");
+
+    const rate = await screen.findByRole("link", { name: "The rate for BOQ item 4.3" });
+    expect(rate).toHaveAttribute("href", "/tenders/t1/estimate?item=b43");
+    expect(screen.getByRole("link", { name: "Bill.xlsx, page 1" })).toHaveAttribute(
+      "href",
+      "/tenders/t1/documents?doc=d1&page=1",
+    );
+    expect(screen.getByText("Where the tender stands")).toBeInTheDocument();
   });
 
   it("messages a person directly and can stop the office", async () => {

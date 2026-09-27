@@ -1681,6 +1681,8 @@ export interface components {
             kind: string;
             /** Text */
             text: string;
+            /** Sources */
+            sources: components["schemas"]["DecisionSource"][] | null;
             /**
              * Created At
              * Format: date-time

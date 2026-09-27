@@ -21,13 +21,15 @@ from quantix.documents.models import Document
 from quantix.estimate import records as estimate
 from quantix.office import records
 from quantix.office.models import TEAM, Staff, Task
-from quantix.review import audit
+from quantix.review import audit, lookup
 from quantix.review import records as reviews
 from quantix.subcontract import records as subcontract
 from quantix.submission import records as submission
 from quantix.takeoff import records as takeoff
 
 TEAM_LIMIT = 5  # staff under the Manager; a tender's work is shared among a few, not spread across many
+FOLLOW_UP = "Follow up: "  # a task someone set themselves when they told the engineer what they would do next
+MAX_FOLLOW_UPS = 3  # open at once per person, so promises can't pile up
 FOREIGN_SCRIPT = re.compile("[぀-ヿ㐀-鿿가-힯]")  # Chinese, Japanese, Korean
 
 
@@ -106,6 +108,11 @@ def _working(ctx: RunContext[Turn], doing: str | None = None):
         session.commit()
 
 
+def _opened(ctx: RunContext[Turn], session: Session, kind: str, ref: str) -> None:
+    """Remember what the person opened, so what they cite can be checked against it."""
+    records.note_opened(session, ctx.deps.tender_id, ctx.deps.staff_id, kind, ref)
+
+
 def _document(session: Session, tender_id: str, document_id: str) -> Document:
     document = session.get(Document, document_id)
     if document is None or document.tender_id != tender_id:
@@ -143,6 +150,7 @@ def read_page(ctx: RunContext[Turn], document_id: str, page: int) -> str:
             raise ValueError(f"{document.name} has pages 1 to {document.page_count or 0}.")
         if not found.has_text:
             return f"{document.name}, page {page} is a scan with no text. Use view_page to look at it."
+        _opened(ctx, session, "page", f"{document_id}:{page}")
         return f"{document.name}, page {page}:\n{found.text}"
 
 
@@ -156,10 +164,16 @@ def view_page(
         return BLIND
     with _working(ctx) as (session, me):
         document = _document(session, ctx.deps.tender_id, document_id)
-        if document.kind != "pdf" or not 1 <= page <= (document.page_count or 0):
-            raise ValueError(f"Only PDF pages can be viewed; {document.name} has {document.page_count or 0} pages.")
+        if document.kind not in ("pdf", "image") or not 1 <= page <= (document.page_count or 0):
+            raise ValueError(
+                f"Only PDF pages and images can be viewed; {document.name} has {document.page_count or 0} pages: "
+                "read it with read_page."
+            )
         me.now = f"Looking at {document.name}, page {page}"
         path = library.stored_file(ctx.deps.home, document)
+        _opened(ctx, session, "page", f"{document_id}:{page}")
+        if document.kind == "image":
+            return _view_image(document.name, path, region)
         factor = _points(session, ctx.deps.tender_id, document_id, page)
     if region is None:
         return ToolReturn(
@@ -182,6 +196,14 @@ def view_page(
     )
 
 
+def _view_image(name: str, path: Path, region: list[float] | None) -> ToolReturn:
+    if region is not None and (len(region) != 4 or not (region[0] < region[2] and region[1] < region[3])):
+        raise ModelRetry("Give the region as [left, top, right, bottom] with left < right and top < bottom.")
+    image = readers.render_image(path, width=VIEW_WIDTH, region=tuple(region) if region else None)
+    what = f"A close-up of {name}, enlarged to {VIEW_WIDTH} pixels wide," if region else f"The image {name}"
+    return ToolReturn(return_value=f"{what} follows.", content=[BinaryContent(data=image, media_type="image/png")])
+
+
 def post_to_team(ctx: RunContext[Turn], text: str) -> str:
     """Say something in the team room, where the whole office and the engineer can read it."""
     with _working(ctx) as (session, me):
@@ -189,16 +211,54 @@ def post_to_team(ctx: RunContext[Turn], text: str) -> str:
     return "Posted."
 
 
-def message_engineer(ctx: RunContext[Turn], text: str) -> str:
+ANSWER_FIRST = (
+    "The engineer asked you something: answer it now. Look it up (open_record, find_records, priced_boq, "
+    "read_page), then write your answer with sources: the records and pages it rests on, as those tools name them. "
+    "If it truly needs more work first, list that work in next_steps: each becomes your task and Quantix wakes you "
+    "to do it. Never tell the engineer you will look into something without next_steps."
+)
+
+
+def message_engineer(
+    ctx: RunContext[Turn], text: str, sources: list[str] | None = None, next_steps: list[str] | None = None
+) -> str:
     """Write to the engineer in your own chat with them. While they haven't answered your last message, this one
-    replaces it, so they read one current update: include anything from it that still matters."""
+    replaces it, so they read one current update: include anything from it that still matters.
+    sources: what your message rests on, each something you opened: a record as open_record names it ("rate
+    42a9fb15"), a BOQ line ("Earthwork / C.1.2"), a page ("<document name>, page <n>"), a summary you called
+    ("estimate_summary", "priced_boq"). The engineer can open each one.
+    next_steps: up to 3 things you will do yourself before you can tell them more. Each becomes your own task, and
+    Quantix wakes you to do it. Work for your team goes to them with assign_task instead.
+    An answer to something the engineer asked needs sources, or next_steps when it needs more work first."""
+    steps = [s.strip() for s in next_steps or [] if s.strip()]
+    if len(steps) > 3:
+        raise ModelRetry("Give at most 3 next steps: the ones you will do yourself next.")
     with _working(ctx) as (session, me):
+        cited = [lookup.cited(session, ctx.deps.tender_id, me.id, s) for s in sources or [] if s.strip()]
+        if not cited and not steps and lookup.answering(session, ctx.deps.tender_id, me.id):
+            raise ValueError(ANSWER_FIRST)
+        promised = [t.title for t in records.open_tasks(session, me) if t.title.startswith(FOLLOW_UP)]
+        if steps and len(promised) + len(steps) > MAX_FOLLOW_UPS:
+            raise ValueError(
+                f"You already have {len(promised)} follow-ups open: {'; '.join(promised)}. Do them and complete them "
+                "before you promise more."
+            )
         last = records.messages(session, ctx.deps.tender_id, me.id, limit=1)
         replaced = bool(last) and last[0].sender == me.id
         if replaced:
             session.delete(last[0])
-        records.post(session, ctx.deps.tender_id, me.id, me.id, text)
-    return "Sent. It replaces your last message, which the engineer hadn't answered." if replaced else "Sent."
+        records.post(session, ctx.deps.tender_id, me.id, me.id, text, sources=cited)
+        for step in steps:
+            session.add(
+                Task(
+                    tender_id=ctx.deps.tender_id,
+                    staff_id=me.id,
+                    title=f"{FOLLOW_UP}{step[:280]}",
+                    brief="You told the engineer you would do this. Do it, then tell them what you found.",
+                )
+            )
+    sent = "Sent. It replaces your last message, which the engineer hadn't answered." if replaced else "Sent."
+    return sent + (f" {len(steps)} next step{'s are' if len(steps) > 1 else ' is'} now your task." if steps else "")
 
 
 def raise_concern(ctx: RunContext[Turn], text: str) -> str:
@@ -229,10 +289,12 @@ def ask_engineer(ctx: RunContext[Turn], title: str, question: str, options: list
 def complete_task(ctx: RunContext[Turn], task_id: str, result: str, only_reported: bool = False) -> str:
     """Finish one of your tasks with a clear result the Manager can use, citing documents and pages. Quantix checks
     that you filed the work since the task began (a draft, measurement, rate, BOQ line or other record). For a task
-    that only asked you to find, read or check something, set only_reported to true."""
+    that only asked you to find, read or check something, set only_reported to true. A follow-up you set yourself
+    is done once you have told the engineer what you found."""
     with _working(ctx) as (session, me):
         task = session.get(Task, task_id)
-        if task is not None and task.staff_id == me.id and task.status == "open":
+        own = task is not None and task.title.startswith(FOLLOW_UP)
+        if task is not None and task.staff_id == me.id and task.status == "open" and not own:
             filed = reviews.filed_since(session, me.id, task.created_at)
             if not filed and task.title.startswith("Redo "):
                 raise ValueError(
@@ -315,7 +377,11 @@ def propose_boq_items(ctx: RunContext[Turn], items: list[boq.ItemIn]) -> str:
     """Add BOQ lines exactly as the client's BOQ states them, up to 40 at a time, each with the page it is on and a
     quote that includes the item number and the quantity. Lines that don't check out come back with the reason."""
     with _working(ctx, f"Entering {len(items)} BOQ items") as (session, me):
-        return boq.propose_items(session, ctx.deps.tender_id, me, items[:40])
+        report = boq.propose_items(session, ctx.deps.tender_id, me, items[:40])
+    if len(items) > 40:
+        left = ", ".join(i.item or "(unnumbered)" for i in items[40:])
+        report += f"\nNot entered, because only 40 go at a time: {left}. Enter them in another call."
+    return report
 
 
 def withdraw_boq_items(ctx: RunContext[Turn], items: list[str], reason: str) -> str:
@@ -328,6 +394,7 @@ def withdraw_boq_items(ctx: RunContext[Turn], items: list[str], reason: str) -> 
 def list_boq(ctx: RunContext[Turn]) -> str:
     """The BOQ as the office has it so far: item, description, unit, quantity and approval."""
     with _working(ctx, "Checking the BOQ") as (session, _):
+        _opened(ctx, session, "summary", "list_boq")
         rows = boq.items(session, ctx.deps.tender_id)
         lines = [
             f"{boq.reference(r)} | {r.description[:80]} | {r.unit} | "
@@ -336,6 +403,48 @@ def list_boq(ctx: RunContext[Turn]) -> str:
         ]
         known = [f"{FACT_KINDS[f.kind]}: {f.value} ({f.status})" for f in boq.facts(session, ctx.deps.tender_id)]
     return "\n".join(known + [f"{len(rows)} BOQ items:"] + lines[:300]) if rows or known else "The BOQ is empty."
+
+
+def open_record(ctx: RunContext[Turn], references: list[str]) -> str:
+    """Open up to 10 of the office's records, settled or not: what each says and rests on (a rate's build-up with
+    Quantix's line costs, a BOQ line's source, rate and measurements, a draft's text, a quote's lines), who made it,
+    what the Tender Manager and the engineer decided and why, what Quantix's checks find while it is undecided, and
+    the versions before it with why each was sent back. references: as the office's tools show them ("rate
+    42a9fb15", "draft 1cb82413", "markups") or BOQ lines ("Earthwork / C.1.2"). This is how you answer how
+    something was entered, measured or priced."""
+    with _working(ctx, "Looking up the office's work") as (session, _):
+        parts = []
+        for ref in references[:10]:
+            try:
+                kind, record = lookup.find(session, ctx.deps.tender_id, ref)
+            except ValueError as error:
+                parts.append(f"{ref}: {error}")
+                continue
+            parts.append(lookup.explain(session, ctx.deps.home, ctx.deps.tender_id, kind, record))
+            for shown_kind, shown_id in [(kind, record.id), *lookup.related(session, kind, record)]:
+                _opened(ctx, session, shown_kind, shown_id)
+    return "\n\n".join(parts) or "Give at least one reference."
+
+
+def find_records(ctx: RunContext[Turn], words: str = "", kind: str | None = None) -> str:
+    """Find the office's own records by words: BOQ lines (with their rates), facts, checklist items, measurements,
+    packages and quotes. kind narrows it to one of boq, fact, checklist, measurement, package or quote; with a kind
+    and no words it lists them all. Each line starts with the reference to open it with open_record."""
+    with _working(ctx, f"Looking through the office's records for “{words}”") as (session, _):
+        found = lookup.search(session, ctx.deps.tender_id, words, kind)
+    if not found:
+        return "No record matches. Try fewer or other words, or the Arabic or English term."
+    more = f"\n… and {len(found) - 40} more: add words to narrow it." if len(found) > 40 else ""
+    return "\n".join(found[:40]) + more
+
+
+def priced_boq(ctx: RunContext[Turn], section: str | None = None, start: int = 1) -> str:
+    """The priced BOQ as Quantix computes it, 60 lines at a time: each line's quantity, rate, amount, basis and
+    state, with the rate's reference for open_record, and the total of the lines asked for. section narrows it to
+    one bill; start is the line to begin from."""
+    with _working(ctx, "Going through the priced BOQ") as (session, _):
+        _opened(ctx, session, "summary", "priced_boq")
+        return lookup.priced(session, ctx.deps.tender_id, section, start)
 
 
 def propose_fact(ctx: RunContext[Turn], kind: str, value: str, document_id: str, page: int, quote: str) -> str:
@@ -369,6 +478,7 @@ def find_on_page(ctx: RunContext[Turn], document_id: str, page: int, text: str) 
     itself. Positions are in view_page pixels: left, top, right, bottom."""
     with _working(ctx, f"Finding “{text}” on a drawing") as (session, _):
         factor = _points(session, ctx.deps.tender_id, document_id, page)
+        _opened(ctx, session, "page", f"{document_id}:{page}")
         path = library.stored_file(ctx.deps.home, session.get(Document, document_id))
     boxes = readers.find_text(path, page, text)
     if not boxes:
@@ -458,6 +568,7 @@ def measure(
 def takeoff_summary(ctx: RunContext[Turn]) -> str:
     """The takeoff so far against the BOQ: each measured item with its takeoff and BOQ quantities and the result."""
     with _working(ctx, "Comparing the takeoff with the BOQ") as (session, _):
+        _opened(ctx, session, "summary", "takeoff_summary")
         rows = takeoff.compare(session, ctx.deps.tender_id)
     if not rows:
         return "Nothing has been measured yet."
@@ -538,6 +649,7 @@ def propose_markups(
 def estimate_summary(ctx: RunContext[Turn]) -> str:
     """The price so far, as Quantix computes it: net cost, markups, total, VAT, and the items still unpriced."""
     with _working(ctx, "Checking the estimate") as (session, _):
+        _opened(ctx, session, "summary", "estimate_summary")
         s = estimate.summary(session, ctx.deps.tender_id)
     lines = [
         f"{s.priced} of {s.items} items priced ({s.reviewing} with the Tender Manager, {s.waiting} waiting for the "
@@ -669,6 +781,7 @@ def add_requirements(ctx: RunContext[Turn], requirements: list[submission.Requir
 def list_requirements(ctx: RunContext[Turn]) -> str:
     """The submission checklist and where each requirement stands."""
     with _working(ctx, "Checking the submission checklist") as (session, _):
+        _opened(ctx, session, "summary", "list_requirements")
         rows = [
             f"- {r.section} · {r.title}: {submission.state(session, r)}"
             for r in submission.requirements(session, ctx.deps.tender_id)
@@ -722,7 +835,7 @@ def set_pricing_columns(
 
 def review_queue(ctx: RunContext[Turn]) -> str:
     """Everything your staff proposed that you haven't reviewed yet, oldest first, one line each, with what
-    Quantix's checks found in it. Look at the detail with review_details, then decide with review."""
+    Quantix's checks found in it. Look at the detail with open_record, then decide with review."""
     tender_id = ctx.deps.tender_id
     with _working(ctx, "Going through the review queue") as (session, me):
         waiting = reviews.pending(session, tender_id)
@@ -736,23 +849,6 @@ def review_queue(ctx: RunContext[Turn]) -> str:
         return "Nothing is waiting for your review."
     more = f"\n… and {len(waiting) - 60} more after these." if len(waiting) > 60 else ""
     return f"{len(waiting)} waiting for your review:\n" + "\n".join(lines) + more
-
-
-def review_details(ctx: RunContext[Turn], records_to_check: list[str]) -> str:
-    """The full detail of up to 10 records in your review queue, e.g. ["rate 4690fa4c", "draft 1cb82413"]: their
-    source, build-up, measurement, text or levelling, and what Quantix's checks found. Check each against its pages
-    before you decide."""
-    with _working(ctx, "Checking the team's work") as (session, _):
-        parts = []
-        for ref in records_to_check[:10]:
-            try:
-                found = reviews.find(session, ctx.deps.tender_id, ref)
-            except ValueError as error:
-                parts.append(f"{ref}: {error}")
-                continue
-            checked = reviews.findings(session, ctx.deps.home, ctx.deps.tender_id, found)
-            parts.append(f"{found.ref}:\n{reviews.details(session, found)}{reviews.findings_text(checked)}")
-    return "\n\n".join(parts)
 
 
 def review(ctx: RunContext[Turn], verdicts: list[reviews.Verdict]) -> str:
@@ -771,6 +867,7 @@ def audit_tender(ctx: RunContext[Turn], accept_warnings: list[audit.Accepted] | 
     office's work. accept_warnings: warnings you accept, each by its short name with your reason. Clear every
     blocker, then run it again until nothing blocks the release."""
     with _working(ctx, "Auditing the tender") as (session, me):
+        _opened(ctx, session, "summary", "audit_tender")
         problems = audit.accept(session, ctx.deps.home, ctx.deps.tender_id, me, accept_warnings or [])
         text = audit.report(audit.open_findings(session, ctx.deps.home, ctx.deps.tender_id))
     return text + ("\nNot accepted: " + "; ".join(problems) if problems else "")
@@ -800,6 +897,9 @@ READ: list[Callable] = [
     message_engineer,
     raise_concern,
     list_boq,
+    open_record,
+    find_records,
+    priced_boq,
     takeoff_summary,
     search_library,
     estimate_summary,
@@ -830,12 +930,12 @@ STAFF: list[Callable] = [*READ, *PRODUCE, complete_task]
 # The Manager leads and reviews; he never produces records himself, so every record has a second pair of eyes
 MANAGER: list[Callable] = [
     *READ,
+    complete_task,
     ask_engineer,
     hire,
     assign_task,
     release,
     review_queue,
-    review_details,
     review,
     escalate,
     audit_tender,

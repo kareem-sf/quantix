@@ -1,0 +1,471 @@
+"""Looking up the office's own work: any record by its reference, with what it rests on, who made and decided it and
+the versions before it; the office's records by words; and the priced BOQ. Quantix computes every figure shown."""
+
+import re
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from quantix.boq import records as boq
+from quantix.boq.models import FACT_KINDS, BoqItem, Fact
+from quantix.core.review import APPROVED, UNDECIDED
+from quantix.documents import library
+from quantix.documents.arabic import searchable
+from quantix.documents.models import Document
+from quantix.estimate import records as estimate
+from quantix.estimate.models import Markups, Rate
+from quantix.office import records as office
+from quantix.office.models import ENGINEER
+from quantix.review import records as reviews
+from quantix.subcontract import records as subcontract
+from quantix.subcontract.models import Company, Enquiry, Package, Quote
+from quantix.submission import records as submission
+from quantix.submission.models import Draft, Requirement
+from quantix.takeoff import records as takeoff
+from quantix.takeoff.models import Measurement, Scale
+
+MODELS: dict[str, Any] = {
+    "boq": BoqItem,
+    "fact": Fact,
+    "scale": Scale,
+    "measurement": Measurement,
+    "rate": Rate,
+    "markups": Markups,
+    "draft": Draft,
+    "checklist": Requirement,
+    "package": Package,
+    "enquiry": Enquiry,
+    "quote": Quote,
+}
+STATES = {
+    "proposed": "with the Tender Manager for review",
+    "reviewed": "accepted by the Tender Manager, waiting for the engineer",
+    "approved": "approved by the engineer",
+    "office_approved": "approved by the office, not reviewed by the engineer",
+    "rejected": "sent back",
+    "withdrawn": "withdrawn",
+    "replaced": "replaced by a newer version",
+}
+SHORT = {
+    "proposed": "with the Manager",
+    "reviewed": "waiting for the engineer",
+    "approved": "approved",
+    "office_approved": "approved by the office",
+}
+PAGE = 60  # priced BOQ lines at a time
+# Summaries Quantix computes, which an answer may rest on once the person has called them
+SUMMARIES = {
+    "estimate_summary": "The estimate as Quantix computes it",
+    "priced_boq": "The priced BOQ",
+    "list_boq": "The BOQ",
+    "takeoff_summary": "The takeoff against the BOQ",
+    "list_requirements": "The submission checklist",
+    "audit_tender": "The audit of the tender",
+}
+_PAGE_REF = re.compile(r"^(?P<name>.+?),?\s+page\s+(?P<page>\d+)$", re.IGNORECASE)
+_ID = re.compile(r"[0-9a-f]{4,32}")
+
+
+def _amount(value: Decimal | None) -> str:
+    return "-" if value is None else f"{value:,.3f}".rstrip("0").rstrip(".")
+
+
+def _names(session: Session, tender_id: str) -> dict[str, str]:
+    names = {m.id: m.first_name for m in office.team(session, tender_id, include_released=True)}
+    names[ENGINEER] = "the engineer"
+    return names
+
+
+def _tender_of(session: Session, record: Any) -> str:
+    if isinstance(record, Enquiry | Quote):
+        return session.get(Package, record.package_id).tender_id
+    return record.tender_id
+
+
+def find(session: Session, tender_id: str, ref: str) -> tuple[str, Any]:
+    """A record by its reference ("rate 42a9fb15", "markups") or a BOQ line by its number ("Earthwork / C.1.2")."""
+    text = ref.strip()
+    kind, _, short = text.partition(" ")
+    kind = {"recommendation": "package", "requirement": "checklist"}.get(kind.lower(), kind.lower())
+    short = short.strip().lower()
+    if kind == "markups" and not short:
+        markups = estimate.current_markups(session, tender_id)
+        if markups is None:
+            raise ValueError("No markups have been proposed yet.")
+        return kind, markups
+    if kind in MODELS and _ID.fullmatch(short):
+        model = MODELS[kind]
+        for record in session.scalars(select(model).where(model.id.startswith(short))):
+            if _tender_of(session, record) == tender_id:
+                return kind, record
+        raise ValueError(f"There is no {kind} {short} on this tender. Use find_records to look it up by words.")
+    try:
+        return "boq", boq.find_item(session, tender_id, text)
+    except ValueError as error:
+        raise ValueError(
+            f"“{text}” is neither a record like “rate 42a9fb15” nor a BOQ line like “C.1.2”: {error}"
+        ) from error
+
+
+def state(session: Session, kind: str, r: Any) -> str:
+    if kind == "checklist":
+        return {
+            "ready": "ready",
+            "review": "its draft is waiting for the engineer",
+            "manager": "its draft is with the Tender Manager",
+            "missing": "nothing drafted or attached yet",
+        }[submission.state(session, r)]
+    if kind == "enquiry":
+        return {"draft": "a draft", "sent": "sent", "rejected": "sent back"}.get(r.status, r.status)
+    if kind == "package":
+        if r.selected_quote_id:
+            return "the engineer chose a quote"
+        if r.recommended_quote_id:
+            return "recommendation waiting for the engineer" if r.reviewed_by else "recommendation with the Manager"
+        return "no quote recommended yet"
+    if kind == "quote":
+        return "recorded"
+    return STATES.get(r.status, r.status)
+
+
+def _pending(kind: str, r: Any) -> reviews.Pending:
+    producer = getattr(r, "proposed_by", None) or getattr(r, "added_by", None) or getattr(r, "created_by", "")
+    return reviews.Pending("recommendation" if kind == "package" else kind, r, producer, r.created_at)
+
+
+def _made(kind: str, r: Any, names: dict[str, str]) -> list[str]:
+    """Who made it, what the Tender Manager said, and what the engineer decided."""
+    maker = getattr(r, "proposed_by", None) or getattr(r, "added_by", None) or getattr(r, "created_by", None)
+    lines = [f"Made by {names.get(maker, 'someone')} on {r.created_at:%d %b %Y}."] if maker else []
+    if getattr(r, "reviewed_by", None):
+        who = names.get(r.reviewed_by, "The Tender Manager")
+        who = who[0].upper() + who[1:]
+        sent_back = getattr(r, "status", None) == "rejected" and not getattr(r, "decided_at", None)
+        lines.append(f"{who} {'sent it back' if sent_back else 'accepted it'}: {r.review_note}")
+    decided = getattr(r, "decided_at", None)
+    if decided and kind != "package":
+        if r.status == "office_approved":
+            lines.append(f"Approved by the office on {decided:%d %b %Y}, without the engineer's review.")
+        elif r.status in APPROVED:
+            lines.append(f"The engineer approved it on {decided:%d %b %Y}.")
+        elif r.status == "rejected":
+            lines.append(f"The engineer sent it back on {decided:%d %b %Y}: {r.reason}")
+    return lines
+
+
+def _brief(session: Session, kind: str, r: Any) -> str:
+    """A version in a few words, for the history."""
+    if kind == "rate":
+        return f"{estimate.rate_of(r)} per unit ({r.basis})"
+    if kind == "boq":
+        return f"{_amount(r.quantity)} {r.unit}"
+    if kind == "measurement":
+        return f"{_amount(takeoff.quantity(session, r))} {r.unit}"
+    if kind == "fact":
+        return r.value
+    if kind == "draft":
+        return f"“{r.title}”"
+    if kind == "scale":
+        return f"about 1:{takeoff.drawing_ratio(r.metres_per_point):,}"
+    return f"overheads {r.overheads:.1%}, profit {r.profit:.1%}"
+
+
+def _history(session: Session, tender_id: str, kind: str, r: Any) -> list[str]:
+    if kind not in reviews.REVIEWED_KINDS:
+        return []
+    model = reviews.REVIEWED_KINDS[kind][0]
+    query = select(model).where(model.tender_id == tender_id, reviews.same_work(kind, r), model.id != r.id)
+    others = list(session.scalars(query.order_by(model.created_at.desc())))
+    if not others:
+        return []
+    lines = ["Other versions of the same work, newest first:"]
+    for o in others[:8]:
+        why = f": {o.reason}" if o.status == "rejected" and o.reason else ""
+        lines.append(
+            f"- {kind} {o.id[:8]} · {o.created_at:%d %b %H:%M} · {_brief(session, kind, o)} · "
+            f"{STATES.get(o.status, o.status)}{why}"
+        )
+    if len(others) > 8:
+        lines.append(f"… and {len(others) - 8} older.")
+    return lines
+
+
+def _rate_line(session: Session, item: BoqItem) -> str:
+    rate = estimate.current_rate(session, item.id)
+    if rate is None:
+        return "Not priced yet."
+    value = estimate.rate_of(rate)
+    line = f"Rate: {value} per {item.unit} ({rate.basis})"
+    if item.quantity is not None:
+        line += f"; {_amount(item.quantity)} {item.unit} is {estimate.money(item.quantity * value):,}"
+    return f"{line} · rate {rate.id[:8]}, {SHORT.get(rate.status, '')}"
+
+
+def _body(session: Session, kind: str, r: Any) -> str:
+    """What the record says and rests on."""
+    if kind == "boq":
+        lines = [f"{boq.reference(r)}: {r.description} · {_amount(r.quantity)} {r.unit}"]
+        lines.append(reviews.details(session, _pending(kind, r)))
+        lines.append(_rate_line(session, r))
+        for m in takeoff.measurements(session, r.tender_id):
+            if m.boq_item_id == r.id:
+                lines.append(
+                    f"Measured: “{m.label}” {_amount(takeoff.quantity(session, m))} {m.unit} · "
+                    f"measurement {m.id[:8]}, {SHORT.get(m.status, m.status)}"
+                )
+        lines += [f"In the {p.name} package." for p in subcontract.packages(session, r.tender_id) if r.id in p.items]
+        return "\n".join(lines)
+    if kind == "rate":
+        item = session.get(BoqItem, r.boq_item_id)
+        text = reviews.details(session, _pending(kind, r))
+        value = estimate.rate_of(r)
+        text += f"\nQuantix: {value} per {item.unit}"
+        if item.quantity is not None:
+            text += f"; {_amount(item.quantity)} {item.unit} at this rate is {estimate.money(item.quantity * value):,}"
+        return text + "."
+    if kind == "checklist":
+        text = f"{r.section} · {r.title}\n{reviews.details(session, _pending(kind, r))}"
+        draft = submission.current_draft(session, r.id)
+        return text + (f"\nCurrent draft: draft {draft.id[:8]}, “{draft.title}”" if draft else "")
+    if kind == "enquiry":
+        package, firm = session.get(Package, r.package_id), session.get(Company, r.company_id)
+        return f"To {firm.name} for the {package.name} package.\n{reviews.details(session, _pending(kind, r))}"
+    if kind == "package":
+        items = [session.get(BoqItem, i) for i in r.items]
+        lines = [f"{r.name} ({r.kind}): " + ", ".join(boq.reference(i) for i in items if i)]
+        for e in subcontract.enquiries(session, r.id):
+            lines.append(
+                f"Enquiry to {session.get(Company, e.company_id).name}: {state(session, 'enquiry', e)} · "
+                f"enquiry {e.id[:8]}"
+            )
+        for q in subcontract.quotes(session, r.id):
+            lines.append(f"Quote from {session.get(Company, q.company_id).name} · quote {q.id[:8]}")
+        levelled = subcontract.level(session, r)
+        if levelled.columns:
+            lines.append("Levelled by Quantix:")
+            lines += [
+                f"{c.rank or '-'}. {c.company}: quoted {c.quoted_total}, exclusions {c.exclusions}, levelled "
+                f"{c.levelled_total if c.levelled_total is not None else 'incomplete'}"
+                for c in sorted(levelled.columns, key=lambda c: c.rank or 999)
+            ]
+        if r.recommended_quote_id:
+            firm = session.get(Company, session.get(Quote, r.recommended_quote_id).company_id)
+            lines.append(f"Recommended: {firm.name}. {r.recommendation}")
+        if r.selected_quote_id:
+            chosen = session.get(Quote, r.selected_quote_id)
+            lines.append(f"Chosen: {session.get(Company, chosen.company_id).name}.")
+        return "\n".join(lines)
+    if kind == "quote":
+        package, firm = session.get(Package, r.package_id), session.get(Company, r.company_id)
+        document = session.get(Document, r.document_id)
+        lines = [f"{firm.name}'s quote for the {package.name} package, from {document.name}:"]
+        for line in r.lines:
+            item = session.get(BoqItem, line["boq_item_id"])
+            lines.append(
+                f"- {boq.reference(item)}: {line['rate']} per {item.unit} (page {line['page']}: “{line['quote']}”)"
+            )
+        for e in r.exclusions:
+            lines.append(f"- Excludes {e['description']}, which we put at {e['amount']} (page {e['page']})")
+        return "\n".join(lines)
+    return reviews.details(session, _pending(kind, r))
+
+
+def related(session: Session, kind: str, r: Any) -> list[tuple[str, str]]:
+    """The records opening this one also shows: a BOQ line's rate, and a rate's or measurement's BOQ line."""
+    if kind == "boq":
+        rate = estimate.current_rate(session, r.id)
+        return [("rate", rate.id)] if rate else []
+    if kind in ("rate", "measurement") and r.boq_item_id:
+        return [("boq", r.boq_item_id)]
+    return []
+
+
+def explain(session: Session, home: Path, tender_id: str, kind: str, r: Any) -> str:
+    """Everything about a record: what it says, what it rests on, who made and decided it, what Quantix's checks
+    find while it is undecided, and the versions before it."""
+    names = _names(session, tender_id)
+    parts = [f"{kind} {r.id[:8]} · {state(session, kind, r)}", _body(session, kind, r), *_made(kind, r, names)]
+    recommending = kind == "package" and r.recommended_quote_id and not r.selected_quote_id
+    if (kind in reviews.CHECKED and r.status in UNDECIDED) or recommending:
+        parts.append(reviews.findings_text(reviews.findings(session, home, tender_id, _pending(kind, r))).strip())
+    parts += _history(session, tender_id, kind, r)
+    return "\n".join(p for p in parts if p)
+
+
+def _boq_line(session: Session, item: BoqItem) -> str:
+    line = f"boq {item.id[:8]} · {boq.reference(item)}: {item.description[:90]} · {_amount(item.quantity)} {item.unit}"
+    line += f" · {SHORT.get(item.status, item.status)}"
+    rate = estimate.current_rate(session, item.id)
+    if rate is not None:
+        line += f" · rate {rate.id[:8]}: {estimate.rate_of(rate)} per {item.unit}, {SHORT.get(rate.status, '')}"
+    return line
+
+
+FINDABLE = ("boq", "fact", "checklist", "measurement", "package", "quote")
+
+
+def search(session: Session, tender_id: str, words: str, kind: str | None = None) -> list[str]:
+    """The office's records whose words contain every word asked for, as lines that open with their reference."""
+    if kind and kind not in FINDABLE:
+        raise ValueError(f"kind is one of {', '.join(FINDABLE)}, or leave it out to look through them all.")
+    wanted = searchable(words).split()
+    found: list[str] = []
+
+    def add(text: str, line: str) -> None:
+        if all(w in searchable(text) for w in wanted):
+            found.append(line)
+
+    if kind in (None, "boq"):
+        for item in boq.items(session, tender_id):
+            add(f"{boq.reference(item)} {item.description} {item.section or ''}", _boq_line(session, item))
+    if kind in (None, "fact"):
+        for f in boq.facts(session, tender_id):
+            add(
+                f"{FACT_KINDS[f.kind]} {f.value}",
+                f"fact {f.id[:8]} · {FACT_KINDS[f.kind]}: {f.value} · {SHORT.get(f.status, f.status)}",
+            )
+    if kind in (None, "checklist"):
+        for r in submission.requirements(session, tender_id):
+            add(
+                f"{r.section} {r.title}",
+                f"checklist {r.id[:8]} · {r.section} · {r.title} · {state(session, 'checklist', r)}",
+            )
+    if kind in (None, "measurement"):
+        for m in takeoff.measurements(session, tender_id):
+            item = session.get(BoqItem, m.boq_item_id) if m.boq_item_id else None
+            add(
+                f"{m.label} {boq.reference(item) if item else ''}",
+                f"measurement {m.id[:8]} · “{m.label}” {_amount(takeoff.quantity(session, m))} {m.unit}"
+                + (f" for {boq.reference(item)}" if item else "")
+                + f" · {SHORT.get(m.status, m.status)}",
+            )
+    if kind in (None, "package", "quote"):
+        for p in subcontract.packages(session, tender_id):
+            if kind in (None, "package"):
+                add(
+                    f"{p.name} {p.kind}",
+                    f"package {p.id[:8]} · {p.name} ({p.kind}), {len(p.items)} items · {state(session, 'package', p)}",
+                )
+            if kind in (None, "quote"):
+                for q in subcontract.quotes(session, p.id):
+                    firm = session.get(Company, q.company_id).name
+                    add(f"{firm} {p.name}", f"quote {q.id[:8]} · {firm} for {p.name}, {len(q.lines)} rates")
+    return found
+
+
+def priced(session: Session, tender_id: str, section: str | None = None, start: int = 1) -> str:
+    """The priced BOQ, a page of lines at a time, with the total of the lines asked for."""
+    items = boq.items(session, tender_id)
+    if section:
+        items = [i for i in items if searchable(section) in searchable(i.section or "")]
+        if not items:
+            sections = sorted({i.section or "(no section)" for i in boq.items(session, tender_id)})
+            raise ValueError(f"No BOQ section matches “{section}”. The sections are: {', '.join(sections)}.")
+    if not items:
+        return "The BOQ is empty."
+    rows, total, counted = [], Decimal(0), 0
+    for item in items:
+        rate = estimate.current_rate(session, item.id)
+        if rate is None:
+            rows.append(
+                f"{boq.reference(item)} | {item.description[:60]} | {_amount(item.quantity)} {item.unit} | not priced"
+            )
+            continue
+        value = estimate.rate_of(rate)
+        amount = estimate.money(item.quantity * value) if item.quantity is not None else None
+        if amount is not None:
+            total += amount
+            counted += 1
+        rows.append(
+            f"{boq.reference(item)} | {item.description[:60]} | {_amount(item.quantity)} {item.unit} | {value} | "
+            f"{f'{amount:,}' if amount is not None else '-'} | {rate.basis} | {SHORT.get(rate.status, '')} | "
+            f"rate {rate.id[:8]}"
+        )
+    first = max(start, 1)
+    shown = rows[first - 1 : first - 1 + PAGE]
+    if not shown:
+        raise ValueError(f"There are {len(rows)} lines; start from 1 to {len(rows)}.")
+    currency = estimate.summary(session, tender_id).currency
+    where = f" in “{section}”" if section else ""
+    head = (
+        f"{len(items)} lines{where}, {counted} priced, together {total:,} {currency} (Quantix's figures). "
+        "item | description | quantity | rate | amount | basis | state | reference"
+    )
+    last = first + len(shown) - 1
+    more = f" Call again with start={last + 1} for the rest." if last < len(rows) else ""
+    return "\n".join([head, *shown, f"Lines {first} to {last} of {len(rows)}.{more}"])
+
+
+def _document_named(session: Session, tender_id: str, name: str) -> Document | None:
+    wanted = name.strip().strip("“”\"'").lower()
+    for document in library.documents(session, tender_id):
+        if document.status != "replaced" and wanted in (
+            document.name.lower(),
+            document.path.lower(),
+            document.name.rsplit(".", 1)[0].lower(),
+        ):
+            return document
+    return None
+
+
+def _label(session: Session, kind: str, r: Any) -> str:
+    if kind in reviews.REVIEWED_KINDS:
+        text = reviews.REVIEWED_KINDS[kind][1].label(session, r)
+    elif kind == "checklist":
+        text = f"the checklist item “{r.title}”"
+    elif kind == "package":
+        text = f"the {r.name} package"
+    elif kind == "quote":
+        text = f"{session.get(Company, r.company_id).name}'s quote for {session.get(Package, r.package_id).name}"
+    else:
+        text = f"the enquiry “{r.subject}”"
+    return text[0].upper() + text[1:]
+
+
+def _link(session: Session, kind: str, r: Any) -> dict[str, Any]:
+    """The source as the engineer's chat shows it: a label, opening the BOQ line or the page it rests on."""
+    source: dict[str, Any] = {"label": _label(session, kind, r)}
+    item_id = r.id if kind == "boq" else getattr(r, "boq_item_id", None)
+    where = session.get(Requirement, r.requirement_id) if kind == "draft" else r
+    if item_id:
+        source["boq_item_id"] = item_id
+    elif getattr(where, "document_id", None) and getattr(where, "page", None):
+        source |= {"document_id": where.document_id, "page": where.page}
+    return source
+
+
+def cited(session: Session, tender_id: str, staff_id: str, text: str) -> dict[str, Any]:
+    """A source someone gives for what they tell the engineer. It must be something they opened."""
+    wanted = text.strip()
+    key = wanted.lower()
+    if key in SUMMARIES:
+        if office.has_opened(session, staff_id, "summary", key):
+            return {"label": SUMMARIES[key]}
+        raise ValueError(f"You haven't looked at {key} yet: call it first, then give it as a source.")
+    page = _PAGE_REF.match(wanted)
+    if page:
+        document = _document_named(session, tender_id, page["name"])
+        if document is None:
+            raise ValueError(f"No document is called “{page['name']}”. Name it as list_documents shows it.")
+        number = int(page["page"])
+        if not office.has_opened(session, staff_id, "page", f"{document.id}:{number}"):
+            raise ValueError(f"You haven't read {document.name}, page {number}. Read it with read_page first.")
+        return {"label": f"{document.name}, page {number}", "document_id": document.id, "page": number}
+    kind, record = find(session, tender_id, wanted)
+    if not office.has_opened(session, staff_id, kind, record.id):
+        raise ValueError(f"You haven't opened {wanted}. Open it with open_record first.")
+    return _link(session, kind, record)
+
+
+def answering(session: Session, tender_id: str, staff_id: str) -> bool:
+    """Whether a message to the engineer now answers them: they wrote last, or the person is replacing the
+    unanswered reply they sent after the engineer's message."""
+    last = office.messages(session, tender_id, staff_id, limit=2)
+    if not last:
+        return False
+    if last[-1].sender == ENGINEER:
+        return True
+    return len(last) == 2 and last[-1].sender == staff_id and last[0].sender == ENGINEER

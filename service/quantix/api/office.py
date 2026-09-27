@@ -26,6 +26,13 @@ class StaffOut(BaseModel):
     now: str | None
 
 
+class DecisionSource(BaseModel):
+    label: str
+    document_id: str | None = None
+    page: int | None = None
+    boq_item_id: str | None = None
+
+
 class MessageOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -34,6 +41,7 @@ class MessageOut(BaseModel):
     channel: str
     kind: str
     text: str
+    sources: list[DecisionSource] | None
     created_at: datetime
 
 
@@ -46,13 +54,6 @@ class TaskOut(BaseModel):
     brief: str
     status: str
     result: str | None
-
-
-class DecisionSource(BaseModel):
-    label: str
-    document_id: str | None = None
-    page: int | None = None
-    boq_item_id: str | None = None
 
 
 class DecisionOut(BaseModel):
