@@ -321,3 +321,10 @@ def test_a_task_is_done_only_once_its_work_is_filed(client, office_with_work, tm
                           document_id=slab["source"]["document_id"], page=1, quote=QUOTES[1])  # fmt: skip
         boq.propose_items(session, tender_id, omar, [line])
         assert reviews.filed_since(session, omar_id, since) == "1 BOQ line"
+        session.commit()
+    [again] = [i for i in client.get(f"/tenders/{tender_id}/boq").json()["items"] if i["item"] == "4.2"]
+    decide(client, tender_id, rania_id, again["id"], False, "Quote the quantity as printed.")  # sent back again
+    with client.app.state.sessions() as session:
+        [task] = office.open_tasks(session, session.get(Staff, omar_id))
+        assert task.brief == "Quote the quantity as printed."
+        assert reviews.filed_since(session, omar_id, task.created_at) == ""  # the redo counts from the new send-back

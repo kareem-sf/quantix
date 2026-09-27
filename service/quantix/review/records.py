@@ -279,7 +279,16 @@ def details(session: Session, p: Pending) -> str:
             else f"{items}\nNote: {r.note}"
         )
     if p.kind == "draft":
-        return r.body[:6000]
+        if not r.schedule:
+            return r.body[:6000]
+        listed = {line["item_id"] for line in r.schedule["lines"]}
+        measured = [i for i in boq.items(session, r.tender_id) if i.quantity and i.quantity > 0]
+        covered = sum(i.id in listed for i in measured)
+        return (
+            f"{r.body[:6000]}\nQuantix: the schedule lists {len(listed)} BOQ lines, each once (lines in different "
+            f"bills are different lines even when their numbers match), and covers {covered} of the {len(measured)} "
+            "lines with a quantity."
+        )
     if p.kind == "checklist":
         return f"Required by {_where(session, r.document_id, r.page)}: “{r.quote}”"
     if p.kind == "enquiry":

@@ -69,8 +69,8 @@ def send_back(session: Session, tender_id: str, record: Any, what: str, reason: 
         title, brief = f"Redo {what}", reason or "See the team room."
         query = select(Task).where(Task.staff_id == person.id, Task.status == "open", Task.title == title)
         earlier = session.scalars(query).first()
-        if earlier is not None:
-            earlier.brief = brief  # sent back again: the newest correction is the one to follow
+        if earlier is not None:  # sent back again: the newest correction is the one to follow, from now
+            earlier.brief, earlier.created_at = brief, now
         else:
             session.add(Task(tender_id=tender_id, staff_id=person.id, title=title, brief=brief))
 

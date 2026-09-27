@@ -231,6 +231,10 @@ def test_the_schedule_and_the_markups_are_checked_against_each_other(client, ten
         ("warning", left_out),
         ("blocker", "The overall duration, 4 working days, is shorter than its longest line (5 days)."),
     ]
+    with client.app.state.sessions() as session:  # the Manager sees the schedule's coverage as a fact
+        shown = reviews.details(session, reviews.find(session, tender_id, f"draft {short[:8]}"))
+        assert shown.endswith("each once (lines in different bills are different lines even when their numbers "
+                              "match), and covers 2 of the 3 lines with a quantity.")  # fmt: skip
 
     with client.app.state.sessions() as session:
         long = programme("Excavation, then asphalt, with the client's shutdowns.", 104)
