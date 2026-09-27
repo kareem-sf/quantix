@@ -215,7 +215,7 @@ class Reader:
                     if kind == "pdf" and scans:
                         note = (
                             f"{scans} of {len(pages)} pages are scans without text. "
-                            "The office reads them from the page image."
+                            "Quantix reads their words by OCR in the background."
                         )
                     session.execute(update(Document).where(Document.id == document.id).values(page_count=len(pages)))
                 if self.on_read is not None:

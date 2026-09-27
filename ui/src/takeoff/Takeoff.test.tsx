@@ -18,6 +18,9 @@ const drawing: TenderDocument = {
   page_count: 1,
   group_name: null,
   description: null,
+  scans_to_read: 0,
+  opened: 0,
+  cited: 0,
 };
 const sheet: Sheet = { document_id: "d1", name: "A-101.pdf", page: 1, width: 612, height: 792, scale: null };
 const scaled: Sheet = {

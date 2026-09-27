@@ -43,6 +43,9 @@ class Page(Base):
     has_text: Mapped[bool] = mapped_column(Boolean)
     width: Mapped[float | None] = mapped_column(Float)  # PDF page size in points, for takeoff geometry
     height: Mapped[float | None] = mapped_column(Float)
+    # a scan read by OCR: "en" or "ar" (the model that read it), "empty" (no words found) or "failed"
+    ocr: Mapped[str | None] = mapped_column(String(10))
+    ocr_score: Mapped[float | None] = mapped_column(Float)  # the OCR's mean confidence in the words it kept
 
 
 class PageChunk(Base):

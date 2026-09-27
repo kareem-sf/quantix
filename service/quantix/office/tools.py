@@ -21,7 +21,7 @@ from quantix.documents.models import Document
 from quantix.estimate import records as estimate
 from quantix.office import records
 from quantix.office.models import TEAM, Staff, Task
-from quantix.review import audit, lookup
+from quantix.review import audit, lookup, package
 from quantix.review import records as reviews
 from quantix.subcontract import records as subcontract
 from quantix.submission import records as submission
@@ -121,13 +121,24 @@ def _document(session: Session, tender_id: str, document_id: str) -> Document:
 
 
 def list_documents(ctx: RunContext[Turn]) -> str:
-    """List the tender's documents with their ids, page counts and any reading problem."""
+    """List the tender's documents with their ids, what each is (once someone described it), page counts, scans
+    and how many of them Quantix has read by OCR, older copies, and any reading problem."""
     with _working(ctx, "Looking through the document list") as (session, _):
-        rows = [
-            f"{d.id} · {d.path} · {d.page_count or 0} pages" + (f" · {d.note}" if d.note else "")
-            for d in library.documents(session, ctx.deps.tender_id)
-            if d.status != "replaced"
-        ]
+        rows = []
+        for c in package.coverage(session, ctx.deps.tender_id):
+            d = c.document
+            row = f"{d.id} · {d.path} · {c.pages} pages"
+            if d.status in ("waiting", "reading"):
+                row += " · still being read"
+            if c.scans and d.kind in ("pdf", "image"):
+                row += f" · {c.scans} scans, {c.read_by_ocr} read by OCR" + (
+                    f", {c.ocr_waiting} still to read" if c.ocr_waiting else ""
+                )
+            older = sum(o.status == "replaced" for o in library.copies(session, d))
+            row += f" · replaces {older} older cop{'y' if older == 1 else 'ies'}" if older else ""
+            row += f" · {d.group_name}: {d.description}" if d.description else ""
+            row += f" · {d.note}" if d.note and d.status in ("unreadable", "failed") else ""
+            rows.append(row)
     return "\n".join(rows) or "No documents have been added yet."
 
 
@@ -141,18 +152,117 @@ def search_documents(ctx: RunContext[Turn], query: str) -> str:
     return "\n".join(f"{h['document_id']} · {h['name']} · page {h['page']}: {h['snippet']}" for h in hits)
 
 
-def read_page(ctx: RunContext[Turn], document_id: str, page: int) -> str:
-    """Read one page's text. Cite what you use as "<document name>, page <n>"."""
+PAGES_AT_ONCE = 5  # read_page with last_page
+TEXT_AT_ONCE = 24_000  # characters, however many pages that is
+
+
+def read_page(ctx: RunContext[Turn], document_id: str, page: int, last_page: int | None = None) -> str:
+    """Read a page's text; with last_page, the pages from page to last_page (up to 5). Cite what you use as
+    "<document name>, page <n>". A spreadsheet sheet is one page: read_sheet gives its rows a part at a time."""
+    last = min(last_page or page, page + PAGES_AT_ONCE - 1)
     with _working(ctx) as (session, me):
         document = _document(session, ctx.deps.tender_id, document_id)
-        me.now = f"Reading {document.name}, page {page}"
-        found = library.page(session, document_id, page)
-        if found is None:
-            raise ValueError(f"{document.name} has pages 1 to {document.page_count or 0}.")
-        if not found.has_text:
-            return f"{document.name}, page {page} is a scan with no text. Use view_page to look at it."
-        _opened(ctx, session, "page", f"{document_id}:{page}")
-        return f"{document.name}, page {page}:\n{found.text}"
+        me.now = f"Reading {document.name}, page {page}" + (f" to {last}" if last > page else "")
+        parts: list[str] = []
+        for number in range(page, max(last, page) + 1):
+            found = library.page(session, document_id, number)
+            if found is None:
+                if number == page:
+                    raise ValueError(f"{document.name} has pages 1 to {document.page_count or 0}.")
+                break
+            if sum(len(p) for p in parts) > TEXT_AT_ONCE:
+                parts.append(f"(Stopped before page {number}: that is a lot of text at once. Read on from there.)")
+                break
+            parts.append(_page_text(ctx, session, document, found))
+    return "\n\n".join(parts)
+
+
+def _page_text(ctx: RunContext[Turn], session: Session, document: Document, found) -> str:
+    where = f"{document.name}, page {found.number}"
+    if not found.has_text:
+        if found.ocr is None and document.kind in ("pdf", "image"):
+            return f"{where} is a scan Quantix hasn't read yet. Use view_page to look at it."
+        return f"{where} is a scan with no words to read. Use view_page to look at it."
+    _opened(ctx, session, "page", f"{document.id}:{found.number}")
+    if found.ocr:
+        return (
+            f"{where}, read from the scan by OCR ({found.ocr_score:.0%} sure; each line is a row of the page, cells "
+            f"split by |). Check figures that matter on the image with view_page:\n{found.text}"
+        )
+    return f"{where}:\n{found.text}"
+
+
+def read_sheet(
+    ctx: RunContext[Turn],
+    document_id: str,
+    sheet: int = 1,
+    first_row: int = 1,
+    last_row: int | None = None,
+    words: str = "",
+) -> str:
+    """Read a spreadsheet sheet's rows as read_page shows them ("A5=C.1.2 | B5=…"), 80 at a time: from first_row
+    to last_row, or only the rows with all of these words. sheet is the page number read_page uses for it."""
+    with _working(ctx) as (session, me):
+        document = _document(session, ctx.deps.tender_id, document_id)
+        found = library.page(session, document_id, sheet)
+        if document.kind != "spreadsheet" or found is None:
+            raise ValueError(f"{document.name} isn't a spreadsheet with a sheet {sheet}: read it with read_page.")
+        me.now = f"Reading {document.name}, sheet {sheet}"
+        name, rows = package.sheet_rows(found.text, first_row, last_row, words)
+        _opened(ctx, session, "page", f"{document_id}:{sheet}")
+    if not rows:
+        return f"{document.name}, page {sheet} ({name}): no rows " + (f"with “{words}”." if words else "in that range.")
+    shown = rows[: package.ROWS]
+    more = (
+        f"\n… {len(rows) - package.ROWS} more rows: ask for them from the next row on."
+        if len(rows) > package.ROWS
+        else ""
+    )
+    return f"{document.name}, page {sheet} ({name}), {len(rows)} rows:\n" + "\n".join(shown) + more
+
+
+def compare_copies(ctx: RunContext[Turn], document_id: str) -> str:
+    """What changed between a document and its older copy (or, for an older copy, the newer one that replaced it),
+    page by page: pages added or gone, and each changed line as it was and as it is now."""
+    with _working(ctx, "Comparing copies of a document") as (session, _):
+        document = _document(session, ctx.deps.tender_id, document_id)
+        copies = sorted(library.copies(session, document), key=lambda d: d.created_at)
+        if len(copies) < 2:
+            return f"{document.name} has only one copy."
+        at = copies.index(document)
+        older, newer = (copies[at - 1], document) if at > 0 else (document, copies[1])
+        found = package.changes(session, older, newer)
+    when = f"the copy added {older.created_at:%d %b %H:%M} and the one added {newer.created_at:%d %b %H:%M}"
+    if not found:
+        return f"{document.name}: {when} have the same text on every page."
+    return f"{document.name}, between {when}:\n" + "\n".join(found)
+
+
+def coverage(ctx: RunContext[Turn]) -> str:
+    """How much of the package has been read, kept apart: each document's pages, how many Quantix read from their
+    own text or by OCR, how many the office has opened, and how many the office's work cites."""
+    with _working(ctx, "Checking how much of the package the office has read") as (session, _):
+        _opened(ctx, session, "summary", "coverage")
+        rows = package.coverage(session, ctx.deps.tender_id)
+    if not rows:
+        return "No documents have been added yet."
+    lines = [
+        f"{c.document.name}: {c.pages} pages, {c.own_text + c.read_by_ocr} readable"
+        + (f" ({c.read_by_ocr} by OCR, {c.ocr_waiting} scans still to read)" if c.scans else "")
+        + f"; the office opened {c.opened}, its work cites {c.cited}"
+        for c in rows
+    ]
+    total = sum(c.pages for c in rows)
+    opened = sum(c.opened for c in rows)
+    return f"{len(rows)} documents, {total} pages; the office opened {opened} of them.\n" + "\n".join(lines)
+
+
+def describe_documents(ctx: RunContext[Turn], documents: list[package.DocumentNote]) -> str:
+    """Say what documents are, for the package map the whole office and the engineer see: each one's kind
+    (contract, specification, drawing, boq, addendum, quote, report, form or other) and what it covers and matters
+    for, in a sentence or two. Describe what you have looked at."""
+    with _working(ctx, "Mapping the package") as (session, _):
+        return package.describe(session, ctx.deps.tender_id, documents)
 
 
 def view_page(
@@ -899,6 +1009,9 @@ READ: list[Callable] = [
     list_documents,
     search_documents,
     read_page,
+    read_sheet,
+    compare_copies,
+    coverage,
     view_page,
     find_on_page,
     post_to_team,
@@ -917,6 +1030,7 @@ READ: list[Callable] = [
     list_requirements,
 ]
 PRODUCE: list[Callable] = [
+    describe_documents,
     propose_boq_items,
     withdraw_boq_items,
     propose_fact,

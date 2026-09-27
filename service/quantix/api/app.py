@@ -20,6 +20,7 @@ from quantix.api import (
 from quantix.core.db import open_database
 from quantix.documents.library import Reader
 from quantix.documents.meaning import Indexer
+from quantix.documents.ocr import Ocr
 from quantix.office.runtime import Office
 from quantix.review import revisions
 
@@ -36,10 +37,13 @@ def create_app(home: Path, token: str) -> FastAPI:
         app.state.sessions = open_database(home)
         app.state.office = Office(home, app.state.sessions)
         app.state.indexer = Indexer(home, app.state.sessions)
+        # scanned pages are read by OCR once their document is read, and then join the meaning index
+        app.state.ocr = Ocr(home, app.state.sessions, after_page=app.state.indexer.wake)
 
         def after_read() -> None:
             app.state.office.wake()
             app.state.indexer.wake()
+            app.state.ocr.wake()
 
         # a newer copy of a document takes over the work whose source is unchanged, and wakes the office for the rest
         app.state.reader = Reader(
@@ -50,11 +54,13 @@ def create_app(home: Path, token: str) -> FastAPI:
         )
         app.state.reader.start()
         app.state.indexer.start()
+        app.state.ocr.start()
         app.state.office.start()
         yield
         app.state.office.close()
         app.state.reader.stop()
         app.state.indexer.stop()
+        app.state.ocr.stop()
         app.state.sessions.kw["bind"].dispose()
 
     app = FastAPI(title="Quantix", version="0.1.0", lifespan=lifespan)

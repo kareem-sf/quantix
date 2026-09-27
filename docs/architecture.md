@@ -40,6 +40,14 @@ Each domain module owns its models, its service functions and the agent tools th
   Release packaging, which embeds the service in the desktop app, comes later.
 - Search by meaning runs on the engineer's computer: a small multilingual model, fetched once into
   `~/.quantix/models` and checked against pinned digests. No document text leaves the computer for it.
+- OCR runs on the engineer's computer too (`quantix/documents/ocr.py`, RapidOCR on ONNX Runtime). Once a document
+  is read, a background worker reads each page without text of its own, one at a time, at 200 dpi up to an A3
+  sheet. The English model comes with the package. The Arabic model, which also reads the English on an Arabic
+  page, is fetched once into `~/.quantix/models/ocr` and checked against its pinned digest. A document whose own
+  text is at least 30% Arabic is read in Arabic; one with no text of its own tries its first page both ways and
+  keeps the better. The words go into the page's text (rows of the page, cells split by `|`), the keyword index
+  and then the meaning index, with `pages.ocr` (the model, `empty` or `failed`) and `pages.ocr_score`. The same
+  file in another tender is read once. `read_page` says when a page was read by OCR and how sure it was.
 - Every record belongs to a tender, and every tender belongs to an owner, so accounts can be added later.
 - Long work is kept in the database, not only in memory. After a restart, interrupted work resumes or is shown as
   stopped (see Turns below).
@@ -80,6 +88,10 @@ Each domain module owns its models, its service functions and the agent tools th
   priced BOQ a page at a time. Agents reach it through `open_record`, `find_records` and `priced_boq`.
 - **What was opened.** `opened` keeps each page and record a person opened (their tools write it), and the summaries
   they called. It is what their sources are checked against.
+- **The package as the office reads it.** `quantix/review/package.py` gives a spreadsheet's rows a part at a time,
+  the changes between copies of a document, the package map (staff set a document's kind and summary, shown as its
+  group and description) and coverage kept apart: pages with their own text, scans read by OCR and still to read,
+  pages the office opened and pages its work cites. The documents list serves the last three to the engineer.
 - **Proposals, review and gates.** Agents never write domain records. Staff propose through each module's tools,
   which validate and recompute every number, and the record starts as `proposed`: in the Tender Manager's review
   queue (`quantix/review`). The Manager has no production tools. He accepts a record (`reviewed`, waiting at the

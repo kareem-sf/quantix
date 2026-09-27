@@ -106,6 +106,7 @@ function Groups(props: { documents: TenderDocument[]; selected?: string; onOpen:
             </span>
           )}
           {d.description && <span className="text-ink-3">{d.description}</span>}
+          {coverage(d) && <span className="text-xs text-ink-3">{coverage(d)}</span>}
           {PROBLEM.has(d.status) && <span className="text-attention">{d.note}</span>}
           {d.status === "waiting" && <span className="text-ink-3">Waiting to be read</span>}
           {d.status === "reading" && <span className="text-ink-3">Reading…</span>}
@@ -113,6 +114,16 @@ function Groups(props: { documents: TenderDocument[]; selected?: string; onOpen:
       ))}
     </div>
   ));
+}
+
+/** How much of the document was read, kept apart: scans still to read, pages the office opened, pages it cites. */
+function coverage(d: TenderDocument) {
+  const parts = [
+    d.scans_to_read ? `${d.scans_to_read} scanned pages still being read` : "",
+    d.opened ? `the office opened ${d.opened} ${d.opened === 1 ? "page" : "pages"}` : "",
+    d.cited ? `its work cites ${d.cited}` : "",
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ").replace(/^./, (c) => c.toUpperCase()) : "";
 }
 
 /** Until the office groups the package, group by the folders inside it (ignoring one folder that holds everything). */

@@ -16,6 +16,9 @@ const doc = {
   page_count: 1,
   group_name: null,
   description: null,
+  scans_to_read: 0,
+  opened: 0,
+  cited: 0,
 };
 const priced = (id: string, item_status: string, amount: string | null): Priced =>
   ({ id, section: null, item: id, description: "Excavation", unit: "m3", quantity: "10", item_status, rate: null, amount }) as Priced;

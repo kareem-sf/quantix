@@ -22,6 +22,8 @@ dependencies = [
     "fpdf2>=2.8",
     "uharfbuzz>=0.50",
     "python-pptx>=1.0",
+    "rapidocr>=3.9.2",
+    "python-bidi>=0.6",
 ]
 
 [project.optional-dependencies]

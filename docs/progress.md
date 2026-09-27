@@ -606,3 +606,30 @@ Their license forbids copying them or deriving from them, so Quantix has its own
 - **On the real tender**, the preview showed two approved drafts carrying notes to the office: the insurance
   statement's "Source:" line and the programme's sequence. The engineer can reopen them to have them redone.
 
+## 27 September 2026: OCR, and reading the package beyond single pages
+
+The real tender has 2,456 pages with no text of their own: the two scopes of work have 541 each (mostly English
+data schedules), the specification 120, and a few drawings and site-visit pages. The office could read them only by
+looking at the image, and not at all when its AI can't see images.
+
+- **OCR on this computer.** RapidOCR 3.9 on ONNX Runtime reads each scanned page in the background once its
+  document is read. On the real scans it read a data schedule at 97.8% confidence ("Suitable up to 2500", "XLPE",
+  "(kVrms)") and an Arabic specification page at 93%, with some words better than the PDF's own text layer.
+  Drawing sheets with small notes read at 75 to 85%: the scans themselves are poor, so pages are rendered at 200 dpi
+  up to an A3 sheet. A document is read in Arabic when at least 30% of its own text is Arabic; the Arabic model reads
+  the English on the page as well. The same file in two tenders is read once. Migration 0020 adds `pages.ocr` and
+  `pages.ocr_score`.
+- **`read_page`** says when a page was read by OCR and how sure it was, and to check figures that matter on the
+  image. It can read up to 5 pages at once, and says when a scan hasn't been read yet.
+- **`read_sheet`** gives a sheet's rows 80 at a time, or the rows with given words, as `read_page` shows them.
+- **`compare_copies`** lists what changed between copies of a document, page by page and line by line.
+- **The package map.** `describe_documents` (staff) sets what a document is and covers. The Documents screen already
+  groups and describes documents by those fields, so the engineer sees the map as the office builds it.
+  `list_documents` shows them, with scans read by OCR and older copies.
+- **Coverage, kept apart.** `coverage` and the Documents screen show each document's scans still being read, the
+  pages the office opened and the pages its work cites.
+- Rehearsed on a copy of the real database (0019 to 0020, every row count unchanged). The OCR worker ran on the
+  copy's real scans and the new words were found by search.
+- **Checks:** 9 new service tests (5 OCR, 4 reading) and 1 interface test. OCR runs only in its own tests; elsewhere
+  a blank page would keep it busy. 149 service tests and 63 interface tests pass, and so do the typecheck, Ruff and
+  the format check.

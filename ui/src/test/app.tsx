@@ -136,6 +136,9 @@ export function fakeService(initial: Partial<FakeState> = {}) {
           page_count: 1,
           group_name: null,
           description: null,
+          scans_to_read: 0,
+          opened: 0,
+          cited: 0,
         });
       }
       return json({ added: files.length, unchanged: 0 }, 201);

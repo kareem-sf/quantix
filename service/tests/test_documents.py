@@ -123,7 +123,7 @@ def test_a_package_is_stored_and_read(client, tender, tmp_path):
 
     pdf = documents["Package/Conditions.pdf"]
     assert (pdf["status"], pdf["page_count"], pdf["name"]) == ("read", 2, "Conditions.pdf")
-    assert pdf["note"] == "1 of 2 pages are scans without text. The office reads them from the page image."
+    assert pdf["note"] == "1 of 2 pages are scans without text. Quantix reads their words by OCR in the background."
     first = client.get(f"/documents/{pdf['id']}/pages/1").json()
     assert "Tender security of one percent" in first["text"] and first["has_text"] is True
     assert client.get(f"/documents/{pdf['id']}/pages/2").json()["has_text"] is False

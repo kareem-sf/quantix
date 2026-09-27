@@ -4828,6 +4828,21 @@
               }
             ],
             "title": "Description"
+          },
+          "scans_to_read": {
+            "type": "integer",
+            "title": "Scans To Read",
+            "default": 0
+          },
+          "opened": {
+            "type": "integer",
+            "title": "Opened",
+            "default": 0
+          },
+          "cited": {
+            "type": "integer",
+            "title": "Cited",
+            "default": 0
           }
         },
         "type": "object",

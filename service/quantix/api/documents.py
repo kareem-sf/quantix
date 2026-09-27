@@ -10,6 +10,7 @@ from quantix import tenders
 from quantix.api.tenders import DB
 from quantix.documents import library, readers
 from quantix.documents.models import Document
+from quantix.review import package
 
 router = APIRouter(tags=["documents"])
 
@@ -34,6 +35,10 @@ class DocumentOut(BaseModel):
     page_count: int | None
     group_name: str | None
     description: str | None
+    # coverage, kept apart: scans Quantix still has to read by OCR, pages the office opened, pages its work cites
+    scans_to_read: int = 0
+    opened: int = 0
+    cited: int = 0
 
 
 class PageOut(BaseModel):
@@ -85,7 +90,15 @@ def add_documents(tender_id: str, files: list[UploadFile], session: DB, home: Ho
 @router.get("/tenders/{tender_id}/documents")
 def list_documents(tender_id: str, session: DB) -> list[DocumentOut]:
     _tender(session, tender_id)
-    return [DocumentOut.model_validate(d) for d in library.documents(session, tender_id)]
+    counts = {c.document.id: c for c in package.coverage(session, tender_id)}
+    return [
+        DocumentOut.model_validate(d).model_copy(
+            update={"scans_to_read": c.ocr_waiting, "opened": c.opened, "cited": c.cited}
+            if (c := counts.get(d.id))
+            else {}
+        )
+        for d in library.documents(session, tender_id)
+    ]
 
 
 @router.get("/tenders/{tender_id}/search")

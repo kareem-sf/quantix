@@ -19,6 +19,9 @@ function doc(id: string, path: string, extra: Partial<TenderDocument> = {}): Ten
     page_count: 1,
     group_name: null,
     description: null,
+    scans_to_read: 0,
+    opened: 0,
+    cited: 0,
     ...extra,
   };
 }
@@ -52,6 +55,25 @@ describe("Documents", () => {
 
     expect(await screen.findByText("1 of 1 read")).toBeInTheDocument();
     expect(service.state.documents[0].path).toBe("Package/Conditions.pdf");
+  });
+
+  it("shows what the office made of each document and how much of it was read", async () => {
+    const described = { group_name: "Specifications", description: "Technical specification for earthworks." };
+    fakeService({
+      tenders: [tender],
+      documents: [
+        doc("d1", "Pkg/Spec.pdf", { ...described, kind: "pdf", scans_to_read: 541, opened: 12, cited: 3 }),
+        doc("d2", "Pkg/ITT.docx", { opened: 1 }),
+      ],
+    });
+    openApp("/tenders/t1/documents");
+
+    expect(await screen.findByText("Specifications")).toBeInTheDocument();
+    expect(screen.getByText("Technical specification for earthworks.")).toBeInTheDocument();
+    expect(
+      screen.getByText("541 scanned pages still being read · the office opened 12 pages · its work cites 3"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("The office opened 1 page")).toBeInTheDocument();
   });
 
   it("groups documents, flags problems and shows a page's text", async () => {

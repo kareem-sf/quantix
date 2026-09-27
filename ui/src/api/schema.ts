@@ -1371,6 +1371,21 @@ export interface components {
             group_name: string | null;
             /** Description */
             description: string | null;
+            /**
+             * Scans To Read
+             * @default 0
+             */
+            scans_to_read: number;
+            /**
+             * Opened
+             * @default 0
+             */
+            opened: number;
+            /**
+             * Cited
+             * @default 0
+             */
+            cited: number;
         };
         /** DraftOut */
         DraftOut: {
