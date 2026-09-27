@@ -671,3 +671,34 @@ chose two services with a fallback, and web research on by default in general wo
   on site" finds the responsibility matrix and the purchase order's site storage clause; "retention money" finds
   the three retention clauses. "penalty for late completion" misses the liquidated damages clause, which
   "liquidated damages" finds.
+
+## 27 September 2026: tools per person, the evidence rule, and figures on request
+
+The last two parts of the office tools plan. With the new tools, staff would have seen about 55 tools at once and
+the Manager about 45. Anthropic sees tool choice degrade past 30 to 50 tools, OpenAI advises under 20 and Google 10
+to 20, and every tool's description costs tokens on every step.
+
+- **Tools per person.** A small core for everyone, then one pack per kind of work: documents, boq, takeoff,
+  pricing, subcontract, submission. Each pack carries its tools and a short method. `hire` now takes the kinds of
+  work, and those packs are loaded every turn; the rest show as a name and a line until loaded with
+  `load_capability`. Calling a hidden tool is sent back naming the pack to load. The Manager's packs only check
+  work, and his hiring tools stay loaded while the team is small. An AI that can't see gets no image tools. A pricing
+  estimator now sees 26 tools (40 before), the Manager 22. Built on pydantic-ai's on-demand capabilities, which work
+  on every provider; tool search was left out because it is native only on Anthropic and OpenAI.
+- **The evidence rule is enforced.** Filing BOQ lines, facts, scales, measurements, quoted rates, quotes, checklist
+  items or pricing columns is sent back when a cited page wasn't opened by the person filing it.
+- **Figures on request.** `calculate` (arithmetic with named values), `earthwork_volumes` (cut and fill from a grid
+  of levels), `price_breakdown` (by bill, the lines that make most of the price, by kind of cost), `what_if` (the
+  price with a change, nothing saved), `check_rate` (library with age, earlier tenders, similar lines, quotes).
+- **More to look up.** `takeoff_summary` lists lines nobody has measured and one line's measurements in detail;
+  `list_boq` pages and filters by bill; `estimate_summary` shows the markups; `search_past_tenders` shows the
+  build-up and its note; `list_packages`; `search_conversation`; `what_changed`.
+- **More to do.** `precheck` runs Quantix's checks on your own work before the Manager sees it. `withdraw` takes back
+  any undecided work of your own (it replaces `withdraw_boq_items`). `apply_buildup` prices the same work on other
+  lines from an approved build-up. The Manager's `suggest_library` asks the engineer; "Keep it in the library" saves
+  the rate.
+- **Instructions:** never work out a figure in your head; hire people with the kinds of work they will do.
+- **Not built:** a model per person (`hire` choosing another AI). The engineer chose one office AI for everyone, and
+  which models to offer is theirs to decide. Pages cited on work already filed are not checked after the fact.
+- **Checks:** 12 new service tests (8 figures and look-ups, 4 packs). Scripted staff in five tests now read a page
+  before citing it. 168 service tests and 68 interface tests pass, and so do the typecheck, Ruff and the format check.

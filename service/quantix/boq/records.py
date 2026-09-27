@@ -147,22 +147,6 @@ def find_item(session: Session, tender_id: str, name: str) -> BoqItem:
     return found[0]
 
 
-def withdraw_items(session: Session, tender_id: str, by: Staff, references: list[str], reason: str) -> str:
-    """Take back lines this person entered that the engineer hasn't decided yet, e.g. to re-enter them."""
-    withdrawn, problems = 0, []
-    for reference in references:
-        try:
-            item = find_item(session, tender_id, reference)
-            if item.proposed_by != by.id or item.status != PROPOSED:
-                raise ValueError("only lines you entered that haven't been reviewed yet can be withdrawn")
-        except ValueError as error:
-            problems.append(f"{reference}: {error}")
-            continue
-        item.status, item.reason = "withdrawn", reason.strip()
-        withdrawn += 1
-    return f"Withdrew {withdrawn} BOQ items." + ("\nNot withdrawn: " + "; ".join(problems) if problems else "")
-
-
 def items(session: Session, tender_id: str) -> list[BoqItem]:
     query = select(BoqItem).where(BoqItem.tender_id == tender_id, BoqItem.status.not_in(("rejected", "withdrawn")))
     return list(session.scalars(query.order_by(BoqItem.position)))

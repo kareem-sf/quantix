@@ -2,7 +2,6 @@
 
 import re
 import threading
-from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -11,17 +10,21 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from pydantic_ai import BinaryContent, ModelRetry, RunContext, ToolReturn
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from quantix import company
 from quantix.boq import records as boq
 from quantix.boq.models import FACT_KINDS, BoqItem
+from quantix.core import calculate as calculate_
+from quantix.core.review import APPROVED, PROPOSED
 from quantix.documents import library, readers, web
 from quantix.documents.models import Document
+from quantix.estimate import analysis
 from quantix.estimate import records as estimate
 from quantix.office import records
-from quantix.office.models import TEAM, Staff, Task
-from quantix.review import audit, lookup, package
+from quantix.office.models import TEAM, Decision, Staff, Task
+from quantix.review import activity, audit, lookup, package
 from quantix.review import records as reviews
 from quantix.subcontract import records as subcontract
 from quantix.submission import records as submission
@@ -30,6 +33,7 @@ from quantix.takeoff import records as takeoff
 TEAM_LIMIT = 5  # staff under the Manager; a tender's work is shared among a few, not spread across many
 FOLLOW_UP = "Follow up: "  # a task someone set themselves when they told the engineer what they would do next
 MAX_FOLLOW_UPS = 3  # open at once per person, so promises can't pile up
+WORK_KINDS = ("documents", "boq", "takeoff", "pricing", "subcontract", "submission")  # the packs in office.packs
 FOREIGN_SCRIPT = re.compile("[぀-ヿ㐀-鿿가-힯]")  # Chinese, Japanese, Korean
 
 
@@ -84,10 +88,10 @@ class Turn:
     sees_images: bool = True  # False when the office's AI failed the image check
 
 
-BLIND = (
-    "The office's AI can't read images, so it can't look at drawings or scans. Work from the text with read_page "
-    "and find_on_page, and tell the engineer what you couldn't check: they can measure on the Takeoff screen or "
-    "choose an AI that reads images in Settings."
+BLIND = (  # in the instructions of a turn whose AI can't see; its image tools are left out
+    "The office's AI can't read images, so you can't look at drawings or measure on them. Work from the text with "
+    "read_page, which has scans' words read by OCR, and tell the engineer what you couldn't check: they can measure "
+    "on the Takeoff screen or choose an AI that reads images in Settings."
 )
 
 
@@ -111,6 +115,17 @@ def _working(ctx: RunContext[Turn], doing: str | None = None):
 def _opened(ctx: RunContext[Turn], session: Session, kind: str, ref: str) -> None:
     """Remember what the person opened, so what they cite can be checked against it."""
     records.note_opened(session, ctx.deps.tender_id, ctx.deps.staff_id, kind, ref)
+
+
+def _read_first(ctx: RunContext[Turn], session: Session, cited: set[tuple[str | None, int | None]]) -> None:
+    """Work may cite only pages its maker opened: read, looked at or searched on the page with find_on_page."""
+    for document_id, page in cited:
+        if not document_id or not page:
+            continue
+        if not records.has_opened(session, ctx.deps.staff_id, "page", f"{document_id}:{page}"):
+            document = session.get(Document, document_id)
+            name = document.name if document is not None and document.tender_id == ctx.deps.tender_id else document_id
+            raise ValueError(f"You cite {name}, page {page}, but you haven't opened it: read it first, then cite it.")
 
 
 def _document(session: Session, tender_id: str, document_id: str) -> Document:
@@ -271,8 +286,6 @@ def view_page(
     """Look at a page as an image: drawings, scans, tables and stamps. Cite it as "<document name>, page <n>".
     To read small detail such as a scale bar, a dimension's ticks or a corner, zoom in: region is the part to
     enlarge as [left, top, right, bottom] in view_page pixels of the whole page."""
-    if not ctx.deps.sees_images:
-        return BLIND
     with _working(ctx) as (session, me):
         document = _document(session, ctx.deps.tender_id, document_id)
         if document.kind not in ("pdf", "image") or not 1 <= page <= (document.page_count or 0):
@@ -432,9 +445,15 @@ def hire(
     working_style: str,
     opinions: str,
     voice: str,
+    work: list[str],
 ) -> str:
     """Hire someone for work this tender needs. Make them a real person: a full name that suits the region,
-    their own background, working style, professional opinions and way of speaking."""
+    their own background, working style, professional opinions and way of speaking. work: the kinds of work they
+    will do, which decides the tools they have at hand: documents, boq, takeoff, pricing, subcontract or
+    submission (they can load the others when they need them)."""
+    chosen = [w.strip().lower() for w in work]
+    if not chosen or any(w not in WORK_KINDS for w in chosen):
+        raise ModelRetry(f"Give their work as one or more of {', '.join(WORK_KINDS)}.")
     profile = {
         "discipline": discipline,
         "experience_years": experience_years,
@@ -442,6 +461,7 @@ def hire(
         "working_style": working_style,
         "opinions": opinions,
         "voice": voice,
+        "work": chosen,
     }
     try:
         Persona(name=name, **profile)
@@ -488,6 +508,7 @@ def propose_boq_items(ctx: RunContext[Turn], items: list[boq.ItemIn]) -> str:
     """Add BOQ lines exactly as the client's BOQ states them, up to 40 at a time, each with the page it is on and a
     quote that includes the item number and the quantity. Lines that don't check out come back with the reason."""
     with _working(ctx, f"Entering {len(items)} BOQ items") as (session, me):
+        _read_first(ctx, session, {(i.document_id, i.page) for i in items[:40]})
         report = boq.propose_items(session, ctx.deps.tender_id, me, items[:40])
     if len(items) > 40:
         left = ", ".join(i.item or "(unnumbered)" for i in items[40:])
@@ -495,25 +516,54 @@ def propose_boq_items(ctx: RunContext[Turn], items: list[boq.ItemIn]) -> str:
     return report
 
 
-def withdraw_boq_items(ctx: RunContext[Turn], items: list[str], reason: str) -> str:
-    """Withdraw BOQ lines you entered that the engineer hasn't decided yet, for example to re-enter them under the
-    right section. Refer to each as "<section> / <item>" when an item number is in more than one bill."""
-    with _working(ctx, f"Withdrawing {len(items)} BOQ items") as (session, me):
-        return boq.withdraw_items(session, ctx.deps.tender_id, me, items, reason)
+def withdraw(ctx: RunContext[Turn], references: list[str], reason: str) -> str:
+    """Withdraw your own work that the Tender Manager hasn't reviewed yet: BOQ lines (e.g. to re-enter them under
+    the right bill), facts, scales, measurements, rates, markups or drafts. references: as open_record names them,
+    or BOQ lines as "<section> / <item>"."""
+    with _working(ctx, f"Withdrawing {len(references)} pieces of work") as (session, me):
+        done, problems = 0, []
+        for ref in references:
+            try:
+                kind, record = lookup.find(session, ctx.deps.tender_id, ref)
+                if kind not in reviews.REVIEWED_KINDS:
+                    raise ValueError("only BOQ lines, facts, scales, measurements, rates, markups and drafts")
+                if record.proposed_by != me.id or record.status != PROPOSED:
+                    raise ValueError("only your own work the Tender Manager hasn't reviewed yet")
+            except ValueError as error:
+                problems.append(f"{ref}: {error}")
+                continue
+            record.status, record.reason = "withdrawn", reason.strip()
+            done += 1
+    return f"Withdrew {done}." + ("\nNot withdrawn: " + "; ".join(problems) if problems else "")
 
 
-def list_boq(ctx: RunContext[Turn]) -> str:
-    """The BOQ as the office has it so far: item, description, unit, quantity and approval."""
+BOQ_AT_ONCE = 150  # list_boq lines at a time
+
+
+def list_boq(ctx: RunContext[Turn], section: str | None = None, start: int = 1) -> str:
+    """The BOQ as the office has it so far, 150 lines at a time: item, description, unit, quantity and approval,
+    with the facts pricing depends on. section narrows it to one bill; start is the line to begin from."""
     with _working(ctx, "Checking the BOQ") as (session, _):
         _opened(ctx, session, "summary", "list_boq")
         rows = boq.items(session, ctx.deps.tender_id)
+        if section:
+            rows = [r for r in rows if section.strip().lower() in (r.section or "").lower()]
         lines = [
             f"{boq.reference(r)} | {r.description[:80]} | {r.unit} | "
             f"{r.quantity if r.quantity is not None else '-'} | {r.status}"
             for r in rows
         ]
         known = [f"{FACT_KINDS[f.kind]}: {f.value} ({f.status})" for f in boq.facts(session, ctx.deps.tender_id)]
-    return "\n".join(known + [f"{len(rows)} BOQ items:"] + lines[:300]) if rows or known else "The BOQ is empty."
+    if section and not rows:
+        return f"No BOQ line is in a bill called “{section}”."
+    if not rows and not known:
+        return "The BOQ is empty."
+    first = max(start, 1)
+    shown = lines[first - 1 : first - 1 + BOQ_AT_ONCE]
+    last = first + len(shown) - 1
+    more = f" Call again with start={last + 1} for the rest." if last < len(lines) else ""
+    head = f"{len(rows)} BOQ items" + (f" in “{section}”" if section else "") + f"; lines {first} to {last}:{more}"
+    return "\n".join([*known, head, *shown])
 
 
 def open_record(ctx: RunContext[Turn], references: list[str]) -> str:
@@ -558,10 +608,37 @@ def priced_boq(ctx: RunContext[Turn], section: str | None = None, start: int = 1
         return lookup.priced(session, ctx.deps.tender_id, section, start)
 
 
+def search_conversation(ctx: RunContext[Turn], words: str) -> str:
+    """Search everything the office has said and decided on this tender: the team room, the chats with the engineer,
+    tasks and their results, and the engineer's decisions. Newest first."""
+    with _working(ctx, f"Looking back through the conversation for “{words}”") as (session, _):
+        found = activity.conversation(session, ctx.deps.tender_id, words)
+    if not found:
+        return "Nothing said or decided has all those words."
+    more = f"\n… and {len(found) - activity.SHOWN} older." if len(found) > activity.SHOWN else ""
+    return "\n".join(found[: activity.SHOWN]) + more
+
+
+def what_changed(ctx: RunContext[Turn], hours: float | None = None) -> str:
+    """What the office filed, what the Tender Manager accepted or sent back, what the engineer approved or sent
+    back, and which tasks and questions closed: since the engineer last wrote, or in the last hours."""
+    with _working(ctx, "Checking what changed") as (session, _):
+        _opened(ctx, session, "summary", "what_changed")
+        return activity.changed(session, ctx.deps.tender_id, activity.since(session, ctx.deps.tender_id, hours))
+
+
+def precheck(ctx: RunContext[Turn]) -> str:
+    """What Quantix's checks find now in your own work waiting for the Tender Manager, so you can correct it (propose
+    it again, or withdraw it) before he reviews it."""
+    with _working(ctx, "Checking my own work") as (session, me):
+        return activity.precheck(session, ctx.deps.home, ctx.deps.tender_id, me.id)
+
+
 def propose_fact(ctx: RunContext[Turn], kind: str, value: str, document_id: str, page: int, quote: str) -> str:
     """Record a tender fact pricing depends on, for the engineer's approval: kind is method_of_measurement,
     currency or vat. The quote must be on the page."""
     with _working(ctx, f"Recording the {FACT_KINDS.get(kind, kind).lower()}") as (session, me):
+        _read_first(ctx, session, {(document_id, page)})
         boq.propose_fact(session, ctx.deps.tender_id, me, kind, value, document_id, page, quote)
     return "Recorded for the Tender Manager's review."
 
@@ -614,10 +691,9 @@ def set_scale(
     its real length in metres, and the dimension text as printed (e.g. "40.00"). Use find_on_page to locate it.
     The points go on the line's end ticks, never on its text. A graphic scale bar works too: its 0 and end ticks,
     with the end label (e.g. "25") as the dimension text."""
-    if not ctx.deps.sees_images:
-        return BLIND
     with _working(ctx, "Setting the scale of a drawing") as (session, me):
         factor = _points(session, ctx.deps.tender_id, document_id, page)
+        _read_first(ctx, session, {(document_id, page)})
         line = _snapped(ctx, session, document_id, page, [from_xy, to_xy], factor)
         scale = takeoff.set_scale(session, ctx.deps.tender_id, me.id, document_id, page, line, length_m, dimension_text)
         return (
@@ -643,10 +719,9 @@ def measure(
     area m2, or m3 with a thickness; count nr. Link the BOQ item number it belongs to when there is one.
     Quantix computes the quantity from your points. Take the points from what you see: look at the sheet with
     view_page, then zoom in on each corner with its region before you place a point there."""
-    if not ctx.deps.sees_images:
-        return BLIND
     with _working(ctx, f"Measuring {label}") as (session, me):
         factor = _points(session, ctx.deps.tender_id, document_id, page)
+        _read_first(ctx, session, {(document_id, page)})
         m = takeoff.measure(
             session,
             ctx.deps.tender_id,
@@ -676,20 +751,13 @@ def measure(
     return report
 
 
-def takeoff_summary(ctx: RunContext[Turn]) -> str:
-    """The takeoff so far against the BOQ: each measured item with its takeoff and BOQ quantities and the result."""
+def takeoff_summary(ctx: RunContext[Turn], boq_item: str | None = None) -> str:
+    """The takeoff against the BOQ, as Quantix computes it: each measured line with its takeoff and BOQ quantities,
+    the difference and the result, and the lines with a quantity nobody has measured yet. With a boq_item, that
+    line's measurements one by one: sheet, scale, points, multiplier and quantity."""
     with _working(ctx, "Comparing the takeoff with the BOQ") as (session, _):
         _opened(ctx, session, "summary", "takeoff_summary")
-        rows = takeoff.compare(session, ctx.deps.tender_id)
-    if not rows:
-        return "Nothing has been measured yet."
-    return "\n".join(
-        f"{r.item or '(no BOQ item)'} {r.description[:60]}: "
-        f"takeoff {r.takeoff if r.takeoff is not None else '-'} {r.unit}, "
-        f"BOQ {r.boq_quantity if r.boq_quantity is not None else '-'} {r.boq_unit or ''} "
-        f"→ {r.result.replace('_', ' ')}"
-        for r in rows
-    )
+        return lookup.takeoff_view(session, ctx.deps.tender_id, boq_item)
 
 
 def search_library(ctx: RunContext[Turn], words: str) -> str:
@@ -726,6 +794,7 @@ def propose_rate(
     it becomes this rate) or "estimate" (your own judgement: put the outputs, prices and assumptions in the note).
     Quantix computes the rate and the amount."""
     with _working(ctx, f"Pricing item {boq_item}") as (session, me):
+        _read_first(ctx, session, {(document_id, page)})
         rate = estimate.propose_rate(
             session,
             ctx.deps.tender_id,
@@ -767,6 +836,7 @@ def estimate_summary(ctx: RunContext[Turn]) -> str:
     with _working(ctx, "Checking the estimate") as (session, _):
         _opened(ctx, session, "summary", "estimate_summary")
         s = estimate.summary(session, ctx.deps.tender_id)
+        markups = estimate.current_markups(session, ctx.deps.tender_id)
     lines = [
         f"{s.priced} of {s.items} items priced ({s.reviewing} with the Tender Manager, {s.waiting} waiting for the "
         "engineer).",
@@ -775,9 +845,111 @@ def estimate_summary(ctx: RunContext[Turn]) -> str:
     ]
     if s.vat is not None:
         lines.append(f"VAT {s.vat}; total with VAT {s.total_with_vat}.")
+    if markups is not None:
+        lines.append(
+            f"Markups ({lookup.STATES.get(markups.status, markups.status)}, markups {markups.id[:8]}): "
+            f"{len(markups.preliminary_items)} preliminary items, overheads {markups.overheads:.1%}, profit "
+            f"{markups.profit:.1%}, adjustment {markups.adjustment}."
+        )
     if s.unpriced:
         lines.append("Not priced yet: " + ", ".join(s.unpriced[:60]))
     return "\n".join(lines)
+
+
+def price_breakdown(ctx: RunContext[Turn]) -> str:
+    """Where the money is, as Quantix computes it: the net by bill, the lines that make up most of it, and labour,
+    plant, material and subcontract across the build-ups."""
+    with _working(ctx, "Looking at where the money is") as (session, _):
+        _opened(ctx, session, "summary", "price_breakdown")
+        return analysis.breakdown(session, ctx.deps.tender_id)
+
+
+def what_if(ctx: RunContext[Turn], changes: list[analysis.Change]) -> str:
+    """What the price would be with some changes, against the price now, as Quantix computes it. Nothing is saved:
+    to change a rate, propose it. E.g. fill 20% dearer: [{"resource": "fill", "factor": 1.2}]; one line's plant 10%
+    cheaper: [{"item": "Earthwork / C.1.2", "kind": "plant", "factor": 0.9}]."""
+    with _working(ctx, "Working out what a change would do to the price") as (session, _):
+        _opened(ctx, session, "summary", "what_if")
+        return analysis.what_if(session, ctx.deps.tender_id, changes)
+
+
+def check_rate(ctx: RunContext[Turn], boq_item: str) -> str:
+    """A line's rate beside the firm's library (with each entry's age), its earlier tenders, similar lines in this
+    tender and any quote for it, with how far ours is above or below each, as Quantix computes it."""
+    with _working(ctx, f"Checking the rate for {boq_item}") as (session, _):
+        item = boq.find_item(session, ctx.deps.tender_id, boq_item)
+        rate = estimate.current_rate(session, item.id)
+        if rate is not None:
+            _opened(ctx, session, "rate", rate.id)
+        return analysis.compare_rate(session, ctx.deps.tender_id, boq_item)
+
+
+def calculate(ctx: RunContext[Turn], expression: str, values: dict[str, float] | None = None, unit: str = "") -> str:
+    """Work out a figure: never do sums in your head. expression uses numbers, named values, + - * / ** and brackets,
+    and min, max, abs or sqrt, e.g. "L * W * D" with values {"L": 420, "W": 12, "D": 0.3} and unit "m3"."""
+    with _working(ctx, "Working out a figure") as _:
+        result = calculate_.evaluate(expression, {k: Decimal(str(v)) for k, v in (values or {}).items()})
+    return f"{expression} = {calculate_.plain(result)}{f' {unit}' if unit else ''} (Quantix's figure)."
+
+
+def earthwork_volumes(
+    ctx: RunContext[Turn],
+    grid_spacing_m: float,
+    ground_levels: list[list[float]],
+    formation_level: float | None = None,
+    formation_levels: list[list[float]] | None = None,
+) -> str:
+    """Cut and fill in m3 from ground levels on a square grid (rows of levels, grid_spacing_m apart both ways) down or
+    up to one formation_level, or to formation_levels on the same grid. Quantix computes each square from its four
+    corners. Take the levels from the drawings you read, and cite them when you use the result."""
+    if (formation_level is None) == (formation_levels is None):
+        raise ModelRetry("Give either one formation_level or formation_levels on the same grid.")
+    with _working(ctx, "Working out cut and fill") as _:
+        ground = [[Decimal(str(v)) for v in row] for row in ground_levels]
+        if formation_levels is None:
+            formation = [[Decimal(str(formation_level))] * len(row) for row in ground]
+        else:
+            formation = [[Decimal(str(v)) for v in row] for row in formation_levels]
+        cut, fill, squares = calculate_.grid_volumes(Decimal(str(grid_spacing_m)), ground, formation)
+    return (
+        f"Over {squares} grid squares of {grid_spacing_m} m: cut {calculate_.plain(cut)} m3, fill "
+        f"{calculate_.plain(fill)} m3, net {calculate_.plain(cut - fill)} m3 (Quantix's figures, in place, before "
+        "bulking or compaction)."
+    )
+
+
+def apply_buildup(ctx: RunContext[Turn], from_item: str, to_items: list[str], note: str) -> str:
+    """Price other lines of the same work with an approved line's build-up (or unit rate), one proposal each for the
+    Tender Manager's review. note: why each is the same work. A rate from a quote prices its own line only."""
+    with _working(ctx, f"Reusing the build-up of {from_item}") as (session, me):
+        source_item = boq.find_item(session, ctx.deps.tender_id, from_item)
+        source = estimate.current_rate(session, source_item.id)
+        if source is None or source.status not in APPROVED:
+            raise ValueError(f"{from_item} has no approved rate to reuse.")
+        if source.basis in ("quote", "web"):
+            raise ValueError("A rate from a quote or a web price prices its own line only: price the others directly.")
+        done, problems = [], []
+        for target in to_items[:40]:
+            try:
+                item = boq.find_item(session, ctx.deps.tender_id, target)
+                if item.unit.strip().lower() != source_item.unit.strip().lower():
+                    raise ValueError(f"its unit is {item.unit}, not {source_item.unit}")
+                estimate.propose_rate(
+                    session,
+                    ctx.deps.tender_id,
+                    me.id,
+                    target,
+                    source.basis,
+                    f"Same build-up as {boq.reference(source_item)}: {note.strip()} {source.note}",
+                    None if source.lines else source.unit_rate,
+                    [estimate.LineIn(**line) for line in source.lines] if source.lines else None,
+                    library_id=source.library_id,
+                )
+                done.append(target)
+            except ValueError as error:
+                problems.append(f"{target}: {error}")
+    report = f"Priced {len(done)} lines with the build-up of {from_item}, for the Tender Manager's review."
+    return report + ("\nNot priced: " + "; ".join(problems) if problems else "")
 
 
 def search_directory(ctx: RunContext[Turn], words: str = "") -> str:
@@ -845,6 +1017,7 @@ def record_quote(
     """Record a company's quote from its document: each quoted rate with the page and line it is on, and anything
     the quote excludes with your estimate of what it adds. Quantix levels the quotes."""
     with _working(ctx, f"Recording {company}'s quote") as (session, me):
+        _read_first(ctx, session, {(document_id, part.page) for part in [*lines, *(exclusions or [])]})
         found_package = subcontract.find_package(session, ctx.deps.tender_id, package)
         firm = subcontract.find_company(session, company)  # the directory's name, however the quote spells it
         subcontract.record_quote(session, found_package, firm, me.id, document_id, lines, exclusions or [])
@@ -869,6 +1042,14 @@ def levelling(ctx: RunContext[Turn], package: str) -> str:
     return "\n".join(lines)
 
 
+def list_packages(ctx: RunContext[Turn]) -> str:
+    """The subcontract and supply packages: each one's lines, enquiries drafted and sent, quotes received, and where
+    the recommendation and the engineer's choice stand. Open one with open_record for its detail."""
+    with _working(ctx, "Checking the packages") as (session, _):
+        _opened(ctx, session, "summary", "list_packages")
+        return lookup.packages_view(session, ctx.deps.tender_id)
+
+
 def recommend_quote(ctx: RunContext[Turn], package: str, company: str, reason: str) -> str:
     """Recommend which quote to take, and why: price after levelling, gaps, exclusions and your view of the company.
     The Tender Manager reviews it; the engineer chooses."""
@@ -886,10 +1067,17 @@ def search_past_tenders(ctx: RunContext[Turn], words: str) -> str:
         found = company.past_rates(session, ctx.deps.tender_id, words)
     if not found:
         return "No earlier tender has an approved rate for items like that."
-    return "\n".join(
-        f"{p.tender} ({p.outcome}, {p.dated:%d %b %Y}) · {p.item} {p.description} · {p.rate} per {p.unit} ({p.basis})"
-        for p in found
-    )
+    rows = []
+    for p in found:
+        row = f"{p.tender} ({p.outcome}, {p.dated:%d %b %Y}) · {p.item} {p.description} · {p.rate} per {p.unit}"
+        row += f" ({p.basis})"
+        built = "; ".join(
+            f"{line['resource']} {line['quantity']} {line['unit']} at {line['rate']}" for line in p.lines or []
+        )
+        rows.append(
+            row + (f"\n  Built up from: {built}" if built else "") + (f"\n  Note: {p.note[:300]}" if p.note else "")
+        )
+    return "\n".join(rows)
 
 
 SEARCH_LENGTH = 120  # characters: a web search is a few general words, never text from the tender
@@ -936,6 +1124,7 @@ def add_requirements(ctx: RunContext[Turn], requirements: list[submission.Requir
     """Add what the tender requires the bidder to submit to the checklist: forms, bonds, certificates, schedules,
     method statements, the priced BOQ. Each with the clause that requires it."""
     with _working(ctx, "Building the submission checklist") as (session, me):
+        _read_first(ctx, session, {(r.document_id, r.page) for r in requirements})
         return submission.add_requirements(session, ctx.deps.tender_id, me.id, requirements)
 
 
@@ -992,6 +1181,7 @@ def set_pricing_columns(
     """Say which columns of the client's BOQ workbook take the rate and the amount, so the priced BOQ is returned in
     the client's own format. sheet is the page number read_page uses; header_quote is the header row as shown."""
     with _working(ctx, "Reading the client's BOQ layout") as (session, me):
+        _read_first(ctx, session, {(document_id, sheet)})
         submission.set_pricing_columns(
             session, ctx.deps.tender_id, me.id, document_id, sheet, rate_column, amount_column, header_quote
         )
@@ -1052,62 +1242,32 @@ def escalate(
     return f"Escalated to the engineer as “{title}”. Carry on with other work until they answer."
 
 
-READ: list[Callable] = [
-    list_documents,
-    search_documents,
-    read_page,
-    read_sheet,
-    compare_copies,
-    coverage,
-    view_page,
-    find_on_page,
-    post_to_team,
-    message_engineer,
-    raise_concern,
-    list_boq,
-    open_record,
-    find_records,
-    priced_boq,
-    takeoff_summary,
-    search_library,
-    estimate_summary,
-    search_directory,
-    levelling,
-    search_past_tenders,
-    search_web,
-    read_web_page,
-    list_requirements,
-]
-PRODUCE: list[Callable] = [
-    describe_documents,
-    propose_boq_items,
-    withdraw_boq_items,
-    propose_fact,
-    set_scale,
-    measure,
-    propose_rate,
-    propose_markups,
-    add_company,
-    create_package,
-    draft_enquiry,
-    record_quote,
-    recommend_quote,
-    add_requirements,
-    draft_work_schedule,
-    draft_document,
-    set_pricing_columns,
-]
-STAFF: list[Callable] = [*READ, *PRODUCE, complete_task]
-# The Manager leads and reviews; he never produces records himself, so every record has a second pair of eyes
-MANAGER: list[Callable] = [
-    *READ,
-    complete_task,
-    ask_engineer,
-    hire,
-    assign_task,
-    release,
-    review_queue,
-    review,
-    escalate,
-    audit_tender,
-]
+def suggest_library(ctx: RunContext[Turn], rate: str, reason: str) -> str:
+    """Suggest keeping an approved rate in the firm's library for later tenders: its build-up resources, or the unit
+    rate, dated today. rate: as open_record names it, or its BOQ line. The engineer decides; if they keep it, Quantix
+    saves it."""
+    with _working(ctx, "Suggesting a rate for the library") as (session, me):
+        kind, record = lookup.find(session, ctx.deps.tender_id, rate)
+        if kind == "boq":
+            record, kind = estimate.current_rate(session, record.id), "rate"
+        if kind != "rate" or record is None or record.status not in APPROVED:
+            raise ValueError("Only an approved rate can go to the library.")
+        waiting = session.scalars(
+            select(Decision).where(Decision.subject_kind == "library", Decision.subject_id == record.id)
+        ).first()
+        if waiting is not None:
+            return "The engineer has already been asked about this rate."
+        item = session.get(BoqItem, record.boq_item_id)
+        session.add(
+            Decision(
+                tender_id=ctx.deps.tender_id,
+                raised_by=me.id,
+                title=f"Keep the rate for {boq.reference(item)} in the library?",
+                text=f"{reason.strip()} {estimate.rate_of(record)} per {item.unit} ({record.basis}).",
+                options=[estimate.KEEP_IN_LIBRARY, "Don't keep it"],
+                subject_kind="library",
+                subject_id=record.id,
+                sources=[{"label": f"The rate for BOQ item {boq.reference(item)}", "boq_item_id": item.id}],
+            )
+        )
+    return "The engineer will decide whether to keep it in the library."

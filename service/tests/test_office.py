@@ -90,6 +90,7 @@ def office_brain(messages, info) -> ModelResponse:
                 working_style="Measures twice.",
                 opinions="Never trusts a BOQ quantity without a drawing.",
                 voice="Plain and exact.",
+                work=["documents", "takeoff"],
             ),
             call(
                 "assign_task", staff_name="Omar", title="find the tender security clause", brief="Read the conditions."
@@ -349,16 +350,16 @@ def test_an_ai_that_cannot_read_images_is_not_shown_drawings(client, office):
     def looks(messages, info):
         if info.output_tools:
             return office_brain(messages, info)
-        if not returns(messages):
-            return call("view_page", document_id=document_id, page=1)
-        seen[:] = returns(messages)
+        seen[:] = [t.name for t in info.function_tools] + [info.instructions]
         return DONE
 
     use(looks)
     client.app.state.office.sees_images = lambda: False
     client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Look at the conditions."})
     wait_for(lambda o: o["staff"] and seen, client, tender_id)
-    assert seen[0].startswith("The office's AI can't read images, so it can't look at drawings or scans.")
+    assert "read_page" in seen and not {"view_page", "find_on_page", "set_scale", "measure"} & set(seen)
+    assert "The office's AI can't read images, so you can't look at drawings or measure on them." in seen[-1]
+    assert document_id  # the conditions are there to read as text
 
 
 def test_a_person_asks_one_question_at_a_time(client, office):
@@ -469,7 +470,10 @@ def test_a_full_team_gives_new_work_to_the_people_it_has(client, office):
             return DONE
         profile = {"discipline": "Pricing", "experience_years": 9, "background": "Priced roads in Riyadh."}
         profile |= {"working_style": "Builds rates up.", "opinions": "Quotes lie.", "voice": "Short and plain."}
-        return call("hire", name="Hadi Nassar", role="Estimator", **profile)
+        done = [p for m in messages for p in m.parts if isinstance(p, ToolReturnPart)]
+        if not done:  # with a full team, the hiring tools are loaded on request
+            return call("load_capability", id="team")
+        return call("hire", name="Hadi Nassar", role="Estimator", work=["pricing"], **profile)
 
     use(manager)
     client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Price the small items."})
@@ -538,10 +542,10 @@ def test_finishing_a_task_twice_says_what_is_still_open(client, office):
 
 
 def test_only_the_manager_brings_decisions_to_the_engineer():
-    from quantix.office import tools
+    from test_review import reach
 
-    assert "ask_engineer" in [t.__name__ for t in tools.MANAGER]
-    assert "ask_engineer" not in [t.__name__ for t in tools.STAFF]  # staff raise it with the Manager instead
+    assert "ask_engineer" in reach(is_manager=True)
+    assert "ask_engineer" not in reach(is_manager=False)  # staff raise it with the Manager instead
 
 
 def test_a_question_already_decided_is_not_asked_again(client, office):

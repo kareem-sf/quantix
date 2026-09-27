@@ -244,6 +244,8 @@ def test_staff_level_quotes_through_their_tools_and_an_autonomous_office_chooses
     settings.save(tmp_path, office_ai={"connection_id": "scripted", "model": "brain"}, office_mode="autonomous")
     replies: list[str] = []
     steps = [
+        ToolCallPart("read_page", {"document_id": gulf, "page": 1}),  # a quote is recorded from its pages, read
+        ToolCallPart("read_page", {"document_id": najd, "page": 1}),
         ToolCallPart("add_company", {"name": "Gulf Groundworks", "kind": "subcontractor", "trades": "Earthworks"}),
         ToolCallPart("add_company", {"name": "Najd Contracting", "kind": "subcontractor", "trades": "Earthworks"}),
         ToolCallPart("create_package", {"name": "Groundworks", "kind": "subcontract", "boq_items": ["3.1", "6.3"]}),
@@ -300,11 +302,11 @@ def test_staff_level_quotes_through_their_tools_and_an_autonomous_office_chooses
         session.commit()
     client.app.state.office.engineer_spoke(tender_id)
     wait_for(lambda o: len(replies) == len(steps), client, tender_id)
-    assert replies[6] == (
+    assert replies[8] == (
         "1. Najd Contracting: quoted 20460.00, exclusions 0, levelled 57700.00 (our rate used for 6.3)\n"
         "2. Gulf Groundworks: quoted 55380.00, exclusions 5000, levelled 60380.00"
     )
-    assert replies[7] == "Your recommendation is with the Tender Manager for review."
+    assert replies[9] == "Your recommendation is with the Tender Manager for review."
     assert manager_accepts(client, tender_id, autonomous=True) == "Accepted 4 (approved by the office). Sent back 0."
     rows = {i["item"]: i for i in client.get(f"/tenders/{tender_id}/estimate").json()["items"]}
     assert (rows["3.1"]["rate"]["status"], rows["3.1"]["amount"]) == ("office_approved", "20460.00")

@@ -62,6 +62,8 @@ def phases(docs):
     estimate_note = "Plant output 4.5 m3/hr at 83.25 per hour; no disposal off site."
     return {
         "enter the BOQ": [
+            ("read_page", {"document_id": bill, "page": 1}),  # the office cites only what it has read
+            ("read_page", {"document_id": itt, "page": 1}),
             ("propose_boq_items", {"items": items}),
             ("propose_fact", {"kind": "currency", "value": "SAR", "quote": "Saudi Riyals (SAR)", **fact}),
             ("propose_fact", {"kind": "vat", "value": "15%", "quote": "VAT at 15%", **fact}),
@@ -82,6 +84,8 @@ def phases(docs):
             ),
         ],
         "SUBCONTRACT": [
+            ("read_page", {"document_id": gulf, "page": 1}),
+            ("read_page", {"document_id": najd, "page": 1}),
             ("add_company", {"name": "Gulf Waterproofing", "kind": "subcontractor", "trades": "Waterproofing"}),
             ("add_company", {"name": "Najd Contracting", "kind": "subcontractor", "trades": "Waterproofing"}),
             ("create_package", {"name": "Waterproofing", "kind": "subcontract", "boq_items": ["6.3"]}),
@@ -187,6 +191,7 @@ def test_a_synthetic_tender_goes_through_every_gate_to_a_built_package(client, t
                         "working_style": "Checks every figure twice.",
                         "opinions": "Won't guess a rate she can source.",
                         "voice": "Plain and precise.",
+                        "work": ["boq", "pricing", "subcontract", "submission"],
                     },
                 ),
                 ("assign_task", {"staff_name": "Layla Nasser", "title": "enter the BOQ", "brief": "BOQ and facts."}),

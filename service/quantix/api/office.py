@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 
 from quantix import settings, tenders
 from quantix.api.tenders import DB
+from quantix.estimate import records as estimate
+from quantix.estimate.models import Rate
 from quantix.office import records
 from quantix.office.models import ENGINEER, TEAM, Decision, Staff
 
@@ -145,6 +147,10 @@ def answer_decision(decision_id: str, body: AnswerIn, session: DB, request: Requ
     if decision.status != "waiting":
         raise HTTPException(status_code=400, detail="This has already been decided.")
     records.answer(session, decision, body.answer)
+    if decision.subject_kind == "library" and body.answer == estimate.KEEP_IN_LIBRARY:
+        rate = session.get(Rate, decision.subject_id)
+        if rate is not None:
+            estimate.save_to_library(session, rate, estimate.summary(session, rate.tender_id).currency or "—")
     session.commit()
     request.app.state.office.engineer_spoke(decision.tender_id)
     return DecisionOut.model_validate(decision)

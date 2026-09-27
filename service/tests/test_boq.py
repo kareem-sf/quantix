@@ -189,8 +189,10 @@ def test_staff_propose_items_through_their_tool(client, package, qs, tmp_path):
                 ]
             )
         done = [p for m in messages for p in m.parts if isinstance(p, ToolReturnPart)]
-        if done or "You are Omar Haddad" not in info.instructions:  # the Manager doesn't enter BOQ lines himself
+        if len(done) > 1 or "You are Omar Haddad" not in info.instructions:  # the Manager doesn't enter BOQ lines
             return ModelResponse(parts=[TextPart("Done.")])
+        if not done:  # he enters only what he has read
+            return ModelResponse(parts=[ToolCallPart("read_page", {"document_id": bill, "page": 1})])
         quote = "A2=3.1 | B2=Excavation to reduce levels | C2=m3 | D2=1240"
         item = {
             "item": "3.1",
@@ -251,20 +253,27 @@ def test_a_line_the_client_left_unnumbered_is_named_by_its_row(client, package, 
 
 
 def test_staff_withdraw_their_own_undecided_lines(client, package, qs):
+    import threading
+    from types import SimpleNamespace
+
+    from quantix.office import tools
+
+    def turn_of(staff_id):
+        state = client.app.state
+        return SimpleNamespace(
+            deps=tools.Turn(state.home, state.sessions, tender_id, staff_id, False, threading.Event())
+        )
+
     tender_id, bill, _ = package
     propose(client, tender_id, qs, [line(bill, section="Earthwork")])
     with client.app.state.sessions() as session:
-        from quantix.office.models import Staff
-
         someone = office.hire(session, tender_id, "Layla Nasser", "Estimator", {})
-        assert "Not withdrawn: Earthwork / 3.1: only lines you entered" in records.withdraw_items(
-            session, tender_id, someone, ["Earthwork / 3.1"], "Wrong bill."
-        )
-        omar = session.get(Staff, qs)
-        assert records.withdraw_items(session, tender_id, omar, ["Earthwork / 3.1"], "Wrong bill.") == (
-            "Withdrew 1 BOQ items."
-        )
         session.commit()
+        someone_id = someone.id
+    assert "Not withdrawn: Earthwork / 3.1: only your own work" in tools.withdraw(
+        turn_of(someone_id), ["Earthwork / 3.1"], "Wrong bill."
+    )
+    assert tools.withdraw(turn_of(qs), ["Earthwork / 3.1"], "Wrong bill.") == "Withdrew 1."
     assert client.get(f"/tenders/{tender_id}/boq").json()["items"] == []
     assert client.get(f"/tenders/{tender_id}/gates").json()["boq"] == 0
     assert propose(client, tender_id, qs, [line(bill, section="8485 · Earthwork")]).startswith("Saved 1")

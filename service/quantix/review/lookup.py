@@ -475,3 +475,58 @@ def answering(session: Session, tender_id: str, staff_id: str) -> bool:
     if last[-1].sender == ENGINEER:
         return True
     return len(last) == 2 and last[-1].sender == staff_id and last[0].sender == ENGINEER
+
+
+def _measured(session: Session, m: Measurement) -> str:
+    document = session.get(Document, m.document_id)
+    scale = takeoff.scale_for(session, m.document_id, m.page)
+    ratio = f"at about 1:{takeoff.drawing_ratio(scale.metres_per_point):,}" if scale else "with no scale set"
+    times = f" × {m.multiplier} m" if m.multiplier is not None else ""
+    return (
+        f"measurement {m.id[:8]} · “{m.label}” on {document.name}, page {m.page} {ratio}: a {m.kind} of "
+        f"{len(m.points)} points{times} = {_amount(takeoff.quantity(session, m))} {m.unit} · {SHORT.get(m.status, '')}"
+    )
+
+
+def takeoff_view(session: Session, tender_id: str, reference: str | None = None) -> str:
+    """One BOQ line's measurements against its quantity; or, for the whole BOQ, the lines measured and those with a
+    quantity nobody has measured yet."""
+    if reference:
+        item = boq.find_item(session, tender_id, reference)
+        found = [m for m in takeoff.measurements(session, tender_id) if m.boq_item_id == item.id]
+        lines = [f"{boq.reference(item)} {item.description[:80]}: BOQ {_amount(item.quantity)} {item.unit}."]
+        if not found:
+            return lines[0] + " Nothing is measured for it yet."
+        lines += [f"- {_measured(session, m)}" for m in found]
+        row = next((c for c in takeoff.compare(session, tender_id) if c.boq_item_id == item.id), None)
+        if row and row.takeoff is not None:
+            differs = f", {row.difference:+.1%} against the BOQ" if row.difference is not None else ""
+            lines.append(f"Takeoff {_amount(row.takeoff)} {row.unit}{differs} ({row.result.replace('_', ' ')}).")
+        return "\n".join(lines)
+    rows = takeoff.compare(session, tender_id)
+    measured = {r.boq_item_id for r in rows}
+    lines = [
+        f"{r.item or '(no BOQ line)'} {r.description[:60]}: takeoff {_amount(r.takeoff)} {r.unit}, BOQ "
+        f"{_amount(r.boq_quantity)} {r.boq_unit or ''}"
+        + (f" ({r.difference:+.1%})" if r.difference is not None else "")
+        + f" → {r.result.replace('_', ' ')}"
+        for r in rows
+    ]
+    missing = [boq.reference(i) for i in boq.items(session, tender_id) if i.quantity and i.id not in measured]
+    if missing:
+        lines.append(f"Not measured yet, {len(missing)} lines with a quantity: " + ", ".join(missing[:60]))
+    return "\n".join(lines) or "Nothing is measured yet, and the BOQ has no quantities."
+
+
+def packages_view(session: Session, tender_id: str) -> str:
+    """Each package: its lines, its enquiries and quotes, and where the choice stands."""
+    rows = []
+    for p in subcontract.packages(session, tender_id):
+        enquiries = subcontract.enquiries(session, p.id)
+        sent = sum(e.status == "sent" for e in enquiries)
+        firms = [session.get(Company, q.company_id).name for q in subcontract.quotes(session, p.id)]
+        rows.append(
+            f"package {p.id[:8]} · {p.name} ({p.kind}), {len(p.items)} lines · {len(enquiries)} enquiries, {sent} "
+            f"sent · quotes: {', '.join(firms) or 'none yet'} · {state(session, 'package', p)}"
+        )
+    return "\n".join(rows) or "No packages yet. Group lines to price from outside with create_package."

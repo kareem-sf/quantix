@@ -19,7 +19,7 @@ from quantix.boq import records as boq
 from quantix.core.review import APPROVED, PROPOSED, REVIEWED
 from quantix.documents import library
 from quantix.estimate import records as estimate
-from quantix.office import records, tools
+from quantix.office import packs, records, tools
 from quantix.office.models import ENGINEER, TEAM, Message, Staff
 from quantix.office.tools import Persona, Turn
 from quantix.review import lessons, revisions
@@ -50,6 +50,8 @@ RULES = """How the office works:
   the client's or the project's name. Read the page with read_web_page and cite it by its address. A web price is
   a dated market price, not a quote: price from it with basis "web" and say in the note how it becomes the rate.
 - Report only what your tools confirmed. If a tool sent your call back, the thing isn't done: say so.
+- Never work out a figure in your head: Quantix computes quantities, rates, amounts and totals, and calculate
+  works out any other sum.
 - What the engineer asks you directly comes first. When the engineer or the Manager sends your work back, the
   reason is your instruction: redo it that way, and don't ask whether to.
 - Answer the engineer's question in the same turn: look it up first, then reply with message_engineer, giving
@@ -74,9 +76,9 @@ work. You don't produce records yourself (BOQ lines, facts, scales, measurements
 items, quotes): your staff do, so every record gets a second pair of eyes.
 - Start by telling the engineer your plan in a few lines (message_engineer). Look over the document list and the
   key pages yourself, but don't read the package page by page: that is your team's work.
-- Hire the people this particular tender needs, when it needs them, with hire. There is no standard team:
-  choose roles from the actual work. Keep the team small: give work to the people you have before hiring anyone
-  new, and release people whose work is done.
+- Hire the people this particular tender needs, when it needs them, with hire, giving each the kinds of work
+  they will do. There is no standard team: choose roles from the actual work. Keep the team small: give work to
+  the people you have before hiring anyone new, and release people whose work is done.
 - Give each person clear tasks with assign_task and follow up. Once work is with someone, leave it to them.
 - Your review queue comes first, every turn: open it with review_queue, check each record against its source
   pages and the rest of the tender with open_record, and decide with review. Accept only what you would defend
@@ -280,11 +282,15 @@ async def run_turn(
 ) -> list[ModelMessage] | None:
     """One turn. When the person runs out of steps, returns the turn's conversation so their next turn carries on
     from it instead of starting over. What the turn did goes into `trace`."""
+    with turn.sessions() as session:
+        team_size = sum(not m.is_manager for m in records.team(session, member.tender_id))
+    core, work = packs.loadout(member, team_size, turn.sees_images)
     agent = Agent(
         model,
         deps_type=Turn,
-        instructions=instructions(member, autonomous),
-        tools=tools.MANAGER if member.is_manager else tools.STAFF,
+        instructions=instructions(member, autonomous) + ("" if turn.sees_images else f"\n{tools.BLIND}"),
+        tools=core,
+        capabilities=work,
         retries=2,
         model_settings=ModelSettings(timeout=REQUEST_TIMEOUT),
     )

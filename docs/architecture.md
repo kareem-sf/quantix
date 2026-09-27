@@ -59,6 +59,15 @@ Each domain module owns its models, its service functions and the agent tools th
 
 - **One runtime, many agents.** The Manager and staff differ only in persona and tools. Personas are generated
   by the Manager's `hire` tool.
+- **Tools per person** (`quantix/office/packs.py`). Each turn gets a small core: talking, looking up records and
+  pages, `calculate`, and for the Manager his review and delegation tools. The rest come in packs, one per kind of
+  work (documents, boq, takeoff, pricing, subcontract, submission): pydantic-ai capabilities carrying their tools
+  and a short method. `hire` records the kinds of work a person does (`profile.work`), and those packs are loaded
+  every turn; the others show only their name and one line until the person calls `load_capability`, and calling
+  a hidden tool tells them which pack to load. Staff hired before packs do every kind of work. The Manager's packs
+  hold only the tools that check work, never ones that produce records; his hiring tools stay loaded while the
+  team has fewer than 2 staff. An AI that can't read images gets no image tools, and its instructions say so. No
+  tool depends on the model searching for it, so it works on every provider and keeps the prompt cache stable.
 - **Inboxes.** Engineer messages, direct messages, team-room posts, task assignments and answers land in an
   agent's inbox. A scheduler wakes agents with pending inbox items and runs one turn each: a tool loop with a step
   limit. API connections run several agents at once; a subscription client runs one at a time. Stop cancels
@@ -124,7 +133,15 @@ Each domain module owns its models, its service functions and the agent tools th
   is the same word overlap as for repeated questions. Every briefing on the tender lists the tender's lessons. The
   engineer keeps one (`PATCH /lessons/{id}`), which copies it into `company_rules` under a topic from the record's
   kind, or drops it.
-- **Evidence.** A cited location must exist and must have been read in that agent's run.
+- **Evidence.** A cited location must exist and must have been opened by whoever cites it. The tools that file
+  BOQ lines, facts, scales, measurements, quoted rates, quotes, checklist items and pricing columns check each cited
+  page against `opened`, as `message_engineer` does for its sources.
+- **Figures on request.** `quantix/core/calculate.py` works out arithmetic (a whitelist of operators over named
+  values) and cut and fill on a grid of levels. `quantix/estimate/analysis.py` gives where the money is, what a
+  change would do to the price without saving anything, and how a rate compares with the library (flagging entries
+  over 12 months old), earlier tenders, similar lines and quotes. `quantix/review/activity.py` searches the
+  conversation, says what changed since the engineer last wrote, and runs the checks on someone's own waiting work.
+  A library suggestion is a decision (`subject_kind` `library`); answering "Keep it in the library" saves the rate.
 - **Newer copies.** A changed file with the same path replaces the older copy (`replaced`). As the reader saves
   the newer copy, in the same transaction, `quantix/review/revisions.py` moves the work that cites an older copy
   onto it wherever what the work cites is unchanged. That means:

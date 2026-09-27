@@ -177,6 +177,9 @@ def decide(session: Session, record: Rate | Markups, approve_it: bool, reason: s
         office.send_back(session, record.tender_id, record, label(session, record), reason, ENGINEER)
 
 
+KEEP_IN_LIBRARY = "Keep it in the library"  # the engineer's answer to the office's suggestion that saves the rate
+
+
 def save_to_library(session: Session, rate: Rate, currency: str) -> int:
     """Keep an approved rate for later tenders: its build-up resources, or the unit rate itself."""
     item = session.get(BoqItem, rate.boq_item_id)

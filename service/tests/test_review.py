@@ -3,6 +3,7 @@
 import re
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from pydantic_ai.messages import (
@@ -19,7 +20,7 @@ from test_office import scripted, wait_for
 from quantix import settings
 from quantix.boq import records as boq
 from quantix.estimate import records as estimate
-from quantix.office import agents, tools
+from quantix.office import agents, packs, tools
 from quantix.office import records as office
 from quantix.office.models import Staff, TurnRecord
 from quantix.review import records as reviews
@@ -58,12 +59,19 @@ def refs(client, tender_id) -> dict[str, str]:
         return {p.record.id: p.ref for p in reviews.pending(session, tender_id)}
 
 
+def reach(is_manager: bool) -> set[str]:
+    """Every tool someone can use: their core and every pack, loaded or not."""
+    core, work = packs.loadout(SimpleNamespace(is_manager=is_manager, profile={}), 0, True)
+    return {t.__name__ for t in core} | {name for pack in work for name in pack.toolset.tools}
+
+
 def test_the_manager_leads_and_reviews_but_never_produces_records():
-    names = {t.__name__ for t in tools.MANAGER}
+    names = reach(is_manager=True)
     assert {"review_queue", "open_record", "review", "hire", "assign_task", "ask_engineer"} <= names
-    produce = {t.__name__ for t in tools.PRODUCE}
+    produce = {t.__name__ for w in packs.WORK.values() for t in w.produces}
     assert not names & produce  # every record has a producer and a different reviewer
-    assert "propose_rate" in produce and "review" not in {t.__name__ for t in tools.STAFF}
+    assert "propose_rate" in produce and "review" not in reach(is_manager=False)
+    assert tuple(packs.WORK) == tools.WORK_KINDS  # hire offers exactly the packs there are
 
 
 def test_the_manager_accepts_or_sends_back_each_record(client, office_with_work):

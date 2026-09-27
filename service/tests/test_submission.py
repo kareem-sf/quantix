@@ -329,6 +329,8 @@ def test_staff_build_the_checklist_through_their_tools(client, tender, tmp_path)
     settings.save(tmp_path, office_ai={"connection_id": "scripted", "model": "brain"})
     replies: list[str] = []
     steps = [
+        ToolCallPart("read_page", {"document_id": itt, "page": 1}),  # what she cites, she has read
+        ToolCallPart("read_page", {"document_id": bill, "page": 1}),
         ToolCallPart(
             "add_requirements",
             {
@@ -377,7 +379,7 @@ def test_staff_build_the_checklist_through_their_tools(client, tender, tmp_path)
         session.commit()
     client.app.state.office.engineer_spoke(tender_id)
     wait_for(lambda o: len(replies) == len(steps), client, tender_id)
-    assert replies == [
+    assert replies[2:] == [
         "1 requirements added to the checklist.",
         "The draft is with the Tender Manager for review.",
         "Rates will go in column E and amounts in column F.",

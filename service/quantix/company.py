@@ -46,6 +46,8 @@ class PastRate:
     unit: str
     rate: Decimal
     basis: str
+    lines: list[dict] | None = None  # the build-up, when it was built up
+    note: str = ""  # its assumptions
 
 
 def past_rates(session: Session, tender_id: str, words: str, limit: int = 20) -> list[PastRate]:
@@ -78,6 +80,8 @@ def past_rates(session: Session, tender_id: str, words: str, limit: int = 20) ->
                 item.unit,
                 estimate.rate_of(rate),
                 rate.basis,
+                rate.lines,
+                rate.note,
             )
         )
         if len(found) == limit:

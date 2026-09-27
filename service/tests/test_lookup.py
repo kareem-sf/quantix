@@ -238,11 +238,15 @@ def fake_turn(client, tender_id, staff_id) -> SimpleNamespace:
 
 def test_lines_past_forty_are_named_so_they_get_entered(client, tender):
     tender_id, priya_id, _ = tender
+    with client.app.state.sessions() as session:
+        bill = next(d.id for d in library.documents(session, tender_id) if d.name == "Bill.xlsx")
+    ctx = fake_turn(client, tender_id, priya_id)
+    tools.read_page(ctx, bill, 1)
     lines = [
-        boq.ItemIn(item=f"9.{n}", description="Line", unit="m", quantity=1, document_id="x", page=1, quote="q")
+        boq.ItemIn(item=f"9.{n}", description="Line", unit="m", quantity=1, document_id=bill, page=1, quote="q")
         for n in range(42)
     ]
-    report = tools.propose_boq_items(fake_turn(client, tender_id, priya_id), lines)
+    report = tools.propose_boq_items(ctx, lines)
     assert report.endswith("Not entered, because only 40 go at a time: 9.40, 9.41. Enter them in another call.")
 
 
