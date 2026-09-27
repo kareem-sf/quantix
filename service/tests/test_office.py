@@ -266,9 +266,14 @@ def test_running_out_of_steps_carries_on_without_losing_what_was_read(client, of
 
     use(reads_too_long)
     client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Review the package."})
-    state = wait_for(lambda o: o["state"] == "idle" and o["staff"], client, tender_id)
+
+    def chat_of(office):  # the office looks idle for a moment between a turn cut short and the one carrying it on
+        people = office["staff"]
+        return people and client.get(f"/tenders/{tender_id}/messages", params={"channel": people[0]["id"]}).json()
+
+    state = wait_for(chat_of, client, tender_id)
     [rania] = state["staff"]
-    chat = client.get(f"/tenders/{tender_id}/messages", params={"channel": rania["id"]}).json()
+    chat = chat_of(state)
     assert [m["text"] for m in chat] == ["I read 12 pages before I ran out of steps."]
     assert rania["now"] is None
 
@@ -302,8 +307,12 @@ def test_a_passing_ai_failure_is_retried_with_the_turn_so_far(client, office, mo
 
     use(flaky)
     client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Review the package."})
-    state = wait_for(lambda o: o["staff"] and o["state"] == "idle", client, tender_id)
-    chat = client.get(f"/tenders/{tender_id}/messages", params={"channel": state["staff"][0]["id"]}).json()
+
+    def chat_of(office):  # the office looks idle for a moment between the failed turn and the one retrying it
+        people = office["staff"]
+        return people and client.get(f"/tenders/{tender_id}/messages", params={"channel": people[0]["id"]}).json()
+
+    chat = chat_of(wait_for(chat_of, client, tender_id))
     assert [m["text"] for m in chat] == ["Carried on with 1 earlier result."]
 
 

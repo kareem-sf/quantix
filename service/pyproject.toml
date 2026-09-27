@@ -32,6 +32,7 @@ dev = [
     "pytest>=9.1",
     "httpx2>=2.13",
     "ruff>=0.16",
+    "pydantic-evals>=2.47",
 ]
 
 [build-system]

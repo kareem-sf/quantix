@@ -68,7 +68,7 @@ RULES = """How the office works:
 - "Where the tender stands" below is current. Check details with open_record, find_records, priced_boq, list_boq,
   estimate_summary, takeoff_summary and list_requirements; don't re-read pages to find out what the office has
   already entered.
-- You have about 12 steps in a turn. Before you run out, say what you found, with next_steps for what is left.
+- You have about 12 steps in a turn. Before you run out, say what you found; a turn cut short carries on by itself.
 - When you have acted on everything new, stop."""
 
 MANAGER_DUTIES = """You are the Tender Manager: you lead this tender for the engineer and review all of your team's
@@ -80,7 +80,8 @@ items, quotes): your staff do, so every record gets a second pair of eyes.
   they will do. There is no standard team: choose roles from the actual work. Keep the team small: give work to
   the people you have before hiring anyone new, and release people whose work is done.
 - Give each person clear tasks with assign_task and follow up. Once work is with someone, leave it to them.
-- Your review queue comes first, every turn: open it with review_queue, check each record against its source
+- A question from the engineer comes first: answer it before anything else. Your review queue comes next, every
+  turn: open it with review_queue, check each record against its source
   pages and the rest of the tender with open_record, and decide with review. Accept only what you would defend
   to the engineer; send back anything wrong with exactly what to correct. Quantix checks each record first: a
   blocker must be corrected before you can accept, and a warning needs your reason for accepting it.
@@ -151,7 +152,10 @@ def situation(session: Session, member: Staff, new: list[Message]) -> str:
     parts.append("Where the tender stands:\n" + standing(session, member.tender_id))
     queue = reviews.counts(session, member.tender_id) if member.is_manager else ""
     if queue:
-        parts.append(f"Waiting for your review: {queue}. Go through them with review_queue before anything else.")
+        parts.append(
+            f"Waiting for your review: {queue}. Go through them with review_queue once you have answered anything "
+            "the engineer asked you."
+        )
     older = revisions.stale(session, member.tender_id) if member.is_manager else []
     if older:
         parts.append(

@@ -18,7 +18,7 @@ from quantix.documents.models import Document, WebPage
 from quantix.estimate import records as estimate
 from quantix.estimate.models import Markups, Rate
 from quantix.office import records as office
-from quantix.office.models import ENGINEER
+from quantix.office.models import ENGINEER, Task
 from quantix.review import records as reviews
 from quantix.subcontract import records as subcontract
 from quantix.subcontract.models import Company, Enquiry, Package, Quote
@@ -468,13 +468,24 @@ def cited(session: Session, tender_id: str, staff_id: str, text: str) -> dict[st
 
 def answering(session: Session, tender_id: str, staff_id: str) -> bool:
     """Whether a message to the engineer now answers them: they wrote last, or the person is replacing the
-    unanswered reply they sent after the engineer's message."""
+    unanswered reply without sources they sent after the engineer's message. An answer with sources stays."""
     last = office.messages(session, tender_id, staff_id, limit=2)
     if not last:
         return False
     if last[-1].sender == ENGINEER:
         return True
-    return len(last) == 2 and last[-1].sender == staff_id and last[0].sender == ENGINEER
+    return len(last) == 2 and last[-1].sender == staff_id and not last[-1].sources and last[0].sender == ENGINEER
+
+
+def promised(session: Session, tender_id: str, staff_id: str) -> bool:
+    """Whether the person already set next steps for the engineer's latest message to them: one set per question."""
+    asked = [m for m in office.messages(session, tender_id, staff_id, limit=20) if m.sender == ENGINEER]
+    if not asked:
+        return False
+    query = select(Task.id).where(
+        Task.staff_id == staff_id, Task.title.startswith("Follow up: "), Task.created_at > asked[-1].created_at
+    )
+    return session.scalars(query.limit(1)).first() is not None
 
 
 def _measured(session: Session, m: Measurement) -> str:

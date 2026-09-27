@@ -6,9 +6,10 @@ import re
 import threading
 from types import SimpleNamespace
 
+import pytest
 import test_estimate
 from PIL import Image
-from pydantic_ai import ToolReturn
+from pydantic_ai import ModelRetry, ToolReturn
 from pydantic_ai.messages import ModelResponse, RetryPromptPart, TextPart, ToolCallPart, ToolReturnPart
 from test_documents import read_all, upload
 from test_office import scripted, wait_for
@@ -270,3 +271,35 @@ def test_an_image_document_can_be_looked_at(client):
     with client.app.state.sessions() as session:
         assert office.has_opened(session, omar_id, "page", f"{photo}:1")
         assert session.query(Task).count() == 0
+
+
+def test_an_answer_stays_and_promises_nothing_more(client, tender):
+    tender_id, priya_id, _ = tender
+    rania_id, rate_id, _ = priced_after_a_send_back(client, tender_id, priya_id)
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": rania_id, "text": QUESTION})
+    ctx = fake_turn(client, tender_id, rania_id)
+    tools.open_record(ctx, [f"rate {rate_id[:8]}"])
+    with pytest.raises(ModelRetry, match="Send this without next_steps"):
+        tools.message_engineer(ctx, "Built up.", sources=[f"rate {rate_id[:8]}"], next_steps=["run the audit"])
+    assert (
+        tools.message_engineer(ctx, "Built up from a gang, rebar and wire.", sources=[f"rate {rate_id[:8]}"]) == "Sent."
+    )
+    assert tools.message_engineer(ctx, "The audit is clear.") == "Sent."  # a later update doesn't replace the answer
+    chat = client.get(f"/tenders/{tender_id}/messages", params={"channel": rania_id}).json()
+    assert [m["text"] for m in chat] == [QUESTION, "Built up from a gang, rebar and wire.", "The audit is clear."]
+
+
+def test_a_question_gets_one_set_of_next_steps_then_an_answer(client, tender):
+    tender_id, priya_id, _ = tender
+    rania_id, rate_id, _ = priced_after_a_send_back(client, tender_id, priya_id)
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": rania_id, "text": QUESTION})
+    ctx = fake_turn(client, tender_id, rania_id)
+    promise = tools.message_engineer(ctx, "Checking the build-up.", next_steps=["open the rate record"])
+    assert promise == "Sent. 1 next step is now your task."
+    for again in ({"next_steps": ["check again"]}, {}):
+        with pytest.raises(ModelRetry, match="You already set next steps for the engineer's question: answer it now"):
+            tools.message_engineer(ctx, "Still checking.", **again)
+    tools.open_record(ctx, [f"rate {rate_id[:8]}"])
+    assert tools.message_engineer(ctx, "Built up from a gang, rebar and wire.", sources=[f"rate {rate_id[:8]}"]) == (
+        "Sent. It replaces your last message, which the engineer hadn't answered."
+    )

@@ -343,24 +343,40 @@ ANSWER_FIRST = (
 )
 
 
+ANSWER_NOW = (
+    "You already set next steps for the engineer's question: answer it now, with the records and pages you checked "
+    "as sources. If they don't say, tell the engineer that plainly, citing what you checked."
+)
+
+
 def message_engineer(
     ctx: RunContext[Turn], text: str, sources: list[str] | None = None, next_steps: list[str] | None = None
 ) -> str:
-    """Write to the engineer in your own chat with them. While they haven't answered your last message, this one
-    replaces it, so they read one current update: include anything from it that still matters.
+    """Write to the engineer in your own chat with them. While they haven't answered your last update, this one
+    replaces it, so they read one current update: include anything from it that still matters. An answer with
+    sources is never replaced.
     sources: what your message rests on, each something you opened: a record as open_record names it ("rate
     42a9fb15"), a BOQ line ("Earthwork / C.1.2"), a page ("<document name>, page <n>"), a summary you called
     ("estimate_summary", "priced_boq"), a web page you read (its address). The engineer can open each one.
-    next_steps: up to 3 things you will do yourself before you can tell them more. Each becomes your own task, and
-    Quantix wakes you to do it. Work for your team goes to them with assign_task instead.
+    next_steps: only for a question the engineer asked that you can't answer yet, up to 3 things you will do
+    yourself before you can. Each becomes your own task, and Quantix wakes you to do it. An answer with sources, or
+    an update of your own, has no next steps.
     An answer to something the engineer asked needs sources, or next_steps when it needs more work first."""
     steps = [s.strip() for s in next_steps or [] if s.strip()]
     if len(steps) > 3:
         raise ModelRetry("Give at most 3 next steps: the ones you will do yourself next.")
     with _working(ctx) as (session, me):
         cited = [lookup.cited(session, ctx.deps.tender_id, me.id, s) for s in sources or [] if s.strip()]
-        if not cited and not steps and lookup.answering(session, ctx.deps.tender_id, me.id):
+        answering = lookup.answering(session, ctx.deps.tender_id, me.id)
+        if not cited and answering and lookup.promised(session, ctx.deps.tender_id, me.id):
+            raise ValueError(ANSWER_NOW)
+        if not cited and not steps and answering:
             raise ValueError(ANSWER_FIRST)
+        if steps and (cited or not answering):
+            raise ValueError(
+                "Send this without next_steps: they are only for a question the engineer asked that you can't answer "
+                "yet. Other work you just do, or put in the team room."
+            )
         promised = [t.title for t in records.open_tasks(session, me) if t.title.startswith(FOLLOW_UP)]
         if steps and len(promised) + len(steps) > MAX_FOLLOW_UPS:
             raise ValueError(
@@ -368,7 +384,7 @@ def message_engineer(
                 "before you promise more."
             )
         last = records.messages(session, ctx.deps.tender_id, me.id, limit=1)
-        replaced = bool(last) and last[0].sender == me.id
+        replaced = bool(last) and last[0].sender == me.id and not last[0].sources
         if replaced:
             session.delete(last[0])
         records.post(session, ctx.deps.tender_id, me.id, me.id, text, sources=cited)

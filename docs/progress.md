@@ -702,3 +702,29 @@ to 20, and every tool's description costs tokens on every step.
   which models to offer is theirs to decide. Pages cited on work already filed are not checked after the fact.
 - **Checks:** 12 new service tests (8 figures and look-ups, 4 packs). Scripted staff in five tests now read a page
   before citing it. 168 service tests and 68 interface tests pass, and so do the typecheck, Ruff and the format check.
+
+## 27 September 2026: the office's answers checked with its real AI
+
+`service/evals/office_answers.py` (pydantic-evals, a dev dependency) asks the office's own AI, as chosen in Settings,
+three questions on a synthetic tender in a scratch data home: how each item was priced, the source of the slab
+reinforcement rate, and its pricing in detail. The rate was sent back once and then approved. Each answer is scored:
+the Manager wrote back, it rests on the rate's record, it promised nothing bare, and it came in the turn that read the
+question. Runs used openai-gpt-5-4-mini, the office AI on the real tender.
+
+- **First run:** every question was answered in the first turn from the records, with sources. But one answer was
+  replaced by a later update, and next steps added to complete answers woke the Manager again and again: 33 to 36
+  model requests and about 190,000 tokens a question.
+- **Fixed:** an answer with sources is never replaced by a later update; next steps are only for a question the
+  engineer asked that can't be answered yet, one set per question, after which the reply must be the answer with
+  sources; the Manager's duties and briefing put the engineer's question before his review queue (they said the
+  opposite of the rules). The turn allowance line no longer invites next steps.
+- **After the fixes**, over the last two runs: 4 of 6 answers rested on the rate record, in the first turn, e.g.
+  "BOQ item 4.3 is 28.1 t at 3,479.00 per t… The only earlier issue was the missing fixing labour and tie wire",
+  sourced to the rate and the BOQ line. In the other 2 the Manager answered with real sources but about his review
+  queue or the audit instead of the question: Quantix checks that a reply rests on something opened, not that it is
+  on topic. Before these changes, on the real tender, 0 of 5.
+- A question sometimes still leads the office on to other open work on the tender (up to 500,000 tokens over 10
+  turns on an unfinished synthetic tender), which is the office working, not the answer.
+- **Test fixes:** two `test_office.py` tests waited for "idle", which the office shows for a moment between a turn
+  cut short and the one carrying it on; they now wait for the message they check.
+- **Checks:** 2 new service tests. 170 service tests pass, and so do Ruff and the format check.
