@@ -108,11 +108,11 @@ export function useApproveAllRates(tenderId: string) {
 export function useDecideMarkups(tenderId: string) {
   const refresh = usePricingRefresh(tenderId);
   return useMutation({
-    mutationFn: async (body: { id: string; approve: boolean }) =>
+    mutationFn: async (body: { id: string; approve: boolean; reason?: string }) =>
       ok(
         await api.POST("/markups/{markups_id}/decision", {
           params: { path: { markups_id: body.id } },
-          body: { approve: body.approve, reason: null },
+          body: { approve: body.approve, reason: body.reason ?? null },
         }),
       ),
     onSuccess: refresh,
@@ -150,12 +150,17 @@ export function money(value: string | null | undefined) {
 
 export function statusLabel(status: string) {
   return (
-    { proposed: "Needs you", approved: "Approved", office_approved: "Approved by the office" }[status] ?? status
+    {
+      proposed: "With the Manager",
+      reviewed: "Needs you",
+      approved: "Approved",
+      office_approved: "Approved by the office",
+    }[status] ?? status
   );
 }
 
 export function statusDot(status: string) {
-  return status === "proposed" ? "bg-attention" : "bg-approved";
+  return { proposed: "bg-ink-4", reviewed: "bg-attention" }[status] ?? "bg-approved";
 }
 
 export function quantity(value: string | null | undefined) {

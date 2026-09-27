@@ -4,6 +4,7 @@ import { Link, useParams, useSearchParams } from "react-router";
 import { money } from "../estimate/queries";
 import { Face } from "../office/Face";
 import { firstName, useOffice, type Staff } from "../office/queries";
+import { Reopen, ReviewNote, WITH_MANAGER } from "../review/Review";
 import { dueShort } from "../tenders/due";
 import { useTender } from "../tenders/queries";
 import {
@@ -22,14 +23,16 @@ import {
 const MARK: Record<string, string> = {
   ready: "bg-ink",
   review: "bg-attention",
+  manager: "bg-ink-4",
   missing: "border-2 border-line-strong",
 };
 
 function stateText(r: Requirement): string {
   if (r.state === "review") return "Draft · needs you";
+  if (r.state === "manager") return "Draft · with the Manager";
   if (r.state === "missing") return "Missing";
   if (r.file_name) return "Ready · file added";
-  if (r.draft?.status === "office_approved") return "Ready · approved by the office";
+  if (r.draft?.status === "office_approved") return "Ready · approved by the office after the Manager's review";
   return "Ready";
 }
 
@@ -264,7 +267,7 @@ function RequirementPanel(props: { tenderId: string; requirement: Requirement; p
           <span className="flex items-center gap-2 text-xs font-semibold text-ink-2">
             {author && <Face id={author.id} size={18} />}
             Drafted{author && ` by ${firstName(author)}`}
-            {r.draft.status === "office_approved" && " · approved by the office, not reviewed"}
+            {r.draft.status === "office_approved" && " · approved by the office, not reviewed by you"}
           </span>
           <div className="flex flex-col gap-2 rounded-lg border border-line p-3">
             <span className="font-medium">{r.draft.title}</span>
@@ -275,11 +278,14 @@ function RequirementPanel(props: { tenderId: string; requirement: Requirement; p
         </div>
       )}
 
+      {r.draft?.status === "proposed" && <p className="text-ink-2">{WITH_MANAGER}</p>}
+      {r.draft && <ReviewNote reviewedBy={r.draft.reviewed_by} note={r.draft.review_note} people={props.people} />}
+      {r.draft?.status === "office_approved" && <Reopen kind="draft" id={r.draft.id} />}
       {r.file_name && <p className="text-ink-2">File added: {r.file_name}</p>}
       {r.ready_note !== null && <p className="text-ink-2">Marked ready{r.ready_note && `: ${r.ready_note}`}</p>}
 
       <div className="grow" />
-      {r.draft?.status === "proposed" &&
+      {r.draft?.status === "reviewed" &&
         (rejecting ? (
           <div className="flex flex-col gap-2">
             <textarea

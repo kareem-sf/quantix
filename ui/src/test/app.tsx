@@ -47,6 +47,7 @@ export interface FakeState {
   columns: unknown[];
   exports: { spread_markups: boolean }[];
   decided: { id: string; approve: boolean; save_to_library?: boolean }[];
+  reopened: { kind: string; id: string; reason: string }[];
   /** Answer the next POST to this path with this error detail. */
   fail: Record<string, string>;
 }
@@ -83,6 +84,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     columns: [],
     exports: [],
     decided: [],
+    reopened: [],
     fail: {},
     ...initial,
   };
@@ -264,11 +266,18 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     }
     if (path.match(/^\/tenders\/\w+\/boq$/)) return json({ items: state.items, facts: state.facts });
     if (path.match(/^\/tenders\/\w+\/gates$/)) {
-      const count = (list: { status: string }[]) => list.filter((r) => r.status === "proposed").length;
-      return json({ boq: count(state.items), facts: count(state.facts), takeoff: count(state.measurements), pricing: 0, subcontract: 0, submission: 0 });
+      const count = (list: { status: string }[], status = "reviewed") => list.filter((r) => r.status === status).length;
+      const manager = [state.items, state.facts, state.measurements].reduce((n, list) => n + count(list, "proposed"), 0);
+      return json({ manager, boq: count(state.items), facts: count(state.facts), takeoff: count(state.measurements), pricing: 0, subcontract: 0, submission: 0 });
+    }
+    if (path.match(/^\/tenders\/\w+\/review$/)) return json([]);
+    const reopened = path.match(/^\/records\/(\w+)\/(\w+)\/reopen$/);
+    if (reopened) {
+      state.reopened.push({ kind: reopened[1], id: reopened[2], reason: body.reason });
+      return new Response(null, { status: 204 });
     }
     if (path.match(/^\/tenders\/\w+\/boq\/approve-all$/)) {
-      const waiting = state.items.filter((i) => i.status === "proposed");
+      const waiting = state.items.filter((i) => i.status === "reviewed");
       for (const item of waiting) item.status = "approved";
       return json({ approved: waiting.length });
     }

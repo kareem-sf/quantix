@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from quantix import tenders
 from quantix.api.tenders import DB
 from quantix.boq.models import BoqItem
+from quantix.core.review import UNDECIDED
 from quantix.documents import library, readers
 from quantix.documents.models import Document
 from quantix.office.models import ENGINEER
@@ -28,6 +29,8 @@ class ScaleOut(BaseModel):
     dimension: str
     status: str
     proposed_by: str
+    reviewed_by: str | None
+    review_note: str | None
 
 
 class Sheet(BaseModel):
@@ -52,6 +55,8 @@ class MeasurementOut(BaseModel):
     boq_item: str | None
     status: str
     proposed_by: str
+    reviewed_by: str | None
+    review_note: str | None
 
 
 class ComparisonOut(BaseModel):
@@ -113,6 +118,8 @@ def _scale(scale: Scale | None) -> ScaleOut | None:
         dimension=scale.dimension,
         status=scale.status,
         proposed_by=scale.proposed_by,
+        reviewed_by=scale.reviewed_by,
+        review_note=scale.review_note,
     )
 
 
@@ -131,6 +138,8 @@ def _measurement(session: Session, m: Measurement) -> MeasurementOut:
         boq_item=item.item if item else None,
         status=m.status,
         proposed_by=m.proposed_by,
+        reviewed_by=m.reviewed_by,
+        review_note=m.review_note,
     )
 
 
@@ -250,7 +259,7 @@ def _record(session: Session, model: type[Scale] | type[Measurement], record_id:
 @router.post("/measurements/{measurement_id}/decision")
 def decide_measurement(measurement_id: str, body: DecisionIn, session: DB, request: Request) -> None:
     m = _record(session, Measurement, measurement_id)
-    if m.status != "proposed":
+    if m.status not in UNDECIDED:
         raise HTTPException(status_code=400, detail="This has already been decided.")
     records.decide(session, m, body.approve, body.reason)
     session.commit()
@@ -260,7 +269,7 @@ def decide_measurement(measurement_id: str, body: DecisionIn, session: DB, reque
 @router.post("/scales/{scale_id}/decision")
 def decide_scale(scale_id: str, body: DecisionIn, session: DB, request: Request) -> None:
     scale = _record(session, Scale, scale_id)
-    if scale.status != "proposed":
+    if scale.status not in UNDECIDED:
         raise HTTPException(status_code=400, detail="This has already been decided.")
     records.decide(session, scale, body.approve, body.reason)
     session.commit()
@@ -271,5 +280,5 @@ def decide_scale(scale_id: str, body: DecisionIn, session: DB, request: Request)
 def delete_measurement(measurement_id: str, session: DB) -> None:
     """The engineer removes a measurement to redo it. It is kept as rejected, not erased."""
     m = _record(session, Measurement, measurement_id)
-    records.decide(session, m, approve=False, reason="Removed by the engineer to be measured again.")
+    records.decide(session, m, False, "Removed by the engineer to be measured again.")
     session.commit()

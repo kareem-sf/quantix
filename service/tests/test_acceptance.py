@@ -1,5 +1,6 @@
 """A synthetic tender goes end to end through every gate: the real office runtime with a scripted model for the
-staff, and the engineer deciding through the API, from the package to the built submission."""
+staff, the Tender Manager reviewing their work, and the engineer deciding through the API, from the package to the
+built submission."""
 
 import re
 
@@ -155,12 +156,24 @@ def test_a_synthetic_tender_goes_through_every_gate_to_a_built_package(client, t
     script = phases(read_all(client, tender_id))
     settings.save(tmp_path, office_ai={"connection_id": "scripted", "model": "brain"})
     replies: list[str] = []
+    reviewed: list[str] = []  # everything the Manager accepted
 
     def brain(messages, info):
         if info.output_tools:  # appointing the Tender Manager
             return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, RANIA)])
         done = [str(p.content) for m in messages for p in m.parts if isinstance(p, ToolReturnPart)]
         new = new_for_me(messages)
+        prompt = next(str(p.content) for m in messages for p in m.parts if isinstance(p, UserPromptPart))
+        if "You are Rania Farouk" in info.instructions and "Waiting for your review:" in prompt:
+            # The Manager reviews everything Layla proposed before it reaches the engineer
+            if not done:
+                return ModelResponse(parts=[ToolCallPart("review_queue", {})])
+            if len(done) == 1:
+                refs = re.findall(r"^(\w+ [0-9a-f]{8}) ·", done[0], re.MULTILINE)
+                reviewed.extend(refs)
+                verdicts = [{"record": r, "accept": True, "note": "Checked against the tender's pages."} for r in refs]
+                return ModelResponse(parts=[ToolCallPart("review", {"verdicts": verdicts})])
+            return ModelResponse(parts=[TextPart("Done.")])
         if "You are Rania Farouk" in info.instructions and "Please price this tender" in new:
             steps = [
                 (
@@ -230,7 +243,27 @@ def test_a_synthetic_tender_goes_through_every_gate_to_a_built_package(client, t
     priced_boq, method = checklist
     client.post(f"/drafts/{method['draft']['id']}/decision", json={"approve": True})
     client.post(f"/requirements/{priced_boq['id']}/ready", json={"ready": True, "note": "Attached as the workbook."})
-    assert gates() == {"boq": 0, "facts": 0, "takeoff": 0, "pricing": 0, "subcontract": 0, "submission": 0}
+    assert gates() == {
+        "manager": 0,
+        "boq": 0,
+        "facts": 0,
+        "takeoff": 0,
+        "pricing": 0,
+        "subcontract": 0,
+        "submission": 0,
+    }
+    # Every record reached the engineer through the Manager's review: 3 BOQ lines, 2 facts, 2 rates, the markups,
+    # the recommendation, 2 checklist items and the draft
+    assert sorted({r.split()[0] for r in reviewed}) == [
+        "boq",
+        "checklist",
+        "draft",
+        "fact",
+        "markups",
+        "rate",
+        "recommendation",
+    ]
+    assert len(reviewed) == 12
 
     # Net 22,940.00 + 98,012.80 + 35,770.00 = 156,722.80; site costs 15,672.28 (10%); total 172,395.08.
     summary = client.get(f"/tenders/{tender_id}/estimate").json()["summary"]

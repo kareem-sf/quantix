@@ -11,14 +11,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from quantix.boq import records as boq
-from quantix.boq.models import APPROVED, BoqItem, Fact
+from quantix.boq.models import BoqItem, Fact
+from quantix.core.review import APPROVED, LIVE, PROPOSED, REVIEWED, UNDECIDED
 from quantix.documents.evidence import check_quote, numbers_in
 from quantix.estimate.models import LibraryResource, Markups, Rate
 from quantix.office import records as office
 from quantix.office.models import ENGINEER
 from quantix.tenders import LOCAL_OWNER
 
-LIVE = ("proposed", *APPROVED)
 CENT = Decimal("0.01")
 KINDS = ("labour", "plant", "material", "subcontract")
 
@@ -52,7 +52,7 @@ def rate_of(rate: Rate) -> Decimal:
 
 
 def current_rate(session: Session, item_id: str) -> Rate | None:
-    """The item's rate: the newest approved one, or else the newest proposed one."""
+    """The item's rate: the newest approved one, or else the newest one still being decided."""
     query = select(Rate).where(Rate.boq_item_id == item_id, Rate.status.in_(LIVE)).order_by(Rate.created_at.desc())
     rates = list(session.scalars(query))
     return next((r for r in rates if r.status in APPROVED), rates[0] if rates else None)
@@ -71,7 +71,7 @@ def propose_rate(
     page: int | None = None,
     quote: str | None = None,
     library_id: str | None = None,
-    status: str = "proposed",
+    status: str = PROPOSED,
 ) -> Rate:
     item = boq.find_item(session, tender_id, item_number)
     if (unit_rate is None) == (not lines):
@@ -95,8 +95,8 @@ def propose_rate(
         _check_not_settled(session, item)
     else:
         raise ValueError("The basis is quote, library or estimate.")
-    # the newest proposal for an item replaces any still waiting, so the engineer decides one rate per line
-    for older in session.scalars(select(Rate).where(Rate.boq_item_id == item.id, Rate.status == "proposed")):
+    # the newest proposal for an item replaces any still being decided, so one rate per line is reviewed
+    for older in session.scalars(select(Rate).where(Rate.boq_item_id == item.id, Rate.status.in_(UNDECIDED))):
         older.status = "replaced"
     rate = Rate(
         tender_id=tender_id,
@@ -141,24 +141,24 @@ def _replace_older(session: Session, record: Rate | Markups) -> None:
         older.status = "replaced"
 
 
-def decide(session: Session, record: Rate | Markups, approve: bool, reason: str | None = None) -> None:
-    record.status = "approved" if approve else "rejected"
-    record.reason = reason
-    record.decided_at = datetime.now(UTC)
-    if approve:
-        _replace_older(session, record)
-    if not approve and record.proposed_by != ENGINEER:
-        if isinstance(record, Rate):
-            what = f"the rate for BOQ item {boq.reference(session.get(BoqItem, record.boq_item_id))}"
-        else:
-            what = "the markups"
-        office.post(
-            session,
-            record.tender_id,
-            ENGINEER,
-            record.proposed_by,
-            f"I rejected {what}" + (f": {reason}" if reason else "."),
-        )
+def label(session: Session, record: Rate | Markups) -> str:
+    """How a message names the record."""
+    if isinstance(record, Rate):
+        return f"the rate for BOQ item {boq.reference(session.get(BoqItem, record.boq_item_id))}"
+    return "the markups"
+
+
+def approve(session: Session, record: Rate | Markups, status: str = "approved") -> None:
+    """Approved by the engineer, or by a fully autonomous office once the Tender Manager has reviewed it."""
+    record.status, record.decided_at = status, datetime.now(UTC)
+    _replace_older(session, record)
+
+
+def decide(session: Session, record: Rate | Markups, approve_it: bool, reason: str | None = None) -> None:
+    if approve_it:
+        approve(session, record)
+    else:
+        office.send_back(session, record.tender_id, record, label(session, record), reason, ENGINEER)
 
 
 def save_to_library(session: Session, rate: Rate, currency: str) -> int:
@@ -203,7 +203,7 @@ def propose_markups(
     profit: Decimal,
     adjustment: Decimal,
     note: str,
-    status: str = "proposed",
+    status: str = PROPOSED,
 ) -> Markups:
     for name, value in (("overheads", overheads), ("profit", profit)):
         if not 0 <= value < 1:
@@ -213,7 +213,7 @@ def propose_markups(
         raise ValueError(
             "The engineer approved the markups. If you think they need changing, say why with raise_concern."
         )
-    for older in session.scalars(select(Markups).where(Markups.tender_id == tender_id, Markups.status == "proposed")):
+    for older in session.scalars(select(Markups).where(Markups.tender_id == tender_id, Markups.status.in_(UNDECIDED))):
         older.status = "replaced"
     markups = Markups(
         tender_id=tender_id,
@@ -243,7 +243,8 @@ class Summary:
     currency: str
     priced: int
     items: int
-    waiting: int
+    waiting: int  # rates the Tender Manager reviewed, waiting for the engineer
+    reviewing: int = 0  # rates with the Tender Manager for review
     net: Decimal = Decimal(0)
     preliminaries: Decimal = Decimal(0)
     overheads: Decimal = Decimal(0)
@@ -272,7 +273,8 @@ def summary(session: Session, tender_id: str) -> Summary:
             result.unpriced.append(boq.reference(item))
             continue
         result.priced += 1
-        result.waiting += rate.status == "proposed"
+        result.waiting += rate.status == REVIEWED
+        result.reviewing += rate.status == PROPOSED
         result.net += money(item.quantity * rate_of(rate))
     markups = current_markups(session, tender_id)
     if markups:
@@ -291,11 +293,13 @@ def summary(session: Session, tender_id: str) -> Summary:
 
 
 def waiting(session: Session, tender_id: str) -> int:
-    rows = (
-        session.scalars(select(Rate.id).where(Rate.tender_id == tender_id, Rate.status == "proposed")).all()
-        + session.scalars(select(Markups.id).where(Markups.tender_id == tender_id, Markups.status == "proposed")).all()
+    """Rates and markups the Tender Manager reviewed, waiting for the engineer: the rates the Estimate shows, so the
+    count and the page agree."""
+    rates = [current_rate(session, item.id) for item in boq.items(session, tender_id)]
+    markups = current_markups(session, tender_id)
+    return sum(r is not None and r.status == REVIEWED for r in rates) + (
+        markups is not None and markups.status == REVIEWED
     )
-    return len(rows)
 
 
 def library(session: Session, query: str = "") -> list[LibraryResource]:

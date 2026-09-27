@@ -52,9 +52,12 @@ Each domain module owns its models, its service functions and the agent tools th
   everything on the tender.
 - **Real conversation.** Agents talk only through `message`, `post_to_team` and `raise_concern`. The team room is
   exactly those records.
-- **Proposals and gates.** Agents never write domain records. `propose(kind, data)` runs the owning module's
-  validation, recomputes every number and stores the record as pending at its gate. Approval, by the engineer or by
-  the office in Fully autonomous mode, publishes it inside one transaction.
+- **Proposals, review and gates.** Agents never write domain records. Staff propose through each module's tools,
+  which validate and recompute every number, and the record starts as `proposed`: in the Tender Manager's review
+  queue (`quantix/review`). The Manager has no production tools. He accepts a record (`reviewed`, waiting at the
+  engineer's gate; or `office_approved` in Fully autonomous mode) or sends it back (`rejected`, with the correction
+  posted in the team room naming who made it). New proposals wake him. The engineer approves or sends back reviewed
+  records, and can reopen approved ones. The statuses and review fields live in `quantix/core/review.py`.
 - **Evidence.** A cited location must exist and must have been read in that agent's run.
 
 ## Quantity take-off

@@ -8,10 +8,12 @@ from quantix import tenders
 from quantix.api.tenders import DB
 from quantix.boq import records
 from quantix.boq.models import FACT_KINDS, BoqItem, Fact
+from quantix.core.review import UNDECIDED
 from quantix.documents.models import Document
 from quantix.estimate import records as estimate
 from quantix.office import records as office
 from quantix.office.models import ENGINEER
+from quantix.review import records as reviews
 from quantix.subcontract import records as subcontract
 from quantix.submission import records as submission
 from quantix.takeoff import records as takeoff
@@ -36,6 +38,8 @@ class ItemOut(BaseModel):
     status: str
     proposed_by: str
     reason: str | None
+    reviewed_by: str | None
+    review_note: str | None
     source: Source
 
 
@@ -46,6 +50,8 @@ class FactOut(BaseModel):
     value: str
     status: str
     proposed_by: str
+    reviewed_by: str | None
+    review_note: str | None
     source: Source
 
 
@@ -60,6 +66,7 @@ class DecisionIn(BaseModel):
 
 
 class Gates(BaseModel):
+    manager: int  # waiting for the Tender Manager's review
     boq: int
     facts: int
     takeoff: int
@@ -86,7 +93,7 @@ def _record(session: Session, model: type[BoqItem] | type[Fact], record_id: str)
     record = session.get(model, record_id)
     if record is None or tenders.get_tender(session, record.tender_id) is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    if record.status != "proposed":
+    if record.status not in UNDECIDED:
         raise HTTPException(status_code=400, detail="This has already been decided.")
     return record
 
@@ -106,6 +113,8 @@ def get_boq(tender_id: str, session: DB) -> Boq:
                 status=i.status,
                 proposed_by=i.proposed_by,
                 reason=i.reason,
+                reviewed_by=i.reviewed_by,
+                review_note=i.review_note,
                 source=_source(session, i),
             )
             for i in records.items(session, tender_id)
@@ -118,6 +127,8 @@ def get_boq(tender_id: str, session: DB) -> Boq:
                 value=f.value,
                 status=f.status,
                 proposed_by=f.proposed_by,
+                reviewed_by=f.reviewed_by,
+                review_note=f.review_note,
                 source=_source(session, f),
             )
             for f in records.facts(session, tender_id)
@@ -129,6 +140,7 @@ def get_boq(tender_id: str, session: DB) -> Boq:
 def gates(tender_id: str, session: DB) -> Gates:
     _tender(session, tender_id)
     return Gates(
+        manager=len(reviews.pending(session, tender_id)),
         **records.waiting_counts(session, tender_id),
         takeoff=takeoff.waiting(session, tender_id),
         pricing=estimate.waiting(session, tender_id),

@@ -37,6 +37,8 @@ class EnquiryOut(BaseModel):
     body: str
     status: str
     created_by: str
+    reviewed_by: str | None  # the Tender Manager, once he has reviewed it
+    review_note: str | None
 
 
 class QuotedCell(BaseModel):
@@ -88,6 +90,8 @@ class PackageOut(BaseModel):
     recommended_quote_id: str | None
     recommendation: str | None
     recommended_by: str | None
+    reviewed_by: str | None  # the Tender Manager's review of the recommendation
+    review_note: str | None
     selected_quote_id: str | None
     created_by: str
 
@@ -147,6 +151,8 @@ def _package(session: Session, package: Package) -> PackageOut:
                 body=enquiry.body,
                 status=enquiry.status,
                 created_by=enquiry.created_by,
+                reviewed_by=enquiry.reviewed_by,
+                review_note=enquiry.review_note,
             )
         )
     return PackageOut(
@@ -170,6 +176,8 @@ def _package(session: Session, package: Package) -> PackageOut:
         recommended_quote_id=package.recommended_quote_id,
         recommendation=package.recommendation,
         recommended_by=package.recommended_by,
+        reviewed_by=package.reviewed_by,
+        review_note=package.review_note,
         selected_quote_id=package.selected_quote_id,
         created_by=package.created_by,
     )

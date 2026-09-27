@@ -49,10 +49,15 @@ class Package(Base):
     recommended_quote_id: Mapped[str | None] = mapped_column(String(32))
     recommendation: Mapped[str | None] = mapped_column(Text)
     recommended_by: Mapped[str | None] = mapped_column(String(32))
+    recommended_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     selected_quote_id: Mapped[str | None] = mapped_column(String(32))
     created_by: Mapped[str] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
     decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # the Tender Manager's review of the recommendation
+    reviewed_by: Mapped[str | None] = mapped_column(String(32))  # the Tender Manager, once he has reviewed it
+    reviewed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    review_note: Mapped[str | None] = mapped_column(Text)
 
 
 class Enquiry(Base):
@@ -65,10 +70,13 @@ class Enquiry(Base):
     company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"))
     subject: Mapped[str] = mapped_column(String(300))
     body: Mapped[str] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(String(20), default="draft")  # draft | sent
+    status: Mapped[str] = mapped_column(String(20), default="draft")  # draft | sent | rejected
     created_by: Mapped[str] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
     sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    reviewed_by: Mapped[str | None] = mapped_column(String(32))  # the Tender Manager, once he has reviewed it
+    reviewed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    review_note: Mapped[str | None] = mapped_column(Text)
 
 
 class Quote(Base):

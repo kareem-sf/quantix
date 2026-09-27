@@ -29,8 +29,10 @@ const scaled: Sheet = {
     line: [],
     length_m: 40,
     dimension: "40.00",
-    status: "proposed",
+    status: "reviewed",
     proposed_by: "s2",
+    reviewed_by: "s1",
+    review_note: "Checked against the title block.",
   },
 };
 const wall: BoqItem = {
@@ -43,6 +45,8 @@ const wall: BoqItem = {
   status: "approved",
   proposed_by: "s2",
   reason: null,
+  reviewed_by: "s1",
+  review_note: null,
   source: { document_id: "d2", document_name: "Bill.xlsx", page: 1, quote: "" },
 };
 const doors: Measurement = {
@@ -60,8 +64,10 @@ const doors: Measurement = {
   multiplier: null,
   quantity: "3",
   boq_item: "7.1",
-  status: "proposed",
+  status: "reviewed",
   proposed_by: "s2",
+  reviewed_by: "s1",
+  review_note: "Three doors on the plan.",
 };
 
 /** jsdom has no layout: give the drawing the page's own size so clicks land on page points. */

@@ -34,6 +34,8 @@ class Staff(Base):
     status: Mapped[str] = mapped_column(String(20), default="active")  # active | released
     now: Mapped[str | None] = mapped_column(String(300))  # what they are doing, from their real tool calls
     last_read: Mapped[int] = mapped_column(Integer, default=0)  # the newest message id they have been shown
+    # the Tender Manager: when he last saw his review queue, so new proposals wake him
+    reviewed_up_to: Mapped[datetime | None] = mapped_column(UTCDateTime)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
 
     @property

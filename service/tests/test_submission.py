@@ -7,7 +7,7 @@ import openpyxl
 import pytest
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 from test_documents import make_pdf, read_all, upload
-from test_office import scripted, wait_for
+from test_office import manager_accepts, scripted, wait_for
 
 from quantix import settings
 from quantix.boq import records as boq
@@ -65,8 +65,9 @@ def tender(client):
             )
             for n, (i, d, u, q) in enumerate(rows, start=2)
         ]
-        boq.propose_items(session, tender_id, layla, lines, False)
-        boq.approve_all_items(session, tender_id)
+        boq.propose_items(session, tender_id, layla, lines)
+        for approved in boq.items(session, tender_id):  # the engineer approved the BOQ
+            boq.approve(session, approved)
         note = "Own rate from outputs and current prices."
         for item, rate in (("3.1", "18.50"), ("4.3", "3488.00")):
             estimate.propose_rate(
@@ -136,15 +137,19 @@ def test_drafts_wait_for_review_and_the_engineer_marks_what_they_provide(client,
     rows = {r["title"]: r for r in client.get(f"/tenders/{tender_id}/submission").json()["requirements"]}
     method, bond = rows["Method statement for concrete works"], rows["Bid bond, 1% of the tender price"]
     assert (method["state"], method["draft"]["id"], method["draft"]["body"]) == (
-        "review",
+        "manager",  # with the Tender Manager for review first
         second.id,
         "Pour sequence.\n\nCuring for 7 days.",
     )
+    assert client.get(f"/tenders/{tender_id}/gates").json()["submission"] == 0
+    manager_accepts(client, tender_id)
+    method = client.get(f"/tenders/{tender_id}/submission").json()["requirements"][1]
+    assert (method["state"], method["draft"]["review_note"]) == ("review", "Checked it against its source.")
     assert client.get(f"/tenders/{tender_id}/gates").json()["submission"] == 1
 
     client.post(f"/drafts/{second.id}/decision", json={"approve": False, "reason": "Add the pour sizes."})
-    chat = client.get(f"/tenders/{tender_id}/messages", params={"channel": layla}).json()
-    assert chat[-1]["text"] == "I sent back the draft “Method statement”: Add the pour sizes."
+    team = client.get(f"/tenders/{tender_id}/messages", params={"channel": "team"}).json()
+    assert team[-1]["text"] == "Layla, I sent back the draft “Method statement”: Add the pour sizes."
     with client.app.state.sessions() as session:
         third = submission.draft(
             session, session.get(submission.Requirement, method["id"]), layla, "Method statement", "v3"
@@ -253,7 +258,7 @@ def test_the_package_is_built_in_the_client_format_with_markups_in_the_rates(cli
             "Technical",
             "Method statement for concrete works",
             "ITT.pdf, page 1",
-            "Ready · approved by the office, not reviewed",
+            "Ready · approved by the office after the Tender Manager's review, not reviewed by you",
             "Method statement.docx",
         ),
     ]
@@ -319,9 +324,9 @@ def test_staff_build_the_checklist_through_their_tools(client, tender, tmp_path)
     wait_for(lambda o: len(replies) == len(steps), client, tender_id)
     assert replies == [
         "1 requirements added to the checklist.",
-        "The draft is waiting for the engineer.",
+        "The draft is with the Tender Manager for review.",
         "Rates will go in column E and amounts in column F.",
-        "- Technical · Method statement for concrete works: review",
+        "- Technical · Method statement for concrete works: manager",
     ]
 
 

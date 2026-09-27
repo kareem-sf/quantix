@@ -31,8 +31,10 @@ to do the work, not a tool to operate.
 
 ## The office
 
-- **Tender Manager.** One per tender. Leads the work, hires and briefs staff, reviews their output and brings
-  decisions to the engineer. The engineer can adjust its personality.
+- **Tender Manager.** One per tender. Leads the work, hires and briefs staff and brings decisions to the
+  engineer. He never produces records himself: everything his staff propose comes to his review queue first, and
+  he accepts it, saying what he checked, or sends it back, saying what to correct. Only what he accepted reaches
+  the engineer's gates. The engineer can adjust his personality.
 - **Staff.** Hired by the Manager for this tender's actual needs, with a generated name, role, discipline,
   experience, background, temperament, speaking style and professional opinions, and a locally drawn portrait.
   They speak in their own voice, disagree, raise concerns and push back on the Manager or the engineer.
@@ -40,8 +42,9 @@ to do the work, not a tool to operate.
   room where staff and the Manager brief, ask, hand over and review each other's work.
 - **Presence.** Each person shows their current activity, drawn from what they are really doing.
 - **Autonomy.** Default: the office works through to a finished tender and stops at gates and for real questions.
-  Settings → Fully autonomous: the office approves its own gates, and each of those decisions is marked "office-approved,
-  not reviewed". Export and release always stay with the engineer.
+  Settings → Fully autonomous: the Tender Manager's review approves the gates, and each of those decisions is marked
+  "approved by the office, not reviewed by you"; the engineer can reopen any of them with a reason. Export and release
+  always stay with the engineer.
 
 ## Gates (engineer in the loop)
 

@@ -3,15 +3,17 @@ import { Link, useParams, useSearchParams } from "react-router";
 import { money, quantity } from "../estimate/queries";
 import { Face } from "../office/Face";
 import { firstName, useOffice, type Staff } from "../office/queries";
+import { ReviewNote, WITH_MANAGER } from "../review/Review";
 import { useChoose, useMarkSent, usePackages, type Package } from "./queries";
 
 /** Where a package stands, in the engineer's terms. */
 function packageState(p: Package): [text: string, needsYou: boolean] {
   const chosen = p.quotes.find((q) => q.id === p.selected_quote_id);
   if (chosen) return [`${chosen.company} chosen`, false];
-  if (p.recommended_quote_id) return ["Levelled · needs you", true];
-  const drafts = p.enquiries.filter((e) => e.status === "draft").length;
+  if (p.recommended_quote_id) return p.reviewed_by ? ["Levelled · needs you", true] : ["Levelled · with the Manager", false];
+  const drafts = p.enquiries.filter((e) => e.status === "draft" && e.reviewed_by).length;
   if (drafts) return [`${drafts} enquiry ${drafts === 1 ? "draft" : "drafts"} to send`, true];
+  if (p.enquiries.some((e) => e.status === "draft")) return ["Enquiries · with the Manager", false];
   if (p.quotes.length) return [`${p.quotes.length} of ${p.enquiries.length || p.quotes.length} quotes in`, false];
   return ["Waiting for quotes", false];
 }
@@ -203,6 +205,11 @@ function Choice({ tenderId, pkg, people }: { tenderId: string; pkg: Package; peo
               {adviser ? `${firstName(adviser)} recommends` : "Recommended:"} {recommended.company}
             </span>
             <span className="text-[#27272A]">{pkg.recommendation}</span>
+            {pkg.reviewed_by ? (
+              <ReviewNote reviewedBy={pkg.reviewed_by} note={pkg.review_note} people={people} />
+            ) : (
+              <span className="text-ink-2">{WITH_MANAGER}</span>
+            )}
           </span>
         </div>
       )}
@@ -216,8 +223,14 @@ function Choice({ tenderId, pkg, people }: { tenderId: string; pkg: Package; peo
               <div key={e.id} className="flex flex-col border-b border-subtle py-2">
                 <button onClick={() => setOpen(open === e.id ? null : e.id)} className="flex justify-between text-left">
                   <span>{e.company}</span>
-                  <span className={e.status === "draft" && !quoted ? "text-attention" : "text-ink-3"}>
-                    {quoted ? "quoted" : e.status === "draft" ? "draft to send" : "no reply yet"}
+                  <span className={e.status === "draft" && e.reviewed_by && !quoted ? "text-attention" : "text-ink-3"}>
+                    {quoted
+                      ? "quoted"
+                      : e.status !== "draft"
+                        ? "no reply yet"
+                        : e.reviewed_by
+                          ? "draft to send"
+                          : "with the Manager"}
                   </span>
                 </button>
                 {open === e.id && (
@@ -238,7 +251,7 @@ function Choice({ tenderId, pkg, people }: { tenderId: string; pkg: Package; peo
                       <button onClick={() => void navigator.clipboard?.writeText(e.body)} className="text-ink-2">
                         Copy
                       </button>
-                      {e.status === "draft" && (
+                      {e.status === "draft" && e.reviewed_by && (
                         <button onClick={() => sent.mutate(e.id)} className="text-ink-2">
                           Mark as sent
                         </button>

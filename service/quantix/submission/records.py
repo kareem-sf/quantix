@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from quantix.boq import records as boq
-from quantix.boq.models import APPROVED
+from quantix.core.review import APPROVED, LIVE, PROPOSED, REVIEWED
 from quantix.documents import library
 from quantix.documents.evidence import check_quote
 from quantix.office import records as office
@@ -133,11 +133,11 @@ def add_requirements(session: Session, tender_id: str, by: str, items: list[Requ
 
 
 def current_draft(session: Session, requirement_id: str) -> Draft | None:
-    query = select(Draft).where(Draft.requirement_id == requirement_id, Draft.status.in_(("proposed", *APPROVED)))
+    query = select(Draft).where(Draft.requirement_id == requirement_id, Draft.status.in_(LIVE))
     return session.scalars(query.order_by(Draft.created_at.desc())).first()
 
 
-def draft(session: Session, requirement: Requirement, by: str, title: str, body: str, status="proposed") -> Draft:
+def draft(session: Session, requirement: Requirement, by: str, title: str, body: str, status=PROPOSED) -> Draft:
     if not body.strip():
         raise ValueError("The draft is empty.")
     current = current_draft(session, requirement.id)
@@ -146,9 +146,7 @@ def draft(session: Session, requirement: Requirement, by: str, title: str, body:
             f"The engineer approved “{current.title}” for this requirement; a new draft doesn't replace it. "
             "If you think it needs changing, say why with raise_concern."
         )
-    for older in session.scalars(
-        select(Draft).where(Draft.requirement_id == requirement.id, Draft.status.in_(("proposed", *APPROVED)))
-    ):
+    for older in session.scalars(select(Draft).where(Draft.requirement_id == requirement.id, Draft.status.in_(LIVE))):
         older.status = "replaced"
     new = Draft(
         tender_id=requirement.tender_id,
@@ -163,23 +161,34 @@ def draft(session: Session, requirement: Requirement, by: str, title: str, body:
     return new
 
 
-def decide(session: Session, record: Draft, approve: bool, reason: str | None = None) -> None:
-    record.status = "approved" if approve else "rejected"
-    record.reason = reason
-    record.decided_at = datetime.now(UTC)
-    if not approve and record.proposed_by != ENGINEER:
-        text = f"I sent back the draft “{record.title}”" + (f": {reason}" if reason else ".")
-        office.post(session, record.tender_id, ENGINEER, record.proposed_by, text)
+def label(session: Session, record: Draft) -> str:
+    """How a message names the record."""
+    return f"the draft “{record.title}”"
+
+
+def approve(session: Session, record: Draft, status: str = "approved") -> None:
+    """Approved by the engineer, or by a fully autonomous office once the Tender Manager has reviewed it."""
+    record.status, record.decided_at = status, datetime.now(UTC)
+
+
+def decide(session: Session, record: Draft, approve_it: bool, reason: str | None = None) -> None:
+    if approve_it:
+        approve(session, record)
+    else:
+        office.send_back(session, record.tender_id, record, label(session, record), reason, ENGINEER)
 
 
 def state(session: Session, requirement: Requirement) -> str:
-    """ready, review (a draft waits for the engineer) or missing."""
+    """ready, review (a draft the Tender Manager reviewed waits for the engineer), manager (a draft is with the
+    Manager for review) or missing."""
     if requirement.ready_note is not None or requirement.file_name:
         return "ready"
     current = current_draft(session, requirement.id)
     if current is None:
         return "missing"
-    return "review" if current.status == "proposed" else "ready"
+    if current.status in APPROVED:
+        return "ready"
+    return "review" if current.status == REVIEWED else "manager"
 
 
 def attachments_dir(home: Path, requirement: Requirement) -> Path:
@@ -200,8 +209,8 @@ def attach(home: Path, requirement: Requirement, name: str, content: bytes) -> N
 
 
 def waiting(session: Session, tender_id: str) -> int:
-    """Drafts for the engineer to review."""
-    return len(session.scalars(select(Draft.id).where(Draft.tender_id == tender_id, Draft.status == "proposed")).all())
+    """Drafts the Tender Manager reviewed, for the engineer to decide."""
+    return len(session.scalars(select(Draft.id).where(Draft.tender_id == tender_id, Draft.status == REVIEWED)).all())
 
 
 _CELL = r"\b{}(\d+)="

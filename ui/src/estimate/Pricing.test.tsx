@@ -24,6 +24,8 @@ const rebar: BoqItem = {
   status: "approved",
   proposed_by: "s2",
   reason: null,
+  reviewed_by: "s1",
+  review_note: null,
   source: { document_id: "d1", document_name: "Bill.xlsx", page: 1, quote: "A2=4.3 | B2=Slab reinforcement" },
 };
 const priced: Priced = {
@@ -53,8 +55,10 @@ const priced: Priced = {
     quote: "Rebar B500B cut and bent 2,300.00",
     library_id: null,
     note: "Steel price from Al-Rajhi’s quote of 17 September, excluding delivery.",
-    status: "proposed",
+    status: "reviewed",
     proposed_by: "s3",
+    reviewed_by: "s1",
+    review_note: "Rate matches the quote.",
   },
 };
 const summary: Summary = {
@@ -62,6 +66,7 @@ const summary: Summary = {
   priced: 1,
   items: 1,
   waiting: 1,
+  reviewing: 0,
   net: "98012.80",
   preliminaries: "7841.02",
   overheads: "5292.69",
@@ -91,6 +96,23 @@ describe("Pricing", () => {
     await waitFor(() => expect(service.state.decided).toEqual([{ id: "r1", approve: true, reason: null, save_to_library: true }]));
   });
 
+  it("reopens a rate the office approved after the Manager's review, with the reason", async () => {
+    const approved = { ...priced, rate: { ...priced.rate!, status: "office_approved" } };
+    const rania = { ...priya, id: "s1", name: "Rania Farouk", role: "Tender Manager", is_manager: true };
+    const service = fakeService({ tenders: [tender], staff: [rania, priya], items: [rebar], priced: [approved], summary });
+    openApp("/tenders/t1/estimate?item=i43");
+
+    const panel = await screen.findByRole("complementary", { name: "Item 4.3" });
+    expect(await within(panel).findByText("Approved by the office")).toBeInTheDocument();
+    expect(within(panel).getByText(/Reviewed by Rania/)).toHaveTextContent("Reviewed by Rania: Rate matches the quote.");
+    await userEvent.click(within(panel).getByRole("button", { name: "Reopen" }));
+    await userEvent.type(within(panel).getByLabelText("Why it needs doing again"), "Delivery is excluded.");
+    await userEvent.click(within(panel).getByRole("button", { name: "Send" }));
+    await waitFor(() =>
+      expect(service.state.reopened).toEqual([{ kind: "rate", id: "r1", reason: "Delivery is excluded." }]),
+    );
+  });
+
   it("summarises the price with markups and VAT", async () => {
     fakeService({
       tenders: [tender],
@@ -107,8 +129,10 @@ describe("Pricing", () => {
         profit: "0.07",
         adjustment: "0.00",
         note: "Company markups for schools.",
-        status: "proposed",
-        proposed_by: "s1",
+        status: "reviewed",
+        proposed_by: "s3",
+        reviewed_by: "s1",
+        review_note: "Staff for the programme's months.",
       },
     });
     openApp("/tenders/t1/estimate?view=summary");

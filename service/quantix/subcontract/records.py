@@ -220,6 +220,8 @@ def recommend(session: Session, package: Package, by: str, company: Company, rea
     if quote is None:
         raise ValueError(f"There is no quote from {company.name} for {package.name}. Record it first.")
     package.recommended_quote_id, package.recommendation, package.recommended_by = quote.id, reason.strip(), by
+    package.recommended_at = datetime.now(UTC)
+    package.reviewed_by = package.reviewed_at = package.review_note = None  # a new recommendation is reviewed again
     return quote
 
 
@@ -232,7 +234,7 @@ def select_quote(session: Session, package: Package, quote: Quote, status: str =
             session,
             package.tender_id,
             quote.proposed_by,
-            item.item,
+            boq.reference(item),  # the item's own bill, when bills share item numbers
             "quote",
             f"{'Subcontract' if package.kind == 'subcontract' else 'Supply'}: {company.name}",
             unit_rate=Decimal(line["rate"]),
@@ -252,5 +254,7 @@ def select_quote(session: Session, package: Package, quote: Quote, status: str =
 
 
 def waiting(session: Session, tender_id: str) -> int:
-    """Packages with a recommendation the engineer hasn't acted on."""
-    return sum(1 for p in packages(session, tender_id) if p.recommended_quote_id and not p.selected_quote_id)
+    """Recommendations the Tender Manager reviewed that the engineer hasn't acted on."""
+    return sum(
+        1 for p in packages(session, tender_id) if p.recommended_quote_id and p.reviewed_by and not p.selected_quote_id
+    )

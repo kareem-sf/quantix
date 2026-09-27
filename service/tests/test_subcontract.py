@@ -4,7 +4,7 @@ import pytest
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 from test_documents import make_pdf, read_all, upload
 from test_estimate import bill
-from test_office import scripted, wait_for
+from test_office import manager_accepts, scripted, wait_for
 
 from quantix import settings
 from quantix.boq import records as boq
@@ -47,8 +47,9 @@ def tender(client):
             )
             for n, (i, d, u, q) in enumerate(rows, start=1)
         ]
-        boq.propose_items(session, tender_id, omar, lines, False)
-        boq.approve_all_items(session, tender_id)
+        boq.propose_items(session, tender_id, omar, lines)
+        for approved in boq.items(session, tender_id):  # the engineer approved the BOQ
+            boq.approve(session, approved)
         for item, rate in (("3.1", "18.50"), ("6.3", "38.00")):
             note = "Our own rate from outputs and current prices."
             estimate.propose_rate(session, tender_id, omar.id, item, "estimate", note, unit_rate=Decimal(rate))
@@ -150,6 +151,8 @@ def test_the_engineer_chooses_and_the_quoted_rates_enter_the_estimate(client, te
             session, package, tender[2], subcontract.find_company(session, "Najd Contracting"), "Cheapest levelled."
         )
         session.commit()
+    assert client.get(f"/tenders/{tender_id}/gates").json()["subcontract"] == 0  # the Tender Manager reviews it first
+    manager_accepts(client, tender_id)
     assert client.get(f"/tenders/{tender_id}/gates").json()["subcontract"] == 1
 
     [package] = client.get(f"/tenders/{tender_id}/packages").json()
@@ -280,7 +283,8 @@ def test_staff_level_quotes_through_their_tools_and_an_autonomous_office_chooses
         "1. Najd Contracting: quoted 20460.00, exclusions 0, levelled 57700.00 (our rate used for 6.3)\n"
         "2. Gulf Groundworks: quoted 55380.00, exclusions 5000, levelled 60380.00"
     )
-    assert replies[7] == "The office has taken Najd Contracting's quote; its rates are in the estimate."
+    assert replies[7] == "Your recommendation is with the Tender Manager for review."
+    assert manager_accepts(client, tender_id, autonomous=True) == "Accepted 4 (approved by the office). Sent back 0."
     rows = {i["item"]: i for i in client.get(f"/tenders/{tender_id}/estimate").json()["items"]}
     assert (rows["3.1"]["rate"]["status"], rows["3.1"]["amount"]) == ("office_approved", "20460.00")
     assert rows["6.3"]["rate"]["basis"] == "estimate"  # the gap stays on our own rate

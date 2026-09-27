@@ -7,7 +7,7 @@ from sqlalchemy import ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from quantix.core.db import Base, UTCDateTime
-from quantix.estimate.models import Reviewed
+from quantix.core.review import Reviewed
 
 
 def _id() -> str:
@@ -35,6 +35,9 @@ class Requirement(Base):
     ready_note: Mapped[str | None] = mapped_column(Text)  # set when the engineer marks it ready themselves
     file_name: Mapped[str | None] = mapped_column(String(300))  # a file the engineer attached
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
+    reviewed_by: Mapped[str | None] = mapped_column(String(32))  # the Tender Manager, once he has reviewed it
+    reviewed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    review_note: Mapped[str | None] = mapped_column(Text)
 
 
 class Draft(Reviewed, Base):

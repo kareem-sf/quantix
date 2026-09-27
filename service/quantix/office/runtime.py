@@ -4,6 +4,7 @@ import asyncio
 import logging
 import threading
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic_ai.models import Model
@@ -17,6 +18,7 @@ from quantix.documents import library
 from quantix.office import agents, records
 from quantix.office.models import ENGINEER, TEAM, Message, Staff
 from quantix.office.tools import Stopped, Turn
+from quantix.review import records as reviews
 from quantix.tenders import Tender
 
 log = logging.getLogger("quantix.office")
@@ -163,7 +165,9 @@ class Office:
             if member.status == "released":  # released earlier in this pass
                 return False
             new = records.inbox(session, member)
-            if not new and staff_id not in self._again:
+            # the Tender Manager also wakes for work his staff put in his review queue
+            to_review = member.is_manager and reviews.has_new(session, tender_id, member.reviewed_up_to)
+            if not new and not to_review and staff_id not in self._again:
                 return False
             self._again.discard(staff_id)
             history = self._carry.pop(staff_id, None)
@@ -171,6 +175,8 @@ class Office:
             if history is not None:
                 prompt = f"{CARRY_ON}\n\n{prompt}"
             records.mark_read(session, member)
+            if member.is_manager:  # the briefing showed him his queue
+                member.reviewed_up_to = datetime.now(UTC)
             session.commit()
             session.expunge(member)
         autonomous = settings.load(self.home)["office_mode"] == "autonomous"

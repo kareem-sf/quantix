@@ -933,6 +933,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tenders/{tender_id}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Review Queue
+         * @description What the staff proposed that the Tender Manager hasn't reviewed yet.
+         */
+        get: operations["review_queue_tenders__tender_id__review_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/records/{kind}/{record_id}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reopen
+         * @description The engineer sends back work the office, or the engineer, already approved.
+         */
+        post: operations["reopen_records__kind___record_id__reopen_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1149,6 +1189,10 @@ export interface components {
             status: string;
             /** Proposed By */
             proposed_by: string;
+            /** Reviewed By */
+            reviewed_by: string | null;
+            /** Review Note */
+            review_note: string | null;
         };
         /** EnquiryOut */
         EnquiryOut: {
@@ -1166,6 +1210,10 @@ export interface components {
             status: string;
             /** Created By */
             created_by: string;
+            /** Reviewed By */
+            reviewed_by: string | null;
+            /** Review Note */
+            review_note: string | null;
         };
         /** EstimateOut */
         EstimateOut: {
@@ -1222,10 +1270,16 @@ export interface components {
             status: string;
             /** Proposed By */
             proposed_by: string;
+            /** Reviewed By */
+            reviewed_by: string | null;
+            /** Review Note */
+            review_note: string | null;
             source: components["schemas"]["Source"];
         };
         /** Gates */
         Gates: {
+            /** Manager */
+            manager: number;
             /** Boq */
             boq: number;
             /** Facts */
@@ -1264,6 +1318,10 @@ export interface components {
             proposed_by: string;
             /** Reason */
             reason: string | null;
+            /** Reviewed By */
+            reviewed_by: string | null;
+            /** Review Note */
+            review_note: string | null;
             source: components["schemas"]["Source"];
         };
         /** LibraryIn */
@@ -1349,6 +1407,10 @@ export interface components {
             status: string;
             /** Proposed By */
             proposed_by: string;
+            /** Reviewed By */
+            reviewed_by: string | null;
+            /** Review Note */
+            review_note: string | null;
         };
         /** MeasurementIn */
         MeasurementIn: {
@@ -1398,6 +1460,10 @@ export interface components {
             status: string;
             /** Proposed By */
             proposed_by: string;
+            /** Reviewed By */
+            reviewed_by: string | null;
+            /** Review Note */
+            review_note: string | null;
         };
         /** MessageIn */
         MessageIn: {
@@ -1496,6 +1562,10 @@ export interface components {
             recommendation: string | null;
             /** Recommended By */
             recommended_by: string | null;
+            /** Reviewed By */
+            reviewed_by: string | null;
+            /** Review Note */
+            review_note: string | null;
             /** Selected Quote Id */
             selected_quote_id: string | null;
             /** Created By */
@@ -1623,6 +1693,10 @@ export interface components {
             status: string;
             /** Proposed By */
             proposed_by: string;
+            /** Reviewed By */
+            reviewed_by: string | null;
+            /** Review Note */
+            review_note: string | null;
         };
         /** ReadyIn */
         ReadyIn: {
@@ -1633,6 +1707,11 @@ export interface components {
              * @default
              */
             note: string;
+        };
+        /** ReopenIn */
+        ReopenIn: {
+            /** Reason */
+            reason: string;
         };
         /** RequirementIn */
         RequirementIn: {
@@ -1659,6 +1738,8 @@ export interface components {
             quote: string | null;
             /** Added By */
             added_by: string;
+            /** Reviewed By */
+            reviewed_by: string | null;
             /** State */
             state: string;
             draft: components["schemas"]["DraftOut"] | null;
@@ -1724,6 +1805,10 @@ export interface components {
             status: string;
             /** Proposed By */
             proposed_by: string;
+            /** Reviewed By */
+            reviewed_by: string | null;
+            /** Review Note */
+            review_note: string | null;
         };
         /** SearchHit */
         SearchHit: {
@@ -1812,6 +1897,8 @@ export interface components {
             items: number;
             /** Waiting */
             waiting: number;
+            /** Reviewing */
+            reviewing: number;
             /** Net */
             net: string;
             /** Preliminaries */
@@ -1906,6 +1993,19 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** Waiting */
+        Waiting: {
+            /** Ref */
+            ref: string;
+            /** Kind */
+            kind: string;
+            /** Record Id */
+            record_id: string;
+            /** Producer */
+            producer: string;
+            /** Line */
+            line: string;
         };
     };
     responses: never;
@@ -4031,6 +4131,75 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_queue_tenders__tender_id__review_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Waiting"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reopen_records__kind___record_id__reopen_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                kind: string;
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReopenIn"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             204: {

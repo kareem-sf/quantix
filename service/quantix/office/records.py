@@ -50,6 +50,22 @@ def post(session: Session, tender_id: str, sender: str, channel: str, text: str,
     return message
 
 
+def send_back(session: Session, tender_id: str, record: Any, what: str, reason: str | None, by: str) -> None:
+    """Send a proposal back to whoever made it. The note goes to the team room, naming them, so they redo it and the
+    Tender Manager sees what came back. `by` is the engineer, or the Manager reviewing his staff's work."""
+    now = datetime.now(UTC)
+    record.status, record.reason = "rejected", reason
+    if by == ENGINEER:
+        record.decided_at = now
+    else:
+        record.reviewed_by, record.reviewed_at, record.review_note = by, now, reason
+    if record.proposed_by == ENGINEER:
+        return
+    person = session.get(Staff, record.proposed_by)
+    to = f"{person.first_name}, " if person else ""
+    post(session, tender_id, by, TEAM, f"{to}I sent back {what}" + (f": {reason}" if reason else "."))
+
+
 def messages(session: Session, tender_id: str, channel: str, limit: int = 200) -> list[Message]:
     query = (
         select(Message)

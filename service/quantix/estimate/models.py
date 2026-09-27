@@ -9,6 +9,7 @@ from sqlalchemy import JSON, Date, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from quantix.core.db import Base, UTCDateTime
+from quantix.core.review import Reviewed
 from quantix.tenders import LOCAL_OWNER
 
 
@@ -18,15 +19,6 @@ def _id() -> str:
 
 def _now() -> datetime:
     return datetime.now(UTC)
-
-
-class Reviewed:
-    # proposed | approved | office_approved | rejected | replaced
-    status: Mapped[str] = mapped_column(String(20), default="proposed")
-    proposed_by: Mapped[str] = mapped_column(String(32))  # a staff id, or "engineer"
-    reason: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
-    decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
 
 class LibraryResource(Base):

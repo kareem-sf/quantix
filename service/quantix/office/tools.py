@@ -5,6 +5,7 @@ import threading
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from quantix.documents.models import Document
 from quantix.estimate import records as estimate
 from quantix.office import records
 from quantix.office.models import TEAM, Staff
+from quantix.review import records as reviews
 from quantix.subcontract import records as subcontract
 from quantix.submission import records as submission
 from quantix.takeoff import records as takeoff
@@ -297,7 +299,7 @@ def propose_boq_items(ctx: RunContext[Turn], items: list[boq.ItemIn]) -> str:
     """Add BOQ lines exactly as the client's BOQ states them, up to 40 at a time, each with the page it is on and a
     quote that includes the item number and the quantity. Lines that don't check out come back with the reason."""
     with _working(ctx, f"Entering {len(items)} BOQ items") as (session, me):
-        return boq.propose_items(session, ctx.deps.tender_id, me, items[:40], ctx.deps.autonomous)
+        return boq.propose_items(session, ctx.deps.tender_id, me, items[:40])
 
 
 def withdraw_boq_items(ctx: RunContext[Turn], items: list[str], reason: str) -> str:
@@ -324,8 +326,8 @@ def propose_fact(ctx: RunContext[Turn], kind: str, value: str, document_id: str,
     """Record a tender fact pricing depends on, for the engineer's approval: kind is method_of_measurement,
     currency or vat. The quote must be on the page."""
     with _working(ctx, f"Recording the {FACT_KINDS.get(kind, kind).lower()}") as (session, me):
-        boq.propose_fact(session, ctx.deps.tender_id, me, kind, value, document_id, page, quote, ctx.deps.autonomous)
-    return "Recorded." if ctx.deps.autonomous else "Recorded for the engineer's approval."
+        boq.propose_fact(session, ctx.deps.tender_id, me, kind, value, document_id, page, quote)
+    return "Recorded for the Tender Manager's review."
 
 
 VIEW_WIDTH = 1600  # view_page images are this many pixels wide; takeoff tools use the same pixels
@@ -380,10 +382,7 @@ def set_scale(
     with _working(ctx, "Setting the scale of a drawing") as (session, me):
         factor = _points(session, ctx.deps.tender_id, document_id, page)
         line = _snapped(ctx, session, document_id, page, [from_xy, to_xy], factor)
-        status = "office_approved" if ctx.deps.autonomous else "proposed"
-        scale = takeoff.set_scale(
-            session, ctx.deps.tender_id, me.id, document_id, page, line, length_m, dimension_text, status
-        )
+        scale = takeoff.set_scale(session, ctx.deps.tender_id, me.id, document_id, page, line, length_m, dimension_text)
         return (
             f"Scale set: 1 metre is {1 / scale.metres_per_point / factor:.1f} view_page pixels, about "
             f"1:{takeoff.drawing_ratio(scale.metres_per_point):,} at the sheet's printed size. Check that against the "
@@ -411,7 +410,6 @@ def measure(
         return BLIND
     with _working(ctx, f"Measuring {label}") as (session, me):
         factor = _points(session, ctx.deps.tender_id, document_id, page)
-        status = "office_approved" if ctx.deps.autonomous else "proposed"
         m = takeoff.measure(
             session,
             ctx.deps.tender_id,
@@ -424,7 +422,6 @@ def measure(
             unit,
             Decimal(str(multiplier_m)) if multiplier_m is not None else None,
             boq_item,
-            status,
         )
         q = takeoff.quantity(session, m)
         item = session.get(BoqItem, m.boq_item_id) if m.boq_item_id else None
@@ -487,7 +484,6 @@ def propose_rate(
     the document, page and the quoted line), "library" (give the library_id) or "estimate" (your own judgement:
     put the outputs, prices and assumptions in the note). Quantix computes the rate and the amount."""
     with _working(ctx, f"Pricing item {boq_item}") as (session, me):
-        status = "office_approved" if ctx.deps.autonomous else "proposed"
         rate = estimate.propose_rate(
             session,
             ctx.deps.tender_id,
@@ -501,9 +497,8 @@ def propose_rate(
             page,
             quote,
             library_id,
-            status,
         )
-        return f"Item {boq_item} priced at {estimate.rate_of(rate)} per unit."
+        return f"Item {boq_item} priced at {estimate.rate_of(rate)} per unit, for the Tender Manager's review."
 
 
 def propose_markups(
@@ -519,12 +514,9 @@ def propose_markups(
     and profit as fractions (0.06 is 6%), and a lump-sum adjustment. Explain your assumptions in the note.
     Quantix totals the preliminaries and computes the price."""
     with _working(ctx, "Proposing the markups") as (session, me):
-        status = "office_approved" if ctx.deps.autonomous else "proposed"
-        estimate.propose_markups(
-            session, ctx.deps.tender_id, me.id, preliminaries, overheads, profit, adjustment, note, status
-        )
+        estimate.propose_markups(session, ctx.deps.tender_id, me.id, preliminaries, overheads, profit, adjustment, note)
         total = estimate.summary(session, ctx.deps.tender_id).total
-    return f"Proposed. The price with these markups is {total}."
+    return f"Proposed for the Tender Manager's review. The price with these markups is {total}."
 
 
 def estimate_summary(ctx: RunContext[Turn]) -> str:
@@ -532,7 +524,8 @@ def estimate_summary(ctx: RunContext[Turn]) -> str:
     with _working(ctx, "Checking the estimate") as (session, _):
         s = estimate.summary(session, ctx.deps.tender_id)
     lines = [
-        f"{s.priced} of {s.items} items priced ({s.waiting} waiting for the engineer).",
+        f"{s.priced} of {s.items} items priced ({s.reviewing} with the Tender Manager, {s.waiting} waiting for the "
+        "engineer).",
         f"Net {s.net} {s.currency}; preliminaries {s.preliminaries}; overheads {s.overheads}; profit {s.profit}; "
         f"adjustment {s.adjustment}; total {s.total}.",
     ]
@@ -624,14 +617,11 @@ def levelling(ctx: RunContext[Turn], package: str) -> str:
 
 def recommend_quote(ctx: RunContext[Turn], package: str, company: str, reason: str) -> str:
     """Recommend which quote to take, and why: price after levelling, gaps, exclusions and your view of the company.
-    The engineer chooses."""
+    The Tender Manager reviews it; the engineer chooses."""
     with _working(ctx, f"Recommending a quote for {package}") as (session, me):
         found = subcontract.find_package(session, ctx.deps.tender_id, package)
-        quote = subcontract.recommend(session, found, me.id, subcontract.find_company(session, company), reason)
-        if ctx.deps.autonomous:
-            subcontract.select_quote(session, found, quote, status="office_approved")
-            return f"The office has taken {company}'s quote; its rates are in the estimate."
-    return "Your recommendation is waiting for the engineer."
+        subcontract.recommend(session, found, me.id, subcontract.find_company(session, company), reason)
+    return "Your recommendation is with the Tender Manager for review."
 
 
 def search_past_tenders(ctx: RunContext[Turn], words: str) -> str:
@@ -675,10 +665,9 @@ def draft_work_schedule(
         found = submission.find_requirement(session, ctx.deps.tender_id, requirement)
         rows = submission.durations(session, ctx.deps.tender_id, activities)
         text = submission.schedule_text(rows, sequence)
-        status = "office_approved" if ctx.deps.autonomous else "proposed"
-        submission.draft(session, found, me.id, title, text, status)
-    waiting = "It is in the checklist." if ctx.deps.autonomous else "It is waiting for the engineer."
-    return f"{text}\n\n{waiting} {sum(r.days for r in rows)} days if every line ran one after another."
+        submission.draft(session, found, me.id, title, text)
+    total = sum(r.days for r in rows)
+    return f"{text}\n\nIt is with the Tender Manager for review. {total} days if every line ran one after another."
 
 
 def draft_document(ctx: RunContext[Turn], requirement: str, title: str, text: str) -> str:
@@ -687,9 +676,8 @@ def draft_document(ctx: RunContext[Turn], requirement: str, title: str, text: st
     engineer can provide as clear blanks. A new draft replaces your earlier one."""
     with _working(ctx, f"Drafting {title}") as (session, me):
         found = submission.find_requirement(session, ctx.deps.tender_id, requirement)
-        status = "office_approved" if ctx.deps.autonomous else "proposed"
-        submission.draft(session, found, me.id, title, text, status)
-    return "The draft is in the checklist." if ctx.deps.autonomous else "The draft is waiting for the engineer."
+        submission.draft(session, found, me.id, title, text)
+    return "The draft is with the Tender Manager for review."
 
 
 def set_pricing_columns(
@@ -704,39 +692,79 @@ def set_pricing_columns(
     return f"Rates will go in column {rate_column.upper()} and amounts in column {amount_column.upper()}."
 
 
-COMMON: list[Callable] = [
+def review_queue(ctx: RunContext[Turn]) -> str:
+    """Everything your staff proposed that you haven't reviewed yet, oldest first, one line each. Look at the
+    detail with review_details, then decide with review."""
+    with _working(ctx, "Going through the review queue") as (session, me):
+        waiting = reviews.pending(session, ctx.deps.tender_id)
+        me.reviewed_up_to = datetime.now(UTC)
+        names = {m.id: m.first_name for m in records.team(session, ctx.deps.tender_id, include_released=True)}
+        lines = [reviews.describe(session, p, names) for p in waiting[:60]]
+    if not lines:
+        return "Nothing is waiting for your review."
+    more = f"\n… and {len(waiting) - 60} more after these." if len(waiting) > 60 else ""
+    return f"{len(waiting)} waiting for your review:\n" + "\n".join(lines) + more
+
+
+def review_details(ctx: RunContext[Turn], records_to_check: list[str]) -> str:
+    """The full detail of up to 10 records in your review queue, e.g. ["rate 4690fa4c", "draft 1cb82413"]: their
+    source, build-up, measurement, text or levelling. Check each against its pages before you decide."""
+    with _working(ctx, "Checking the team's work") as (session, _):
+        parts = []
+        for ref in records_to_check[:10]:
+            try:
+                found = reviews.find(session, ctx.deps.tender_id, ref)
+            except ValueError as error:
+                parts.append(f"{ref}: {error}")
+                continue
+            parts.append(f"{found.ref}:\n{reviews.details(session, found)}")
+    return "\n\n".join(parts)
+
+
+def review(ctx: RunContext[Turn], verdicts: list[reviews.Verdict]) -> str:
+    """Decide on records in your review queue, as many as you like at once. Accept only what you would defend to
+    the engineer, saying what you checked. Send back anything wrong, saying exactly what to correct: it goes to
+    whoever made it, in the team room."""
+    with _working(ctx, "Reviewing the team's work") as (session, me):
+        return reviews.review(session, ctx.deps.tender_id, me, verdicts, ctx.deps.autonomous)
+
+
+READ: list[Callable] = [
     list_documents,
     search_documents,
     read_page,
     view_page,
+    find_on_page,
     post_to_team,
     message_engineer,
     raise_concern,
-    propose_boq_items,
-    withdraw_boq_items,
     list_boq,
-    propose_fact,
-    find_on_page,
-    set_scale,
-    measure,
     takeoff_summary,
     search_library,
-    propose_rate,
-    propose_markups,
     estimate_summary,
     search_directory,
+    levelling,
+    search_past_tenders,
+    list_requirements,
+]
+PRODUCE: list[Callable] = [
+    propose_boq_items,
+    withdraw_boq_items,
+    propose_fact,
+    set_scale,
+    measure,
+    propose_rate,
+    propose_markups,
     add_company,
     create_package,
     draft_enquiry,
     record_quote,
-    levelling,
     recommend_quote,
-    search_past_tenders,
     add_requirements,
-    list_requirements,
     draft_work_schedule,
     draft_document,
     set_pricing_columns,
 ]
-STAFF: list[Callable] = [*COMMON, complete_task]
-MANAGER: list[Callable] = [*COMMON, ask_engineer, hire, assign_task, release]  # decisions go through the Manager
+STAFF: list[Callable] = [*READ, *PRODUCE, complete_task]
+# The Manager leads and reviews; he never produces records himself, so every record has a second pair of eyes
+MANAGER: list[Callable] = [*READ, ask_engineer, hire, assign_task, release, review_queue, review_details, review]

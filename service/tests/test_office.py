@@ -117,6 +117,24 @@ def wait_for(condition, client, tender_id, seconds=15.0):
     raise AssertionError(f"The office did not get there in time: {client.get(f'/tenders/{tender_id}/office').json()}")
 
 
+def manager_accepts(client, tender_id, autonomous=False) -> str:
+    """The Tender Manager accepts everything waiting for his review, as a Manager who checked it would."""
+    from quantix.office import records as office_records
+    from quantix.review import records as reviews
+
+    with client.app.state.sessions() as session:
+        manager = office_records.manager(session, tender_id) or office_records.hire(
+            session, tender_id, "Rania Farouk", "Tender Manager", {}, is_manager=True
+        )
+        verdicts = [
+            reviews.Verdict(record=p.ref, accept=True, note="Checked it against its source.")
+            for p in reviews.pending(session, tender_id)
+        ]
+        report = reviews.review(session, tender_id, manager, verdicts, autonomous)
+        session.commit()
+        return report
+
+
 @pytest.fixture
 def office(client, tmp_path):
     """A tender with its package read and the office's AI set to the scripted brain."""
@@ -409,7 +427,9 @@ def test_each_turn_shows_where_things_stand_and_the_chat_so_far(client, office):
         office_records.post(session, tender_id, ENGINEER, salem.id, "One combined query.")
         session.commit()
         brief = agents.situation(session, salem, [])
-    assert "Where the tender stands:\n- BOQ: 0 lines, 0 approved." in brief
+    assert (
+        "Where the tender stands:\n- BOQ: 0 lines, 0 approved, 0 waiting for the engineer, 0 with the Tender " in brief
+    )
     assert "- Markups: none proposed yet." in brief  # so no one reports them as accepted
     assert "Open tasks in the team:\n- Rashid: reset the drawing scales" in brief  # so no one is briefed twice
     assert (

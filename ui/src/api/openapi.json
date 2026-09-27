@@ -3410,6 +3410,128 @@
           }
         }
       }
+    },
+    "/tenders/{tender_id}/review": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "summary": "Review Queue",
+        "description": "What the staff proposed that the Tender Manager hasn't reviewed yet.",
+        "operationId": "review_queue_tenders__tender_id__review_get",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Waiting"
+                  },
+                  "title": "Response Review Queue Tenders  Tender Id  Review Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/records/{kind}/{record_id}/reopen": {
+      "post": {
+        "tags": [
+          "review"
+        ],
+        "summary": "Reopen",
+        "description": "The engineer sends back work the office, or the engineer, already approved.",
+        "operationId": "reopen_records__kind___record_id__reopen_post",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "record_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Record Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReopenIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4072,6 +4194,28 @@
           "proposed_by": {
             "type": "string",
             "title": "Proposed By"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
           }
         },
         "type": "object",
@@ -4080,7 +4224,9 @@
           "title",
           "body",
           "status",
-          "proposed_by"
+          "proposed_by",
+          "reviewed_by",
+          "review_note"
         ],
         "title": "DraftOut"
       },
@@ -4120,6 +4266,28 @@
           "created_by": {
             "type": "string",
             "title": "Created By"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
           }
         },
         "type": "object",
@@ -4130,7 +4298,9 @@
           "subject",
           "body",
           "status",
-          "created_by"
+          "created_by",
+          "reviewed_by",
+          "review_note"
         ],
         "title": "EnquiryOut"
       },
@@ -4278,6 +4448,28 @@
             "type": "string",
             "title": "Proposed By"
           },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
+          },
           "source": {
             "$ref": "#/components/schemas/Source"
           }
@@ -4290,12 +4482,18 @@
           "value",
           "status",
           "proposed_by",
+          "reviewed_by",
+          "review_note",
           "source"
         ],
         "title": "FactOut"
       },
       "Gates": {
         "properties": {
+          "manager": {
+            "type": "integer",
+            "title": "Manager"
+          },
           "boq": {
             "type": "integer",
             "title": "Boq"
@@ -4323,6 +4521,7 @@
         },
         "type": "object",
         "required": [
+          "manager",
           "boq",
           "facts",
           "takeoff",
@@ -4405,6 +4604,28 @@
             ],
             "title": "Reason"
           },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
+          },
           "source": {
             "$ref": "#/components/schemas/Source"
           }
@@ -4420,6 +4641,8 @@
           "status",
           "proposed_by",
           "reason",
+          "reviewed_by",
+          "review_note",
           "source"
         ],
         "title": "ItemOut"
@@ -4635,6 +4858,28 @@
           "proposed_by": {
             "type": "string",
             "title": "Proposed By"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
           }
         },
         "type": "object",
@@ -4646,7 +4891,9 @@
           "adjustment",
           "note",
           "status",
-          "proposed_by"
+          "proposed_by",
+          "reviewed_by",
+          "review_note"
         ],
         "title": "MarkupsOut"
       },
@@ -4803,6 +5050,28 @@
           "proposed_by": {
             "type": "string",
             "title": "Proposed By"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
           }
         },
         "type": "object",
@@ -4818,7 +5087,9 @@
           "quantity",
           "boq_item",
           "status",
-          "proposed_by"
+          "proposed_by",
+          "reviewed_by",
+          "review_note"
         ],
         "title": "MeasurementOut"
       },
@@ -5097,6 +5368,28 @@
             ],
             "title": "Recommended By"
           },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
+          },
           "selected_quote_id": {
             "anyOf": [
               {
@@ -5124,6 +5417,8 @@
           "recommended_quote_id",
           "recommendation",
           "recommended_by",
+          "reviewed_by",
+          "review_note",
           "selected_quote_id",
           "created_by"
         ],
@@ -5555,6 +5850,28 @@
           "proposed_by": {
             "type": "string",
             "title": "Proposed By"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
           }
         },
         "type": "object",
@@ -5571,7 +5888,9 @@
           "library_id",
           "note",
           "status",
-          "proposed_by"
+          "proposed_by",
+          "reviewed_by",
+          "review_note"
         ],
         "title": "RateOut"
       },
@@ -5592,6 +5911,20 @@
           "ready"
         ],
         "title": "ReadyIn"
+      },
+      "ReopenIn": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "ReopenIn"
       },
       "RequirementIn": {
         "properties": {
@@ -5675,6 +6008,17 @@
             "type": "string",
             "title": "Added By"
           },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
           "state": {
             "type": "string",
             "title": "State"
@@ -5722,6 +6066,7 @@
           "page",
           "quote",
           "added_by",
+          "reviewed_by",
           "state",
           "draft",
           "ready_note",
@@ -5873,6 +6218,28 @@
           "proposed_by": {
             "type": "string",
             "title": "Proposed By"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
           }
         },
         "type": "object",
@@ -5884,7 +6251,9 @@
           "length_m",
           "dimension",
           "status",
-          "proposed_by"
+          "proposed_by",
+          "reviewed_by",
+          "review_note"
         ],
         "title": "ScaleOut"
       },
@@ -6140,6 +6509,10 @@
             "type": "integer",
             "title": "Waiting"
           },
+          "reviewing": {
+            "type": "integer",
+            "title": "Reviewing"
+          },
           "net": {
             "type": "string",
             "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
@@ -6220,6 +6593,7 @@
           "priced",
           "items",
           "waiting",
+          "reviewing",
           "net",
           "preliminaries",
           "overheads",
@@ -6444,6 +6818,39 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "Waiting": {
+        "properties": {
+          "ref": {
+            "type": "string",
+            "title": "Ref"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "record_id": {
+            "type": "string",
+            "title": "Record Id"
+          },
+          "producer": {
+            "type": "string",
+            "title": "Producer"
+          },
+          "line": {
+            "type": "string",
+            "title": "Line"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ref",
+          "kind",
+          "record_id",
+          "producer",
+          "line"
+        ],
+        "title": "Waiting"
       }
     }
   }

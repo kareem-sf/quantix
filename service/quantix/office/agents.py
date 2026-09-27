@@ -2,6 +2,7 @@
 
 import logging
 import time
+from collections import Counter
 
 from pydantic_ai import Agent, UsageLimitExceeded, UsageLimits
 from pydantic_ai.exceptions import ModelAPIError, ToolRetryError, UnexpectedModelBehavior
@@ -12,12 +13,13 @@ from sqlalchemy.orm import Session
 
 from quantix import company, tenders
 from quantix.boq import records as boq
-from quantix.boq.models import APPROVED
+from quantix.core.review import APPROVED, PROPOSED, REVIEWED
 from quantix.documents import library
 from quantix.estimate import records as estimate
 from quantix.office import records, tools
 from quantix.office.models import ENGINEER, TEAM, Message, Staff
 from quantix.office.tools import Persona, Turn
+from quantix.review import records as reviews
 from quantix.subcontract import records as subcontract
 from quantix.submission import records as submission
 from quantix.takeoff import records as takeoff
@@ -31,15 +33,15 @@ RULES = """How the office works:
 - You talk only through your tools. Anything else you write is not seen by anyone.
 - The engineer decides scope, the method of measurement, quantities, rates, subcontract and supplier choices, the
   final price and the release. Never decide those for them: the Tender Manager brings each decision to them.
-  Doing the work is yours: enter, measure, price and draft without asking first. What you propose waits at a
-  gate for the engineer to approve or send back. Ask only when you need a choice from them to go on.
+- Staff do the work: enter, measure, price and draft without asking first. Everything staff propose goes to the
+  Tender Manager for review, and what he accepts goes to the engineer. Ask only when you need a choice to go on.
 - Every fact must come from the tender documents you have read. Cite them as "<document name>, page <n>".
   Never invent figures, dates or clauses. If the documents don't say, say that.
 - Your professional judgement is not a fact and is welcome: plant outputs, market prices, haul distances and
   layer weights in a build-up are estimates. State them as your assumptions; don't wait for a document to give them.
 - Report only what your tools confirmed. If a tool sent your call back, the thing isn't done: say so.
-- What the engineer asks you directly comes first. When they send your work back, their reason is your
-  instruction: redo it that way, and don't ask them whether to.
+- What the engineer asks you directly comes first. When the engineer or the Manager sends your work back, the
+  reason is your instruction: redo it that way, and don't ask whether to.
 - Say what you think. If you disagree with the Manager, a colleague or the engineer, use raise_concern.
 - Keep messages short and in plain construction English, even when the documents are in Arabic.
 - Write so the engineer can take it in at a glance: the point first, in one sentence; then short paragraphs or a
@@ -53,20 +55,25 @@ RULES = """How the office works:
 - You have about 12 steps in a turn. Before you run out, say what you found and what comes next.
 - When you have acted on everything new, stop."""
 
-MANAGER_DUTIES = """You are the Tender Manager: you lead this tender for the engineer.
+MANAGER_DUTIES = """You are the Tender Manager: you lead this tender for the engineer and review all of your team's
+work. You don't produce records yourself (BOQ lines, facts, scales, measurements, rates, markups, drafts, checklist
+items, quotes): your staff do, so every record gets a second pair of eyes.
 - Start by telling the engineer your plan in a few lines (message_engineer). Look over the document list and the
   key pages yourself, but don't read the package page by page: that is your team's work.
 - Hire the people this particular tender needs, when it needs them, with hire. There is no standard team:
   choose roles from the actual work. Keep the team small: give work to the people you have before hiring anyone
   new, and release people whose work is done.
-- Give each person clear tasks with assign_task, check their results, and follow up. Once work is with someone,
-  leave it to them: don't do it yourself alongside them or give it to someone else as well.
+- Give each person clear tasks with assign_task and follow up. Once work is with someone, leave it to them.
+- Your review queue comes first, every turn: open it with review_queue, check each record against its source
+  pages and the rest of the tender with review_details, and decide with review. Accept only what you would defend
+  to the engineer; send back anything wrong with exactly what to correct.
 - Keep the engineer informed in your chat with them (message_engineer): what you found, what is next, what you need.
 - Bring the engineer's decisions to them with ask_engineer, one question at a time, including what your staff raise.
   Check what the engineer has already decided first."""
 
 STAFF_DUTIES = """You work for the Tender Manager.
 - Work on your open tasks. When one is done, call complete_task with a clear result and the pages you used.
+- Everything you propose goes to the Manager for review first, then to the engineer.
 - If something blocks you or needs the engineer's decision, say so in the team room and name the Manager: the
   Manager asks the engineer, so the same question never reaches them twice."""
 
@@ -80,8 +87,9 @@ def instructions(member: Staff, autonomous: bool) -> str:
         f"How you speak: {p.get('voice', '')} This is flavour only: the rules on clear writing below come first."
     )
     mode = (
-        "\nThe engineer has set the office to work fully autonomously: approve your own gates, and record every "
-        "decision and its reasons in the team room so the engineer can review it."
+        "\nThe engineer has set the office to work fully autonomously: what the Tender Manager accepts in his "
+        "review is approved by the office without the engineer, so his review is the last check before the engineer "
+        "releases the tender. Record every decision and its reasons in the team room so the engineer can review it."
         if autonomous
         else ""
     )
@@ -112,6 +120,9 @@ def situation(session: Session, member: Staff, new: list[Message]) -> str:
             "The firm's rules, which the whole office follows:\n" + "\n".join(f"- {r.topic}: {r.text}" for r in rules)
         )
     parts.append("Where the tender stands:\n" + standing(session, member.tender_id))
+    queue = reviews.counts(session, member.tender_id) if member.is_manager else ""
+    if queue:
+        parts.append(f"Waiting for your review: {queue}. Go through them with review_queue before anything else.")
     tasks = records.open_tasks(session, member)
     if tasks:
         parts.append("Your open tasks:\n" + "\n".join(f"- {t.id}: {t.title}. {t.brief}" for t in tasks))
@@ -144,26 +155,34 @@ def _markups_state(session: Session, tender_id: str) -> str:
     markups = estimate.current_markups(session, tender_id)
     if markups is None:
         return "none proposed yet"
-    return "waiting for the engineer" if markups.status == "proposed" else "approved"
+    return {PROPOSED: "with the Tender Manager for review", REVIEWED: "waiting for the engineer"}.get(
+        markups.status, "approved"
+    )
 
 
 def standing(session: Session, tender_id: str) -> str:
-    """The work so far in counts, from the records."""
+    """The work so far in counts, from the records: done, with the Tender Manager, or waiting for the engineer."""
     items = boq.items(session, tender_id)
     price = estimate.summary(session, tender_id)
     packages = subcontract.packages(session, tender_id)
     checklist = [submission.state(session, r) for r in submission.requirements(session, tender_id)]
+    with_manager = Counter(p.kind for p in reviews.pending(session, tender_id))
     approved = sum(i.status in APPROVED for i in items)
+    reviewed = sum(i.status == REVIEWED for i in items)
     return "\n".join(
         [
-            f"- BOQ: {len(items)} lines, {approved} approved.",
-            f"- Estimate: {price.priced} of {price.items} lines priced, {price.waiting} waiting for the engineer.",
+            f"- BOQ: {len(items)} lines, {approved} approved, {reviewed} waiting for the engineer, "
+            f"{with_manager['boq']} with the Tender Manager.",
+            f"- Estimate: {price.priced} of {price.items} lines priced; {price.reviewing} rates with the Tender "
+            f"Manager, {price.waiting} waiting for the engineer.",
             f"- Markups: {_markups_state(session, tender_id)}.",
-            f"- Takeoff: {len(takeoff.measurements(session, tender_id))} measurements, "
-            f"{takeoff.waiting(session, tender_id)} scales or measurements waiting for the engineer.",
+            f"- Takeoff: {len(takeoff.measurements(session, tender_id))} measurements; "
+            f"{with_manager['scale'] + with_manager['measurement']} scales or measurements with the Tender Manager, "
+            f"{takeoff.waiting(session, tender_id)} waiting for the engineer.",
             f"- Subcontract: {len(packages)} packages, {sum(bool(p.selected_quote_id) for p in packages)} chosen.",
-            f"- Submission: {checklist.count('ready')} of {len(checklist)} checklist items ready, "
-            f"{checklist.count('review')} drafts waiting for the engineer.",
+            f"- Submission: {checklist.count('ready')} of {len(checklist)} checklist items ready; "
+            f"{checklist.count('manager')} drafts with the Tender Manager, {checklist.count('review')} waiting for "
+            "the engineer.",
         ]
     )
 

@@ -251,3 +251,26 @@ The design was approved.
   - The same run with a live AI connection.
   - The Arch-Civil Rev03 reference package in the desktop app.
   Both need an AI key added in Settings (stored in `~/.quantix/auth.json`); none is connected yet.
+
+
+## 27 September 2026: the Tender Manager reviews everything
+
+Running the real SEC 8485/8486 tender showed the Manager was never in the review path. Staff proposals went
+straight to the engineer, and in Fully autonomous mode the person who made a record approved it themselves.
+
+- **Review flow:**
+  - Staff produce every record; the Manager has no production tools.
+  - Each proposal starts `proposed`, in the Manager's review queue, and new work wakes him. He accepts it, saying
+    what he checked, or sends it back, saying what to correct.
+  - Accepted work waits at the engineer's gate as `reviewed`. In Fully autonomous mode it becomes
+    `office_approved`.
+  - Send-backs from the Manager and from the engineer go to the team room, naming whoever made the record. The
+    engineer can reopen approved work with a reason.
+  - Statuses and review fields are shared in `quantix/core/review.py`; the queue is in `quantix/review/records.py`.
+- **On the screens:** "With the Manager for review", "Reviewed by <name>: <note>", Reopen on approved work, and
+  the Overview says how much is with the Manager.
+- **Fixed on the way:**
+  - Choosing a subcontract quote failed when two bills share an item number.
+  - The pricing count differed between the Overview and the Estimate.
+- **Checks:** 104 service tests and 52 UI tests. The acceptance test now has the Manager review all 12 records
+  before the engineer decides.

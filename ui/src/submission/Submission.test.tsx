@@ -23,6 +23,7 @@ const requirement = (id: string, title: string, state: string, extra: Partial<Re
   page: 4,
   quote: `7.3 ${title}`,
   added_by: "s3",
+  reviewed_by: "s1",
   state,
   draft: null,
   ready_note: null,
@@ -33,7 +34,15 @@ const checklist = () => [
   requirement("r1", "Bid bond, 1% of the tender price", "missing"),
   requirement("r2", "Method statement for concrete works", "review", {
     section: "Technical",
-    draft: { id: "dr1", title: "Method statement", body: "Pour sequence.", status: "proposed", proposed_by: "s3" },
+    draft: {
+      id: "dr1",
+      title: "Method statement",
+      body: "Pour sequence.",
+      status: "reviewed",
+      proposed_by: "s3",
+      reviewed_by: "s1",
+      review_note: "Follows clause 7.6.",
+    },
   }),
   requirement("r3", "Site visit certificate", "ready", { ready_note: "" }),
 ];

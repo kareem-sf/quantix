@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from quantix import tenders
 from quantix.api.tenders import DB
 from quantix.boq import records as boq
+from quantix.core.review import REVIEWED, UNDECIDED
 from quantix.documents.models import Document
 from quantix.estimate import records
 from quantix.estimate.models import LibraryResource, Markups, Rate
@@ -42,6 +43,8 @@ class RateOut(BaseModel):
     note: str
     status: str
     proposed_by: str
+    reviewed_by: str | None
+    review_note: str | None
 
 
 class PricedItem(BaseModel):
@@ -73,6 +76,8 @@ class MarkupsOut(BaseModel):
     note: str
     status: str
     proposed_by: str
+    reviewed_by: str | None
+    review_note: str | None
 
 
 class SummaryOut(BaseModel):
@@ -80,6 +85,7 @@ class SummaryOut(BaseModel):
     priced: int
     items: int
     waiting: int
+    reviewing: int
     net: Decimal
     preliminaries: Decimal
     overheads: Decimal
@@ -153,6 +159,8 @@ def _rate(session: Session, rate: Rate | None) -> RateOut | None:
         note=rate.note,
         status=rate.status,
         proposed_by=rate.proposed_by,
+        reviewed_by=rate.reviewed_by,
+        review_note=rate.review_note,
     )
 
 
@@ -195,6 +203,8 @@ def _markups(markups: Markups) -> MarkupsOut:
         note=markups.note,
         status=markups.status,
         proposed_by=markups.proposed_by,
+        reviewed_by=markups.reviewed_by,
+        review_note=markups.review_note,
     )
 
 
@@ -202,7 +212,7 @@ def _proposed(session: Session, model: type[Rate] | type[Markups], record_id: st
     record = session.get(model, record_id)
     if record is None or tenders.get_tender(session, record.tender_id) is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    if record.status != "proposed":
+    if record.status not in UNDECIDED:
         raise HTTPException(status_code=400, detail="This has already been decided.")
     return record
 
@@ -223,10 +233,10 @@ def approve_all_rates(tender_id: str, session: DB, request: Request) -> Saved:
     waiting = [
         r
         for item in boq.items(session, tender_id)
-        if (r := records.current_rate(session, item.id)) is not None and r.status == "proposed"
+        if (r := records.current_rate(session, item.id)) is not None and r.status == REVIEWED
     ]
     for rate in waiting:
-        records.decide(session, rate, approve=True)
+        records.approve(session, rate)
     manager = office.manager(session, tender_id)
     if waiting and manager:
         office.post(session, tender_id, ENGINEER, manager.id, f"I approved {len(waiting)} rates.")

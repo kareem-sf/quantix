@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from quantix import tenders
 from quantix.boq import records as boq
 from quantix.boq.models import BoqItem
+from quantix.core.review import APPROVED
 from quantix.documents import library
 from quantix.documents.models import Document
 from quantix.estimate import records as estimate
@@ -120,6 +121,8 @@ def build(home: Path, session: Session, tender_id: str, spread: bool, now: datet
     if any(i.id not in covered for i in items):
         built.files.append(_quantix_format(folder, [i for i in items if i.id not in covered], rates, summary.currency))
     built.not_ready += [f"BOQ item {i} is not priced" for i in summary.unpriced]
+    if summary.reviewing:
+        built.not_ready.append(f"{summary.reviewing} rates are still with the Tender Manager for review")
     if summary.waiting:
         built.not_ready.append(f"{summary.waiting} rates still wait for your approval")
 
@@ -133,16 +136,21 @@ def build(home: Path, session: Session, tender_id: str, spread: bool, now: datet
         if requirement.file_name:
             file = f"{_safe(requirement.title)} - {requirement.file_name}"
             shutil.copyfile(records.attachments_dir(home, requirement) / requirement.file_name, folder / file)
-        elif current is not None and current.status != "proposed":
+        elif current is not None and current.status in APPROVED:
             file = _draft_file(folder, current.title, current.body)
         if file:
             built.files.append(file)
         if state != "ready":
             built.not_ready.append(requirement.title)
         source = session.get(Document, requirement.document_id) if requirement.document_id else None
-        label = {"ready": "Ready", "review": "Draft waiting for review", "missing": "Missing"}[state]
+        label = {
+            "ready": "Ready",
+            "review": "Draft waiting for your review",
+            "manager": "Draft with the Tender Manager",
+            "missing": "Missing",
+        }[state]
         if current is not None and current.status == "office_approved" and not requirement.file_name:
-            label = "Ready · approved by the office, not reviewed"
+            label = "Ready · approved by the office after the Tender Manager's review, not reviewed by you"
         sheet.append(
             [
                 requirement.section,

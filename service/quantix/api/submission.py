@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from quantix import tenders
 from quantix.api.tenders import DB
+from quantix.core.review import UNDECIDED
 from quantix.documents.models import Document
 from quantix.submission import export, records
 from quantix.submission.models import Draft, Requirement
@@ -24,6 +25,8 @@ class DraftOut(BaseModel):
     body: str
     status: str
     proposed_by: str
+    reviewed_by: str | None
+    review_note: str | None
 
 
 class RequirementOut(BaseModel):
@@ -35,7 +38,8 @@ class RequirementOut(BaseModel):
     page: int | None
     quote: str | None
     added_by: str
-    state: str  # ready | review | missing
+    reviewed_by: str | None  # the Tender Manager, once he has reviewed the requirement
+    state: str  # ready | review (a reviewed draft waits for you) | manager (a draft is with the Manager) | missing
     draft: DraftOut | None
     ready_note: str | None
     file_name: str | None
@@ -112,6 +116,7 @@ def get_submission(tender_id: str, session: DB) -> SubmissionOut:
                 page=r.page,
                 quote=r.quote,
                 added_by=r.added_by,
+                reviewed_by=r.reviewed_by,
                 state=records.state(session, r),
                 draft=DraftOut.model_validate(current, from_attributes=True) if current else None,
                 ready_note=r.ready_note,
@@ -148,7 +153,7 @@ def decide_draft(draft_id: str, body: DecisionIn, session: DB, request: Request)
     draft = session.get(Draft, draft_id)
     if draft is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    if draft.status != "proposed":
+    if draft.status not in UNDECIDED:
         raise HTTPException(status_code=400, detail="This has already been decided.")
     records.decide(session, draft, body.approve, body.reason)
     session.commit()

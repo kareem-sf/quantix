@@ -25,8 +25,9 @@ def priced_tender(client, name, rate, status):
             page=1,
             quote="A1=3.1 | B1=Excavation | C1=m3 | D1=1240",
         )
-        boq.propose_items(session, tender_id, omar, [line], False)
-        boq.approve_all_items(session, tender_id)
+        boq.propose_items(session, tender_id, omar, [line])
+        for approved in boq.items(session, tender_id):  # the engineer approved the BOQ
+            boq.approve(session, approved)
         note = "Plant 4.5 m3/hr at 83.25 per hour."
         estimate.propose_rate(
             session, tender_id, omar.id, "3.1", "estimate", note, unit_rate=Decimal(rate), status=status

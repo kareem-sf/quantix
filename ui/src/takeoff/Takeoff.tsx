@@ -4,6 +4,7 @@ import { useParams, useSearchParams } from "react-router";
 import { pageImage, useDocuments } from "../documents/queries";
 import { useBoq, quantity as formatQuantity } from "../estimate/queries";
 import { firstName, useOffice } from "../office/queries";
+import { Reopen, ReviewNote, SendBack, WITH_MANAGER } from "../review/Review";
 import {
   RESULTS,
   UNITS,
@@ -226,6 +227,8 @@ function PagePicker(props: { documentId: string; page: number; count: number; on
 
 function ScaleNote({ tenderId, sheet }: { tenderId: string; sheet: Sheet }) {
   const decide = useDecideScale(tenderId);
+  const office = useOffice(tenderId);
+  const people = new Map((office.data?.staff ?? []).map((m) => [m.id, m]));
   if (!sheet.scale) return <span className="text-attention">No scale yet: use Scale on a printed dimension</span>;
   return (
     <div className="flex flex-wrap items-center gap-2 text-ink-2">
@@ -233,47 +236,18 @@ function ScaleNote({ tenderId, sheet }: { tenderId: string; sheet: Sheet }) {
       <span className="text-ink-3" title="At the sheet's printed size: compare it with the scale in the title block">
         · about 1:{sheet.scale.ratio.toLocaleString("en-US")}
       </span>
-      {sheet.scale.status === "proposed" && (
+      {sheet.scale.status === "proposed" && <span className="text-ink-3">· {WITH_MANAGER}</span>}
+      {sheet.scale.status === "reviewed" && (
         <>
+          <ReviewNote reviewedBy={sheet.scale.reviewed_by} note={sheet.scale.review_note} people={people} />
           <button onClick={() => decide.mutate({ id: sheet.scale!.id, approve: true })} className="font-medium text-ink">
             Approve scale
           </button>
           <SendBack onSend={(reason) => decide.mutate({ id: sheet.scale!.id, approve: false, reason })} />
         </>
       )}
+      {sheet.scale.status === "office_approved" && <Reopen kind="scale" id={sheet.scale.id} />}
     </div>
-  );
-}
-
-/** Reject with the reason, so whoever proposed it knows what to put right. */
-function SendBack({ onSend }: { onSend: (reason: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const [reason, setReason] = useState("");
-  if (!open)
-    return (
-      <button onClick={() => setOpen(true)} className="text-ink-2 hover:text-ink">
-        Send back
-      </button>
-    );
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        onSend(reason);
-        setOpen(false);
-      }}
-      className="flex items-center gap-1.5"
-    >
-      <input
-        aria-label="What to put right"
-        autoFocus
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
-        placeholder="What to put right"
-        className="h-7 w-56 rounded-md border border-line-strong px-2 text-[13px] outline-none focus:border-ink"
-      />
-      <button className="font-medium text-ink">Send</button>
-    </form>
   );
 }
 
@@ -311,7 +285,7 @@ function Drawing(props: {
         onClick={(e) => props.drawing && props.onPoint(toPoint(e))}
       >
         {props.measurements.map((m) => {
-          const colour = m.status === "proposed" ? "var(--color-attention)" : "var(--color-ink)";
+          const colour = m.status === "reviewed" ? "var(--color-attention)" : "var(--color-ink)";
           const width = m.id === props.selected ? 3 : 1.8;
           const path = m.points.map((p) => p.join(",")).join(" ");
           const select = (e: MouseEvent) => {
@@ -385,8 +359,10 @@ function SheetPanel({ tenderId, measurements, selected }: { tenderId: string; me
               )}
             </span>
             <span className="text-xs text-ink-3">{by ? `Measured by ${firstName(by)}` : "Measured by you"}</span>
-            <span className="flex gap-3 pt-1">
-              {m.status === "proposed" && (
+            {m.status === "proposed" && <span className="text-xs text-ink-3">{WITH_MANAGER}</span>}
+            <ReviewNote reviewedBy={m.reviewed_by} note={m.review_note} people={people} />
+            <span className="flex flex-wrap gap-3 pt-1">
+              {m.status === "reviewed" && (
                 <>
                   <button onClick={() => decide.mutate({ id: m.id, approve: true })} className="font-medium">
                     Approve

@@ -8,12 +8,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from quantix.boq.models import APPROVED, FACT_KINDS, BoqItem, Fact
+from quantix.boq.models import FACT_KINDS, BoqItem, Fact
+from quantix.core.review import LIVE, PROPOSED, REVIEWED, UNDECIDED
 from quantix.documents.evidence import check_quote, numbers_in
 from quantix.office import records as office
 from quantix.office.models import ENGINEER, Staff
-
-ACTIVE = ("proposed", *APPROVED)
 
 
 class ItemIn(BaseModel):
@@ -42,9 +41,9 @@ def _source_line(document_id: str, page: int, quote: str) -> tuple[str, int, str
     return document_id, page, f"row {row.group(1)}" if row else " ".join(quote.lower().split())
 
 
-def propose_items(session: Session, tender_id: str, by: Staff, items: list[ItemIn], autonomous: bool) -> str:
-    """Save the items that check out; report the others so they can be corrected."""
-    active = list(session.scalars(select(BoqItem).where(BoqItem.tender_id == tender_id, BoqItem.status.in_(ACTIVE))))
+def propose_items(session: Session, tender_id: str, by: Staff, items: list[ItemIn]) -> str:
+    """Save the items that check out, for the Tender Manager's review; report the others so they can be corrected."""
+    active = list(session.scalars(select(BoqItem).where(BoqItem.tender_id == tender_id, BoqItem.status.in_(LIVE))))
     taken = {(i.section or "", i.item) for i in active}
     lines_in = {_source_line(i.document_id, i.page, i.quote) for i in active}  # the same client line, however filed
     position = session.scalar(select(func.max(BoqItem.position)).where(BoqItem.tender_id == tender_id)) or 0
@@ -82,11 +81,10 @@ def propose_items(session: Session, tender_id: str, by: Staff, items: list[ItemI
                 quote=line.quote.strip(),
                 position=position,
                 proposed_by=by.id,
-                status="office_approved" if autonomous else "proposed",
             )
         )
         saved += 1
-    report = f"Saved {saved} BOQ items for the engineer's approval." if not autonomous else f"Saved {saved} items."
+    report = f"Saved {saved} BOQ items for the Tender Manager's review."
     return report + ("\nNot saved: " + "; ".join(problems) if problems else "")
 
 
@@ -111,7 +109,7 @@ def find_item(session: Session, tender_id: str, name: str) -> BoqItem:
     section, _, number = name.strip().rpartition(" / ")
     row = _ROW.fullmatch(number.strip())
     query = select(BoqItem).where(
-        BoqItem.tender_id == tender_id, BoqItem.item == ("" if row else number.strip()), BoqItem.status.in_(ACTIVE)
+        BoqItem.tender_id == tender_id, BoqItem.item == ("" if row else number.strip()), BoqItem.status.in_(LIVE)
     )
     numbered = [i for i in session.scalars(query) if not row or _row(i) == row.group(1)]
     found = [i for i in numbered if not section or (i.section or "").lower() == section.lower()]
@@ -133,8 +131,8 @@ def withdraw_items(session: Session, tender_id: str, by: Staff, references: list
     for reference in references:
         try:
             item = find_item(session, tender_id, reference)
-            if item.proposed_by != by.id or item.status != "proposed":
-                raise ValueError("only lines you entered that the engineer hasn't decided can be withdrawn")
+            if item.proposed_by != by.id or item.status != PROPOSED:
+                raise ValueError("only lines you entered that haven't been reviewed yet can be withdrawn")
         except ValueError as error:
             problems.append(f"{reference}: {error}")
             continue
@@ -157,7 +155,6 @@ def propose_fact(
     document_id: str,
     page: int,
     quote: str,
-    autonomous: bool,
 ) -> Fact:
     if kind not in FACT_KINDS:
         raise ValueError(f"Facts can be: {', '.join(FACT_KINDS)}.")
@@ -170,7 +167,7 @@ def propose_fact(
             "say why with raise_concern."
         )
     for older in earlier:
-        if older.status == "proposed" or (autonomous and older.status in APPROVED):
+        if older.status in UNDECIDED:  # the newest proposal of a kind is the one to review
             older.status = "replaced"
     fact = Fact(
         tender_id=tender_id,
@@ -180,7 +177,6 @@ def propose_fact(
         page=page,
         quote=quote.strip(),
         proposed_by=by.id,
-        status="office_approved" if autonomous else "proposed",
     )
     session.add(fact)
     session.flush()
@@ -188,34 +184,37 @@ def propose_fact(
 
 
 def facts(session: Session, tender_id: str) -> list[Fact]:
-    query = select(Fact).where(Fact.tender_id == tender_id, Fact.status.in_(ACTIVE))
+    query = select(Fact).where(Fact.tender_id == tender_id, Fact.status.in_(LIVE))
     return list(session.scalars(query.order_by(Fact.created_at)))
 
 
-def decide(session: Session, record: BoqItem | Fact, approve: bool, reason: str | None = None) -> None:
-    """The engineer's decision. A rejection goes back to whoever proposed it, so they can put it right."""
-    record.status = "approved" if approve else "rejected"
-    record.reason = reason
-    record.decided_at = datetime.now(UTC)
-    if isinstance(record, Fact) and approve:
+def label(session: Session, record: BoqItem | Fact) -> str:
+    """How a message names the record."""
+    return f"BOQ item {reference(record)}" if isinstance(record, BoqItem) else f"the {FACT_KINDS[record.kind].lower()}"
+
+
+def approve(session: Session, record: BoqItem | Fact, status: str = "approved") -> None:
+    """Approved by the engineer, or by a fully autonomous office once the Tender Manager has reviewed it."""
+    record.status, record.decided_at = status, datetime.now(UTC)
+    if isinstance(record, Fact):  # one fact of each kind
         for older in session.scalars(select(Fact).where(Fact.tender_id == record.tender_id, Fact.kind == record.kind)):
-            if older.id != record.id and older.status in ACTIVE:
+            if older.id != record.id and older.status in LIVE:
                 older.status = "replaced"
-    if not approve:
-        what = f"BOQ item {reference(record)}" if isinstance(record, BoqItem) else FACT_KINDS[record.kind].lower()
-        office.post(
-            session,
-            record.tender_id,
-            ENGINEER,
-            record.proposed_by,
-            f"I rejected {what}" + (f": {reason}" if reason else "."),
-        )
+
+
+def decide(session: Session, record: BoqItem | Fact, approve_it: bool, reason: str | None = None) -> None:
+    """The engineer's decision. A rejection goes back to whoever proposed it, so they can put it right."""
+    if approve_it:
+        approve(session, record)
+    else:
+        office.send_back(session, record.tender_id, record, label(session, record), reason, ENGINEER)
 
 
 def approve_all_items(session: Session, tender_id: str) -> int:
-    waiting = session.scalars(select(BoqItem).where(BoqItem.tender_id == tender_id, BoqItem.status == "proposed")).all()
+    """Every BOQ item the Tender Manager has reviewed."""
+    waiting = session.scalars(select(BoqItem).where(BoqItem.tender_id == tender_id, BoqItem.status == REVIEWED)).all()
     for item in waiting:
-        decide(session, item, approve=True)
+        approve(session, item)
     manager = office.manager(session, tender_id)
     if waiting and manager:
         office.post(session, tender_id, ENGINEER, manager.id, f"I approved {len(waiting)} BOQ items.")
@@ -225,7 +224,7 @@ def approve_all_items(session: Session, tender_id: str) -> int:
 def waiting_counts(session: Session, tender_id: str) -> dict[str, int]:
     def count(model) -> int:
         return session.scalar(
-            select(func.count()).select_from(model).where(model.tender_id == tender_id, model.status == "proposed")
+            select(func.count()).select_from(model).where(model.tender_id == tender_id, model.status == REVIEWED)
         )
 
     return {"boq": count(BoqItem), "facts": count(Fact)}

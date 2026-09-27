@@ -1,31 +1,17 @@
 """Sheet scales and measurements. Quantities are never stored: they are computed from geometry and scale."""
 
 import uuid
-from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import JSON, Float, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import JSON, Float, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from quantix.core.db import Base, UTCDateTime
+from quantix.core.db import Base
+from quantix.core.review import Reviewed
 
 
 def _id() -> str:
     return uuid.uuid4().hex
-
-
-def _now() -> datetime:
-    return datetime.now(UTC)
-
-
-class Reviewed:
-    status: Mapped[str] = mapped_column(
-        String(20), default="proposed"
-    )  # proposed | approved | office_approved | rejected | replaced
-    proposed_by: Mapped[str] = mapped_column(String(32))  # a staff id, or "engineer"
-    reason: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
-    decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
 
 class Scale(Reviewed, Base):

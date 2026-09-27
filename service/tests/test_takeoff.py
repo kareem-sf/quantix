@@ -41,7 +41,7 @@ def sheet(client):
             boq.ItemIn(item=i, description=d, unit=u, quantity=Decimal(q), document_id=workbook, page=1, quote=quote)
             for i, d, u, q, quote in rows
         ]
-        assert boq.propose_items(session, tender_id, qs, lines, False).startswith("Saved 3")
+        assert boq.propose_items(session, tender_id, qs, lines).startswith("Saved 3")
         session.commit()
         qs_id = qs.id
     return tender_id, drawing, qs_id
@@ -260,7 +260,12 @@ def test_staff_measure_through_their_tools(client, sheet, tmp_path):
         office.post(session, tender_id, "engineer", qs_id, "Omar, measure the external wall on A-101.")
         session.commit()
     client.app.state.office.engineer_spoke(tender_id)
-    wait_for(lambda o: client.get(f"/tenders/{tender_id}/gates").json()["takeoff"] == 3, client, tender_id)
+
+    def queued():
+        return [w["kind"] for w in client.get(f"/tenders/{tender_id}/review").json()]
+
+    wait_for(lambda o: queued().count("measurement") == 2, client, tender_id)
+    assert queued().count("scale") == 1  # the scale and both measurements wait for the Tender Manager
 
     assert seen[0].startswith("“40.00” at left")
     assert "about 1:283 at the sheet's printed size" in seen[1]  # 400 points = 40 m, on paper 141 mm for 40 m

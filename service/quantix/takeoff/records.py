@@ -10,14 +10,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from quantix.boq import records as boq
-from quantix.boq.models import APPROVED, BoqItem
+from quantix.boq.models import BoqItem
+from quantix.core.review import APPROVED, LIVE, REVIEWED
 from quantix.documents import library
 from quantix.documents.models import Document, Page
 from quantix.office import records as office
 from quantix.office.models import ENGINEER
 from quantix.takeoff.models import Measurement, Scale
 
-LIVE = ("proposed", *APPROVED)
 UNITS = {"length": ("m", "m2"), "area": ("m2", "m3"), "count": ("nr",)}
 TOLERANCE = Decimal("0.02")  # takeoff and BOQ within 2% are a match
 _UNIT_NAMES = {
@@ -79,7 +79,7 @@ def snap(
 
 
 def scale_for(session: Session, document_id: str, page: int) -> Scale | None:
-    """The sheet's current scale: the newest approved one, or else the newest proposed one."""
+    """The sheet's current scale: the newest approved one, or else the newest one still being decided."""
     query = select(Scale).where(Scale.document_id == document_id, Scale.page == page, Scale.status.in_(LIVE))
     scales = list(session.scalars(query.order_by(Scale.created_at.desc())))
     return next((s for s in scales if s.status in APPROVED), scales[0] if scales else None)
@@ -94,7 +94,7 @@ def set_scale(
     line: list[list[float]],
     length_m: float,
     dimension: str,
-    status: str,
+    status: str = "proposed",
 ) -> Scale:
     document, found = _page(session, tender_id, document_id, page)
     if dimension.strip() not in found.text:
@@ -157,7 +157,7 @@ def measure(
     unit: str,
     multiplier: Decimal | None,
     boq_item: str | None,
-    status: str,
+    status: str = "proposed",
 ) -> Measurement:
     document, found = _page(session, tender_id, document_id, page)
     if kind not in UNITS:
@@ -266,27 +266,32 @@ def compare(session: Session, tender_id: str) -> list[Comparison]:
     return rows
 
 
-def decide(session: Session, record: Scale | Measurement, approve: bool, reason: str | None = None) -> None:
-    record.status = "approved" if approve else "rejected"
-    record.reason = reason
-    record.decided_at = datetime.now(UTC)
-    if isinstance(record, Scale) and approve:
+def label(session: Session, record: Scale | Measurement) -> str:
+    """How a message names the record."""
+    document = session.get(Document, record.document_id)
+    where = f"{document.name}, page {record.page}"
+    return f"the scale of {where}" if isinstance(record, Scale) else f"the measurement “{record.label}” on {where}"
+
+
+def approve(session: Session, record: Scale | Measurement, status: str = "approved") -> None:
+    """Approved by the engineer, or by a fully autonomous office once the Tender Manager has reviewed it."""
+    record.status, record.decided_at = status, datetime.now(UTC)
+    if isinstance(record, Scale):
         _replace_older_scales(session, record)
-    if not approve and record.proposed_by != ENGINEER:
-        what = "the scale of that sheet" if isinstance(record, Scale) else f"the measurement “{record.label}”"
-        office.post(
-            session,
-            record.tender_id,
-            ENGINEER,
-            record.proposed_by,
-            f"I rejected {what}" + (f": {reason}" if reason else "."),
-        )
+
+
+def decide(session: Session, record: Scale | Measurement, approve_it: bool, reason: str | None = None) -> None:
+    if approve_it:
+        approve(session, record)
+    else:
+        office.send_back(session, record.tender_id, record, label(session, record), reason, ENGINEER)
 
 
 def waiting(session: Session, tender_id: str) -> int:
+    """Scales and measurements the Tender Manager has reviewed, waiting for the engineer."""
     count = 0
     for model in (Scale, Measurement):
         count += len(
-            session.scalars(select(model.id).where(model.tender_id == tender_id, model.status == "proposed")).all()
+            session.scalars(select(model.id).where(model.tender_id == tender_id, model.status == REVIEWED)).all()
         )
     return count

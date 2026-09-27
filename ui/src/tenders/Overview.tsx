@@ -86,6 +86,12 @@ export function Overview() {
         </span>
         <Outcome tenderId={tenderId} outcome={tender.data.outcome} />
       </p>
+      {manager && gates.data?.manager ? (
+        <p className="mt-1 text-sm text-ink-2">
+          {gates.data.manager} {gates.data.manager === 1 ? "piece" : "pieces"} of work with {firstName(manager)} for
+          review before {gates.data.manager === 1 ? "it comes" : "they come"} to you.
+        </p>
+      ) : null}
 
       {!office.data.ai_ready && (
         <p className="mt-6 text-ink-2">
@@ -182,7 +188,7 @@ function Progress({ tenderId }: { tenderId: string }) {
   const submission = useSubmission(tenderId);
   const items = estimate.data?.items ?? [];
   const summary = estimate.data?.summary;
-  const decided = items.filter((i) => i.item_status !== "proposed").length;
+  const decided = items.filter((i) => i.item_status === "approved" || i.item_status === "office_approved").length;
   const chosen = (packages.data ?? []).filter((p) => p.selected_quote_id).length;
   const requirements = submission.data?.requirements ?? [];
   const ready = requirements.filter((r) => r.state === "ready").length;
