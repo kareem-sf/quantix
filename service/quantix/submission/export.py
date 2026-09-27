@@ -16,7 +16,7 @@ from quantix.core.review import APPROVED
 from quantix.documents import library
 from quantix.documents.models import Document
 from quantix.estimate import records as estimate
-from quantix.submission import package, pdf, records, word, workbooks
+from quantix.submission import deck, package, pdf, records, word, workbooks
 
 
 @dataclass
@@ -151,6 +151,8 @@ def build(home: Path, session: Session, tender_id: str, spread: bool, now: datet
         )
     workbooks.checklist(checklist, head, opening, folder / "Internal" / "Checklist.xlsx")
     built.files.append("Internal/Checklist.xlsx")
+    deck.write(session, home, tender_id, head, opening, folder / "Internal" / "Tender summary.pptx")
+    built.files.append("Internal/Tender summary.pptx")
 
     combined = f"{_safe(tender.name)} - Submission.pdf"
     pdf.write_package(submitted, head, opening, folder / combined)

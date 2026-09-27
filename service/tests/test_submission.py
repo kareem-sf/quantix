@@ -4,6 +4,7 @@ from decimal import Decimal
 
 import docx
 import openpyxl
+import pptx
 import pypdfium2 as pdfium
 import pytest
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
@@ -206,6 +207,7 @@ def test_without_the_client_columns_each_priced_line_names_its_bill_and_row(clie
         "Priced BOQ.xlsx",
         "Priced BOQ.pdf",
         "Internal/Checklist.xlsx",
+        "Internal/Tender summary.pptx",
     ]
     sheet = openpyxl.load_workbook(tmp_path / "exports" / built["folder"] / "Priced BOQ.xlsx").active
     rows = [list(row) for row in sheet.iter_rows(values_only=True)]
@@ -273,6 +275,7 @@ def test_the_package_is_built_in_the_client_format_with_markups_in_the_rates(cli
         "Documents/Method statement.docx",
         "Documents/Method statement.pdf",
         "Internal/Checklist.xlsx",
+        "Internal/Tender summary.pptx",
     ]
     assert built["not_ready"] == [  # the tender audit's blockers
         "2 pieces of work wait for the Tender Manager's review.",  # the checklist items the office added
@@ -299,6 +302,11 @@ def test_the_package_is_built_in_the_client_format_with_markups_in_the_rates(cli
     ]
     assert [row.cells[0].text for row in statement.tables[0].rows] == ["Tender", "Date"]  # the title block
     rows = list(openpyxl.load_workbook(folder / "Internal" / "Checklist.xlsx").active.values)
+    summary = pptx.Presentation(folder / "Internal" / "Tender summary.pptx")
+    titles = [next((s.text_frame.text for s in slide.shapes if s.has_text_frame), "") for slide in summary.slides]
+    assert titles[1:] == ["The price", "The price by bill", "Where the money is", "Open points", "The submission"]
+    price = [s.text_frame.text for s in summary.slides[1].shapes if s.has_text_frame]
+    assert "133,048.08" in price  # the total from Quantix's summary
     assert rows[rows.index(("Section", "Requirement", "Required by", "State", "File")) + 1 :] == [
         ("Commercial", "Bid bond, 1% of the tender price", "ITT.pdf, page 1", "Missing", None),
         (
