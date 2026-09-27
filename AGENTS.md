@@ -13,7 +13,9 @@ stays in the loop and approves at every gate. The specification is `docs/spec.md
   release are always the engineer's.
 - **The Tender Manager reviews everything.** Staff produce every record; the Manager never produces one. Each
   proposal goes to his review first: he accepts it, saying what he checked, or sends it back to whoever made it,
-  saying what to correct. Only what he accepted reaches the engineer. Nothing approves itself.
+  saying what to correct. Only what he accepted reaches the engineer. Nothing approves itself. Nothing is left
+  unresolved silently: what the office can't settle, he escalates to the engineer with where it shows and his
+  suggested corrections, and the engineer decides.
 - **Quantix computes, the model proposes.** Agents submit records through `propose`. Quantix validates them, checks
   their evidence and calculates every quantity, extension, total and comparison. A model never states a computed
   number as fact.

@@ -1,6 +1,7 @@
 """The Tender Manager's review. Everything the staff propose comes to him before it reaches the engineer; he accepts
 it or sends it back to whoever made it. In a fully autonomous office his acceptance approves it. Quantix checks each
-record first: he can't accept one with a blocker, and accepts a warning only with his reason."""
+record first: he can't accept one with a blocker, and accepts a warning only with his reason. What the office can't
+settle, he escalates to the engineer with where it shows and his suggested corrections."""
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -15,11 +16,12 @@ from sqlalchemy.orm import Session
 from quantix.boq import records as boq
 from quantix.boq.models import FACT_KINDS, BoqItem, Fact
 from quantix.core.review import APPROVED, PROPOSED, REVIEWED
+from quantix.documents import library
 from quantix.documents.models import Document
 from quantix.estimate import records as estimate
 from quantix.estimate.models import Markups, Rate
 from quantix.office import records as office
-from quantix.office.models import ENGINEER, TEAM, Staff
+from quantix.office.models import ENGINEER, TEAM, Decision, Staff
 from quantix.review import checks
 from quantix.review.models import Acceptance
 from quantix.subcontract import records as subcontract
@@ -89,6 +91,17 @@ def pending(session: Session, tender_id: str) -> list[Pending]:
     return sorted(found, key=lambda p: p.since)
 
 
+def escalation(session: Session, record_id: str) -> Decision | None:
+    """The engineer's open decision on a record the Manager escalated."""
+    query = select(Decision).where(Decision.subject_id == record_id, Decision.status == "waiting")
+    return session.scalars(query).first()
+
+
+def _escalated(session: Session, tender_id: str) -> set[str]:
+    query = select(Decision.subject_id).where(Decision.tender_id == tender_id, Decision.status == "waiting")
+    return {i for i in session.scalars(query) if i}
+
+
 def has_new(session: Session, tender_id: str, since: datetime | None) -> bool:
     """Whether anything came to the Manager for review after he last looked at his queue."""
     return any(since is None or p.since > since for p in pending(session, tender_id))
@@ -96,9 +109,11 @@ def has_new(session: Session, tender_id: str, since: datetime | None) -> bool:
 
 def counts(session: Session, tender_id: str) -> str:
     """The queue in a line: who is waiting on the Manager, with what."""
-    names = _names(session, tender_id)
+    names, escalated = _names(session, tender_id), _escalated(session, tender_id)
     by_producer: dict[str, dict[str, int]] = {}
     for p in pending(session, tender_id):
+        if p.record.id in escalated:
+            continue  # waiting for the engineer's answer
         kinds = by_producer.setdefault(names.get(p.producer, "Someone"), {})
         kinds[p.kind] = kinds.get(p.kind, 0) + 1
     return "; ".join(
@@ -152,6 +167,8 @@ def describe(session: Session, p: Pending, names: dict[str, str]) -> str:
     else:
         quote = session.get(Quote, r.recommended_quote_id)
         line = f"{session.get(Company, quote.company_id).name} for {r.name}: {r.recommendation}"
+    if escalation(session, r.id):
+        line += " · escalated: waiting for the engineer's answer"
     return f"{p.ref} · by {by} · {line}"
 
 
@@ -291,6 +308,8 @@ def review(
             if len(verdict.note.split()) < 3:
                 raise ValueError("say in the note what you checked, or what to correct")
             p = find(session, tender_id, verdict.record)
+            if escalation(session, p.record.id):
+                raise ValueError("you escalated it to the engineer; apply their answer when it comes")
             if verdict.accept:
                 _accept(session, home, tender_id, p, manager, verdict, autonomous)
                 accepted_n += 1
@@ -333,8 +352,46 @@ def _accept(
         subcontract.select_quote(session, r, session.get(Quote, r.recommended_quote_id), status="office_approved")
 
 
+def _same_work(kind: str, record: Any) -> Any:
+    """What finds earlier versions of the same work: the same line, sheet, requirement or fact."""
+    if kind == "rate":
+        return Rate.boq_item_id == record.boq_item_id
+    if kind == "measurement":
+        where = (Measurement.document_id == record.document_id) & (Measurement.page == record.page)
+        if record.boq_item_id:
+            return where & (Measurement.boq_item_id == record.boq_item_id)
+        return where & (Measurement.label == record.label)
+    if kind == "draft":
+        return Draft.requirement_id == record.requirement_id
+    if kind == "fact":
+        return Fact.kind == record.kind
+    if kind == "boq":
+        return (BoqItem.section == record.section) & (BoqItem.item == record.item)
+    if kind == "scale":
+        return (Scale.document_id == record.document_id) & (Scale.page == record.page)
+    return Markups.id.is_not(None)  # the markups: one set per tender
+
+
+def _sent_back_before(session: Session, tender_id: str, p: Pending) -> list[str]:
+    """Why the same work was sent back before, oldest first."""
+    if p.kind not in REVIEWED_KINDS:
+        return []
+    model = REVIEWED_KINDS[p.kind][0]
+    query = select(model).where(
+        model.tender_id == tender_id, model.status == "rejected", model.id != p.record.id, _same_work(p.kind, p.record)
+    )
+    return [r.reason or "" for r in session.scalars(query.order_by(model.created_at))]
+
+
 def _send_back(session: Session, tender_id: str, p: Pending, manager: Staff, note: str) -> None:
     r = p.record
+    earlier = _sent_back_before(session, tender_id, p)
+    answered = select(Decision.id).where(Decision.subject_id == r.id, Decision.status == "answered")
+    if len(earlier) >= 2 and session.scalars(answered).first() is None:
+        raise ValueError(
+            f"it has been sent back {len(earlier)} times already and still isn't right (last: {earlier[-1]}). "
+            "Escalate it to the engineer with escalate: the problem, where it shows and your suggested corrections"
+        )
     if p.kind in REVIEWED_KINDS:
         module = REVIEWED_KINDS[p.kind][1]
         office.send_back(session, tender_id, r, module.label(session, r), note, manager.id)
@@ -365,3 +422,93 @@ def reopen(session: Session, kind: str, record_id: str, reason: str) -> Any:
         raise ValueError("Only approved work can be reopened; send back what is still waiting instead.")
     office.send_back(session, record.tender_id, record, module.label(session, record), reason.strip(), ENGINEER)
     return record
+
+
+class Source(BaseModel):
+    """Where a problem shows, for the engineer to open: a page of a document, or a BOQ line."""
+
+    document_id: str | None = Field(default=None, description="A document, with its page")
+    page: int | None = None
+    boq_item: str | None = Field(default=None, description='Or a BOQ line as list_boq shows it, e.g. "8486 · C.1.2"')
+    what: str = Field(description="What the engineer will find there, in a few words")
+
+
+def _source(session: Session, tender_id: str, source: Source) -> dict[str, Any]:
+    what = source.what.strip()
+    if source.document_id:
+        document = session.get(Document, source.document_id)
+        if document is None or document.tender_id != tender_id or not source.page:
+            raise ValueError(f"{what}: no document of this tender has that id; use list_documents")
+        if library.page(session, document.id, source.page) is None:
+            raise ValueError(f"{what}: {document.name} has no page {source.page}")
+        label = f"{document.name}, page {source.page}: {what}"
+        return {"label": label, "document_id": document.id, "page": source.page}
+    if source.boq_item:
+        item = boq.find_item(session, tender_id, source.boq_item)
+        return {"label": f"BOQ line {boq.reference(item)}: {what}", "boq_item_id": item.id}
+    raise ValueError(f"{what}: give a document and its page, or a BOQ line")
+
+
+def _own_sources(session: Session, p: Pending) -> list[dict[str, Any]]:
+    """Where the record itself comes from: its BOQ line and its page."""
+    r, found = p.record, []
+    item_id = r.id if p.kind == "boq" else getattr(r, "boq_item_id", None)
+    item = session.get(BoqItem, item_id) if item_id else None
+    if item is not None:
+        found.append({"label": f"BOQ line {boq.reference(item)}", "boq_item_id": item.id})
+    where = session.get(Requirement, r.requirement_id) if p.kind == "draft" else r
+    document_id, page = getattr(where, "document_id", None), getattr(where, "page", None)
+    document = session.get(Document, document_id) if document_id and page else None
+    if document is not None:
+        found.append({"label": f"{document.name}, page {page}", "document_id": document.id, "page": page})
+    return found
+
+
+def _title(session: Session, p: Pending) -> str:
+    r = p.record
+    if p.kind in REVIEWED_KINDS:
+        text = REVIEWED_KINDS[p.kind][1].label(session, r)
+    elif p.kind == "checklist":
+        text = f"the checklist item “{r.title}”"
+    elif p.kind == "enquiry":
+        text = f"the enquiry “{r.subject}”"
+    else:
+        text = f"the recommendation for {r.name}"
+    return text[0].upper() + text[1:]
+
+
+def escalate(
+    session: Session,
+    tender_id: str,
+    manager: Staff,
+    ref: str,
+    problem: str,
+    sources: list[Source],
+    suggestions: list[str],
+) -> Decision:
+    """A decision for the engineer on a record the office couldn't settle. The record stays in the Manager's queue
+    until the engineer answers; the answer goes to his chat for him to apply."""
+    p = find(session, tender_id, ref)
+    if escalation(session, p.record.id):
+        raise ValueError("You already escalated it. The engineer's answer will come to your chat.")
+    if len(problem.split()) < 5:
+        raise ValueError("Say what is wrong and why the office can't settle it.")
+    if not sources:
+        raise ValueError("Show the engineer where the problem is: at least one document page or BOQ line.")
+    suggestions = [s.strip() for s in suggestions if s.strip()]
+    if not 1 <= len(suggestions) <= 4:
+        raise ValueError("Suggest 1 to 4 corrections for the engineer to choose from, each complete enough to act on.")
+    shown = _own_sources(session, p) + [_source(session, tender_id, s) for s in sources]
+    decision = Decision(
+        tender_id=tender_id,
+        raised_by=manager.id,
+        title=_title(session, p),
+        text=problem.strip(),
+        options=suggestions,
+        subject_kind=p.kind,
+        subject_id=p.record.id,
+        sources=shown,
+    )
+    session.add(decision)
+    session.flush()
+    return decision

@@ -1164,6 +1164,12 @@ export interface components {
             text: string;
             /** Options */
             options: string[];
+            /** Subject Kind */
+            subject_kind: string | null;
+            /** Subject Id */
+            subject_id: string | null;
+            /** Sources */
+            sources: components["schemas"]["DecisionSource"][] | null;
             /** Status */
             status: string;
             /** Answer */
@@ -1173,6 +1179,17 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** DecisionSource */
+        DecisionSource: {
+            /** Label */
+            label: string;
+            /** Document Id */
+            document_id?: string | null;
+            /** Page */
+            page?: number | null;
+            /** Boq Item Id */
+            boq_item_id?: string | null;
         };
         /** DocumentOut */
         DocumentOut: {

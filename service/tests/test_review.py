@@ -3,12 +3,13 @@
 from decimal import Decimal
 
 import pytest
-from pydantic_ai.messages import ModelResponse, TextPart, UserPromptPart
+from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart, UserPromptPart
 from test_documents import PDF, make_xlsx, read_all, upload
 from test_office import scripted, wait_for
 
 from quantix import settings
 from quantix.boq import records as boq
+from quantix.estimate import records as estimate
 from quantix.office import records as office
 from quantix.office import tools
 from quantix.office.models import Staff
@@ -156,3 +157,118 @@ def test_the_manager_wakes_for_new_work_in_his_queue(client, office_with_work, t
     client.app.state.office.engineer_spoke(tender_id)
     wait_for(lambda o: True, client, tender_id)
     assert len(manager_prompts) == 1  # the same queue doesn't wake him again
+
+
+def decide(client, tender_id, manager_id, record_id, accept, note) -> str:
+    with client.app.state.sessions() as session:
+        [ref] = [p.ref for p in reviews.pending(session, tender_id) if p.record.id == record_id]
+        verdict = reviews.Verdict(record=ref, accept=accept, note=note)
+        manager = session.get(Staff, manager_id)
+        report = reviews.review(session, client.app.state.home, tender_id, manager, [verdict], autonomous=False)
+        session.commit()
+        return report
+
+
+def test_what_the_office_cant_settle_goes_to_the_engineer_with_where_it_shows(client, office_with_work):
+    tender_id, rania_id, _ = office_with_work
+    conditions = read_all(client, tender_id)["Conditions.pdf"]["id"]
+    [fact] = client.get(f"/tenders/{tender_id}/boq").json()["facts"]
+    problem = "The conditions say the works are re-measured, but the bill's preamble cites POMI."
+    source = reviews.Source(document_id=conditions, page=1, what="Re-measured works")
+    with client.app.state.sessions() as session:
+        rania, ref = session.get(Staff, rania_id), refs(client, tender_id)[fact["id"]]
+        with pytest.raises(ValueError, match="Show the engineer where the problem is"):
+            reviews.escalate(session, tender_id, rania, ref, problem, [], ["Re-measured"])
+        with pytest.raises(ValueError, match="has no page 9"):
+            wrong = reviews.Source(document_id=conditions, page=9, what="Re-measured works")
+            reviews.escalate(session, tender_id, rania, ref, problem, [wrong], ["Re-measured"])
+        reviews.escalate(session, tender_id, rania, ref, problem, [source], ["Re-measured", "POMI, per the bill"])
+        with pytest.raises(ValueError, match="You already escalated it"):
+            reviews.escalate(session, tender_id, rania, ref, problem, [source], ["Re-measured"])
+        assert reviews.counts(session, tender_id) == "Omar: 2 BOQ lines"  # it waits for the engineer, not for him
+        session.commit()
+
+    [decision] = client.get(f"/tenders/{tender_id}/decisions").json()
+    assert (decision["title"], decision["text"], decision["options"]) == (
+        "The method of measurement",
+        problem,
+        ["Re-measured", "POMI, per the bill"],
+    )
+    assert (decision["subject_kind"], decision["subject_id"]) == ("fact", fact["id"])
+    assert [(s["label"], s["document_id"], s["page"]) for s in decision["sources"]] == [
+        ("Conditions.pdf, page 1", conditions, 1),  # where the fact was read
+        ("Conditions.pdf, page 1: Re-measured works", conditions, 1),
+    ]
+    held = decide(client, tender_id, rania_id, fact["id"], True, "The engineer will decide this.")
+    assert held.endswith("you escalated it to the engineer; apply their answer when it comes")
+
+    client.post(f"/decisions/{decision['id']}/answer", json={"answer": "Re-measured"})
+    chat = client.get(f"/tenders/{tender_id}/messages", params={"channel": rania_id}).json()
+    assert chat[-1]["text"] == "About “The method of measurement”: Re-measured"
+    applied = decide(client, tender_id, rania_id, fact["id"], True, "The engineer confirmed re-measurement.")
+    assert applied == "Accepted 1 (waiting for the engineer). Sent back 0."
+
+
+def test_after_two_send_backs_the_manager_escalates(client, office_with_work):
+    tender_id, rania_id, omar_id = office_with_work
+    note = "Excavation in rock needs a breaker: price it."
+
+    def propose() -> str:
+        with client.app.state.sessions() as session:
+            why = "Own rate from excavator outputs and current prices."
+            rate = estimate.propose_rate(session, tender_id, omar_id, "3.1", "estimate", why, unit_rate=Decimal(18))
+            session.commit()
+            return rate.id
+
+    for _ in range(2):
+        assert decide(client, tender_id, rania_id, propose(), False, note).endswith("Sent back 1.")
+    third = propose()
+    refused = decide(client, tender_id, rania_id, third, False, note)
+    assert refused.endswith(
+        f"it has been sent back 2 times already and still isn't right (last: {note}). Escalate it to the engineer "
+        "with escalate: the problem, where it shows and your suggested corrections"
+    )
+    with client.app.state.sessions() as session:
+        ref = refs(client, tender_id)[third]
+        source = reviews.Source(boq_item="3.1", what="The line to price")
+        suggestions = ["Price excavation in rock with a breaker", "Ask the client for the soil report"]
+        problem = "Omar keeps pricing 3.1 as soft digging, but the site is rock."
+        reviews.escalate(session, tender_id, session.get(Staff, rania_id), ref, problem, [source], suggestions)
+        session.commit()
+    [decision] = client.get(f"/tenders/{tender_id}/decisions").json()
+    assert decision["title"] == "The rate for BOQ item 3.1"
+    assert [s["label"] for s in decision["sources"]] == ["BOQ line 3.1", "BOQ line 3.1: The line to price"]
+    client.post(f"/decisions/{decision['id']}/answer", json={"answer": suggestions[0]})
+    assert decide(client, tender_id, rania_id, third, False, suggestions[0]).endswith("Sent back 1.")
+
+
+def test_the_manager_escalates_through_his_tool(client, office_with_work, tmp_path):
+    tender_id, _, _ = office_with_work
+    conditions = read_all(client, tender_id)["Conditions.pdf"]["id"]
+    [fact] = client.get(f"/tenders/{tender_id}/boq").json()["facts"]
+    ref = refs(client, tender_id)[fact["id"]]
+    settings.save(tmp_path, office_ai={"connection_id": "scripted", "model": "brain"})
+    returned: list[str] = []
+
+    def brain(messages, info):
+        if "You are Rania Farouk" not in info.instructions:
+            return ModelResponse(parts=[TextPart("Done.")])
+        returned[:] = [str(p.content) for m in messages for p in m.parts if isinstance(p, ToolReturnPart)]
+        if returned:
+            return ModelResponse(parts=[TextPart("Done.")])
+        escalation = {
+            "record": ref,
+            "problem": "The conditions and the bill give different methods of measurement.",
+            "sources": [{"document_id": conditions, "page": 1, "what": "Re-measured works"}],
+            "suggestions": ["Re-measured", "POMI, per the bill"],
+        }
+        return ModelResponse(parts=[ToolCallPart("escalate", escalation)])
+
+    client.app.state.office.model = lambda: scripted(brain)
+    client.app.state.office.engineer_spoke(tender_id)
+    wait_for(lambda o: returned, client, tender_id)
+    assert returned == [
+        "Escalated to the engineer as “The method of measurement”. Carry on with other work until they answer."
+    ]
+    [decision] = client.get(f"/tenders/{tender_id}/decisions").json()
+    assert (decision["subject_kind"], decision["subject_id"]) == ("fact", fact["id"])

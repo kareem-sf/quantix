@@ -4119,6 +4119,42 @@
             "type": "array",
             "title": "Options"
           },
+          "subject_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Kind"
+          },
+          "subject_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Id"
+          },
+          "sources": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DecisionSource"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sources"
+          },
           "status": {
             "type": "string",
             "title": "Status"
@@ -4147,11 +4183,60 @@
           "title",
           "text",
           "options",
+          "subject_kind",
+          "subject_id",
+          "sources",
           "status",
           "answer",
           "created_at"
         ],
         "title": "DecisionOut"
+      },
+      "DecisionSource": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "boq_item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boq Item Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "title": "DecisionSource"
       },
       "DocumentOut": {
         "properties": {

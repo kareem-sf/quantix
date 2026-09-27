@@ -48,6 +48,13 @@ class TaskOut(BaseModel):
     result: str | None
 
 
+class DecisionSource(BaseModel):
+    label: str
+    document_id: str | None = None
+    page: int | None = None
+    boq_item_id: str | None = None
+
+
 class DecisionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -56,6 +63,10 @@ class DecisionOut(BaseModel):
     title: str
     text: str
     options: list[str]
+    # an escalation: the record the office couldn't settle, and where the problem shows
+    subject_kind: str | None
+    subject_id: str | None
+    sources: list[DecisionSource] | None
     status: str
     answer: str | None
     created_at: datetime

@@ -1,6 +1,8 @@
 import { IconChevronLeft } from "@tabler/icons-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
+import { Findings } from "../review/Review";
+import { isChecked } from "../review/queries";
 import { Face } from "./Face";
 import { Prose } from "./Prose";
 import { firstName, useAnswer, useDecisions, useOffice } from "./queries";
@@ -54,6 +56,27 @@ export function DecisionPage() {
           <Prose text={decision.text} signer={asker ? firstName(asker) : undefined} className="text-[15px] text-[#27272A]" />
         </span>
       </div>
+
+      {decision.sources && decision.sources.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <span className="font-semibold text-ink-2">Where it shows</span>
+          {decision.sources.map((s) => {
+            const to = s.document_id
+              ? `/tenders/${tenderId}/documents?doc=${s.document_id}&page=${s.page}`
+              : s.boq_item_id && `/tenders/${tenderId}/estimate?item=${s.boq_item_id}`;
+            return to ? (
+              <Link key={s.label} to={to} className="self-start underline underline-offset-4">
+                {s.label}
+              </Link>
+            ) : (
+              <span key={s.label}>{s.label}</span>
+            );
+          })}
+        </div>
+      )}
+      {isChecked(decision.subject_kind) && decision.subject_id && (
+        <Findings kind={decision.subject_kind} id={decision.subject_id} tenderId={tenderId} />
+      )}
 
       {decision.status === "waiting" ? (
         <>

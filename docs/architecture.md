@@ -63,6 +63,12 @@ Each domain module owns its models, its service functions and the agent tools th
   Manager can't accept a record with a blocker. A warning needs his reason, kept in `acceptances` under the
   finding's key, which names the check and the records, so a changed record is checked again. The thresholds are
   named constants that each message states: plausibility checks, not standards.
+- **Escalations.** The Manager's `escalate` tool turns a record in his queue into a `Decision` with its subject
+  (`subject_kind`, `subject_id`), its sources (document pages and BOQ lines, checked to exist) and his suggested
+  corrections as the options. A record has at least one source and one open escalation at most. While it is
+  open, he can't decide the record. Once the same work has been sent back twice, he can't send it back again
+  until the engineer has answered an escalation about it. The answer reaches his chat through the usual
+  decision answer.
 - **Evidence.** A cited location must exist and must have been read in that agent's run.
 
 ## Quantity take-off

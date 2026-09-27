@@ -318,3 +318,24 @@ for, never stored, and each one names the pages or records it rests on.
 - **Known cost:** the first check of a measurement on a dense sheet reads its vector geometry, about 4 seconds on
   the GLO layouts. The last four sheets stay cached.
 - **Checks:** 110 service tests and 53 UI tests.
+
+## 27 September 2026: escalations
+
+What the office can't settle now reaches the engineer with its evidence, instead of going round in send-backs.
+
+- **The Manager's `escalate` tool** turns a record in his queue into a decision for the engineer. The decision
+  holds:
+  - the problem;
+  - where it shows: the record's own BOQ line and page, plus the document pages and BOQ lines he cites, each
+    checked to exist;
+  - his suggested corrections, 1 to 4, as the choices.
+- **Rules:**
+  - A record has one open escalation at most.
+  - While the escalation is open, the Manager can't accept the record or send it back, and his queue count leaves
+    it out.
+  - Once the same work has been sent back twice, he can't send it back again until the engineer has answered an
+    escalation about it.
+  - The engineer's answer reaches his chat, and he applies it with his review.
+- **On the decision page:** "Where it shows" links each page and BOQ line, Quantix's findings on the record
+  appear, and the suggestions sit beside "Or answer in your own words".
+- Migration 0013 adds `subject_kind`, `subject_id` and `sources` to decisions.

@@ -35,8 +35,11 @@ to do the work, not a tool to operate.
   engineer. He never produces records himself: everything his staff propose comes to his review queue first, and
   he accepts it, saying what he checked, or sends it back, saying what to correct. Only what he accepted reaches
   the engineer's gates. Quantix checks every record before he decides: he can't accept one with a blocker, and he
-  accepts a warning only with his reason, which the engineer sees beside the finding and its source. The engineer
-  can adjust his personality.
+  accepts a warning only with his reason, which the engineer sees beside the finding and its source. What the
+  office can't settle, such as work sent back twice without a fix, he escalates to the engineer. An escalation
+  shows the problem, where it shows (document pages and BOQ lines), what Quantix found and his suggested
+  corrections. The engineer chooses one or answers in their own words, and the Manager applies the answer. The
+  engineer can adjust his personality.
 - **Staff.** Hired by the Manager for this tender's actual needs, with a generated name, role, discipline,
   experience, background, temperament, speaking style and professional opinions, and a locally drawn portrait.
   They speak in their own voice, disagree, raise concerns and push back on the Manager or the engineer.

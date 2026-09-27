@@ -81,6 +81,11 @@ class Decision(Base):
     title: Mapped[str] = mapped_column(String(300))
     text: Mapped[str] = mapped_column(Text)
     options: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # An escalation: the record the office couldn't settle, and where the problem shows ({label, document_id,
+    # page, boq_item_id}); its options are the Manager's suggested corrections
+    subject_kind: Mapped[str | None] = mapped_column(String(20))
+    subject_id: Mapped[str | None] = mapped_column(String(32))
+    sources: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(20), default="waiting")  # waiting | answered
     answer: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)

@@ -38,6 +38,9 @@ const question: Decision = {
   title: "Tender security wording",
   text: "The conditions ask for a 1% tender security. Shall we price the bond at 1%?",
   options: ["Yes, 1%", "Ask the client first"],
+  subject_kind: null,
+  subject_id: null,
+  sources: null,
   status: "waiting",
   answer: null,
   created_at: at,
@@ -69,6 +72,48 @@ describe("Overview and decisions", () => {
     await userEvent.click(screen.getByRole("button", { name: "Confirm" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/tenders/t1"));
     expect(service.state.decisions[0]).toMatchObject({ status: "answered", answer: "Yes, 1%" });
+  });
+
+  it("shows an escalation with where it shows and what Quantix found, and takes the engineer's own answer", async () => {
+    const escalation: Decision = {
+      ...question,
+      id: "q2",
+      title: "The rate for BOQ item 3.1",
+      text: "Omar keeps pricing 3.1 as soft digging, but the site is rock.",
+      options: ["Price excavation in rock with a breaker", "Ask the client for the soil report"],
+      subject_kind: "rate",
+      subject_id: "r9",
+      sources: [
+        { label: "BOQ line 3.1", document_id: null, page: null, boq_item_id: "i31" },
+        { label: "Soils.pdf, page 4: Rock at 1.2 m", document_id: "d7", page: 4, boq_item_id: null },
+      ],
+      status: "waiting",
+      answer: null,
+    };
+    const warning = { severity: "warning", message: "18.00 is -40% from the firm's own rates.", refs: [] };
+    const service = fakeService({
+      tenders: [tender],
+      settings: ready,
+      staff: [rania, omar],
+      decisions: [escalation],
+      findings: { r9: [{ ...warning, accepted_by: null, reason: null }] },
+    });
+    openApp("/tenders/t1/decisions/q2");
+
+    expect(await screen.findByRole("heading", { name: "The rate for BOQ item 3.1" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "BOQ line 3.1" })).toHaveAttribute("href", "/tenders/t1/estimate?item=i31");
+    expect(screen.getByRole("link", { name: "Soils.pdf, page 4: Rock at 1.2 m" })).toHaveAttribute(
+      "href",
+      "/tenders/t1/documents?doc=d7&page=4",
+    );
+    expect(await screen.findByText("18.00 is -40% from the firm's own rates.")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Price excavation in rock with a breaker/ })).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText("Or answer in your own words"), "Use the rock rate from the depot job.");
+    await userEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await waitFor(() =>
+      expect(service.state.decisions[0]).toMatchObject({ answer: "Use the rock rate from the depot job." }),
+    );
   });
 
   it("sends the engineer's request to the Manager", async () => {

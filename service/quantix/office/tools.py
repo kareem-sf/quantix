@@ -742,6 +742,20 @@ def review(ctx: RunContext[Turn], verdicts: list[reviews.Verdict]) -> str:
         return reviews.review(session, ctx.deps.home, ctx.deps.tender_id, me, verdicts, ctx.deps.autonomous)
 
 
+def escalate(
+    ctx: RunContext[Turn], record: str, problem: str, sources: list[reviews.Source], suggestions: list[str]
+) -> str:
+    """Bring the engineer a problem the office can't settle: a record in your review queue that keeps coming back
+    wrong, or one only the engineer can decide. problem: what is wrong and why the office can't settle it. sources:
+    where it shows, each a document page or a BOQ line, with what the engineer will find there. suggestions: 1 to 4
+    corrections you would make, each complete enough to act on. The record waits in your queue; the engineer's
+    answer comes to your chat, and you apply it with review."""
+    with _working(ctx, "Bringing a problem to the engineer") as (session, me):
+        found = reviews.escalate(session, ctx.deps.tender_id, me, record, problem, sources, suggestions)
+        title = found.title
+    return f"Escalated to the engineer as “{title}”. Carry on with other work until they answer."
+
+
 READ: list[Callable] = [
     list_documents,
     search_documents,
@@ -780,4 +794,14 @@ PRODUCE: list[Callable] = [
 ]
 STAFF: list[Callable] = [*READ, *PRODUCE, complete_task]
 # The Manager leads and reviews; he never produces records himself, so every record has a second pair of eyes
-MANAGER: list[Callable] = [*READ, ask_engineer, hire, assign_task, release, review_queue, review_details, review]
+MANAGER: list[Callable] = [
+    *READ,
+    ask_engineer,
+    hire,
+    assign_task,
+    release,
+    review_queue,
+    review_details,
+    review,
+    escalate,
+]
