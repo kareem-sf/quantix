@@ -9,7 +9,7 @@ import type { BoqItem, Fact, LibraryEntry, Markups, Priced, Summary } from "../e
 import type { Decision, Message, Staff, Task } from "../office/queries";
 import type { Comparison, Measurement, Sheet } from "../takeoff/queries";
 import type { Connection, OfficeSettings, Usage } from "../settings/queries";
-import type { Rule } from "../company/queries";
+import type { Profile, Rule } from "../company/queries";
 import type { Company, Package } from "../subcontract/queries";
 import type { Requirement } from "../submission/queries";
 import type { Finding, Lesson } from "../review/queries";
@@ -21,6 +21,7 @@ function json(body: unknown, status = 200) {
 export interface FakeState {
   tenders: (Omit<Tender, "outcome"> & Partial<Pick<Tender, "outcome">>)[];
   rules: Rule[];
+  company: Profile;
   connections: Connection[];
   settings: OfficeSettings;
   models: string[];
@@ -66,6 +67,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
   const state: FakeState = {
     tenders: [],
     rules: [],
+    company: { name: "", address: "", cr_number: "", vat_number: "", has_logo: false },
     connections: [],
     settings: { office_mode: "engineer", office_ai: null, tender_allowance: null },
     models: ["model-b", "model-a"],
@@ -327,6 +329,11 @@ export function fakeService(initial: Partial<FakeState> = {}) {
       return json(null);
     }
 
+    if (path === "/company" && method === "GET") return json(state.company);
+    if (path === "/company" && method === "PUT") {
+      state.company = { ...body, has_logo: state.company.has_logo };
+      return json(state.company);
+    }
     if (path === "/rules" && method === "GET") return json(state.rules);
     if (path === "/rules" && method === "POST") {
       const rule = { id: `r${state.rules.length + 1}`, created_at: "2026-09-23T10:00:00Z", ...body };

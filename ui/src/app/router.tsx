@@ -1,4 +1,5 @@
 import { Navigate, Outlet, useRouteError, type RouteObject } from "react-router";
+import { Details } from "../company/Details";
 import { Rules } from "../company/Rules";
 import { Documents } from "../documents/Documents";
 import { Estimate } from "../estimate/Estimate";
@@ -66,6 +67,7 @@ export const routes: RouteObject[] = [
       { path: "/library", element: <Library /> },
       { path: "/directory", element: <Directory /> },
       { path: "/rules", element: <Rules /> },
+      { path: "/company", element: <Details /> },
     ],
   },
 ];

@@ -3515,6 +3515,215 @@
         }
       }
     },
+    "/company": {
+      "get": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Get Profile",
+        "description": "The firm's details for the title block and letterhead of every document Quantix writes.",
+        "operationId": "get_profile_company_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Save Profile",
+        "operationId": "save_profile_company_put",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/company/logo": {
+      "put": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Save Logo",
+        "operationId": "save_logo_company_logo_put",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_save_logo_company_logo_put"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Remove Logo",
+        "operationId": "remove_logo_company_logo_delete",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Get Logo",
+        "operationId": "get_logo_company_logo_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/tenders/{tender_id}/review": {
       "get": {
         "tags": [
@@ -3959,6 +4168,20 @@
           "file"
         ],
         "title": "Body_attach_file_requirements__requirement_id__file_post"
+      },
+      "Body_save_logo_company_logo_put": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_save_logo_company_logo_put"
       },
       "Boq": {
         "properties": {
@@ -6196,6 +6419,75 @@
           "amount"
         ],
         "title": "PricedItem"
+      },
+      "ProfileIn": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Name"
+          },
+          "address": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Address"
+          },
+          "cr_number": {
+            "type": "string",
+            "maxLength": 50,
+            "title": "Cr Number"
+          },
+          "vat_number": {
+            "type": "string",
+            "maxLength": 50,
+            "title": "Vat Number"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "address",
+          "cr_number",
+          "vat_number"
+        ],
+        "title": "ProfileIn"
+      },
+      "ProfileOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Name"
+          },
+          "address": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Address"
+          },
+          "cr_number": {
+            "type": "string",
+            "maxLength": 50,
+            "title": "Cr Number"
+          },
+          "vat_number": {
+            "type": "string",
+            "maxLength": 50,
+            "title": "Vat Number"
+          },
+          "has_logo": {
+            "type": "boolean",
+            "title": "Has Logo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "address",
+          "cr_number",
+          "vat_number",
+          "has_logo"
+        ],
+        "title": "ProfileOut"
       },
       "QuoteOut": {
         "properties": {

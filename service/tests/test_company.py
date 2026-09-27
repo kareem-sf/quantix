@@ -1,5 +1,7 @@
+import io
 from decimal import Decimal
 
+from PIL import Image
 from test_documents import read_all, upload
 from test_estimate import bill
 
@@ -74,3 +76,27 @@ def test_past_tenders_offer_their_approved_rates_as_benchmarks(client):
             ("Riyadh school 2025", "won", "3.1", Decimal("18.50"), "m3", "estimate")
         ]
         assert company.past_rates(session, current, "blockwork") == []
+
+
+def test_the_company_details_and_logo_are_kept_for_every_document(client):
+    blank = {"name": "", "address": "", "cr_number": "", "vat_number": "", "has_logo": False}
+    assert client.get("/company").json() == blank
+    details = {
+        "name": " Gulf Builders Co. ",
+        "address": "King Fahd Road, Riyadh",
+        "cr_number": "1010",
+        "vat_number": "300",
+    }
+    assert client.put("/company", json=details).json()["name"] == "Gulf Builders Co."
+
+    refused = client.put("/company/logo", files={"file": ("logo.txt", b"not an image")})
+    assert refused.json()["detail"] == "That file isn't an image Quantix can read. Choose a PNG or JPEG."
+    wide = io.BytesIO()
+    Image.new("RGB", (1600, 400), "navy").save(wide, "JPEG")
+    assert client.put("/company/logo", files={"file": ("logo.jpg", wide.getvalue())}).status_code == 204
+    logo = client.get("/company/logo")
+    assert (logo.headers["content-type"], Image.open(io.BytesIO(logo.content)).size) == ("image/png", (800, 200))
+    assert client.get("/company").json()["has_logo"] is True
+
+    assert client.delete("/company/logo").status_code == 204
+    assert client.get("/company/logo").status_code == 404

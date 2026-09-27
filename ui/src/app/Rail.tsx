@@ -1,4 +1,11 @@
-import { IconAddressBook, IconBook2, IconChevronUp, IconListCheck, IconSettings } from "@tabler/icons-react";
+import {
+  IconAddressBook,
+  IconBook2,
+  IconBuilding,
+  IconChevronUp,
+  IconListCheck,
+  IconSettings,
+} from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, useLocation, useParams } from "react-router";
 import { Face } from "../office/Face";
@@ -17,6 +24,7 @@ const STAGES = [
 ] as const;
 
 const SETTINGS = [
+  ["Company details", "/company", IconBuilding],
   ["Directory", "/directory", IconAddressBook],
   ["Company library", "/library", IconBook2],
   ["Company rules", "/rules", IconListCheck],

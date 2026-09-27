@@ -978,6 +978,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/company": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Profile
+         * @description The firm's details for the title block and letterhead of every document Quantix writes.
+         */
+        get: operations["get_profile_company_get"];
+        /** Save Profile */
+        put: operations["save_profile_company_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/company/logo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Logo */
+        get: operations["get_logo_company_logo_get"];
+        /** Save Logo */
+        put: operations["save_logo_company_logo_put"];
+        post?: never;
+        /** Remove Logo */
+        delete: operations["remove_logo_company_logo_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tenders/{tender_id}/review": {
         parameters: {
             query?: never;
@@ -1126,6 +1166,11 @@ export interface components {
         };
         /** Body_attach_file_requirements__requirement_id__file_post */
         Body_attach_file_requirements__requirement_id__file_post: {
+            /** File */
+            file: string;
+        };
+        /** Body_save_logo_company_logo_put */
+        Body_save_logo_company_logo_put: {
             /** File */
             file: string;
         };
@@ -1830,6 +1875,30 @@ export interface components {
             rate: components["schemas"]["RateOut"] | null;
             /** Amount */
             amount: string | null;
+        };
+        /** ProfileIn */
+        ProfileIn: {
+            /** Name */
+            name: string;
+            /** Address */
+            address: string;
+            /** Cr Number */
+            cr_number: string;
+            /** Vat Number */
+            vat_number: string;
+        };
+        /** ProfileOut */
+        ProfileOut: {
+            /** Name */
+            name: string;
+            /** Address */
+            address: string;
+            /** Cr Number */
+            cr_number: string;
+            /** Vat Number */
+            vat_number: string;
+            /** Has Logo */
+            has_logo: boolean;
         };
         /** QuoteOut */
         QuoteOut: {
@@ -4448,6 +4517,163 @@ export interface operations {
             path: {
                 rule_id: string;
             };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_profile_company_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_profile_company_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfileIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_logo_company_logo_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_logo_company_logo_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_save_logo_company_logo_put"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_logo_company_logo_delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
