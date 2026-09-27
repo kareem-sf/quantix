@@ -82,15 +82,32 @@ def _client_format(home: Path, session: Session, tender_id: str, folder: Path, r
     return files, covered
 
 
-def _quantix_format(folder: Path, items: list[BoqItem], rates: dict[str, Decimal], currency: str) -> str:
+def _quantix_format(
+    session: Session, folder: Path, items: list[BoqItem], rates: dict[str, Decimal], currency: str
+) -> str:
+    """The priced BOQ in Quantix's layout, for bills with no rate column to fill. Each line names the client's bill it
+    came from and its row there, bill by bill with a subtotal, so bills that reuse item numbers can't be confused."""
     workbook = openpyxl.Workbook()
     sheet = workbook.active
     sheet.title = "Priced BOQ"
-    sheet.append(["Item", "Description", "Unit", "Quantity", f"Rate {currency}".strip(), f"Amount {currency}".strip()])
+    rate_label, amount_label = f"Rate {currency}".strip(), f"Amount {currency}".strip()
+    sheet.append(["Bill", "Row", "Item", "Description", "Unit", "Quantity", rate_label, amount_label])
+    bills: dict[str, list[BoqItem]] = {}
     for item in items:
-        rate = rates.get(item.id)
-        amount = estimate.money(item.quantity * rate) if rate is not None else None
-        sheet.append([item.item, item.description, item.unit, item.quantity, rate, amount])
+        bills.setdefault(item.document_id, []).append(item)
+    total = Decimal(0)
+    for document_id, lines in bills.items():
+        bill = session.get(Document, document_id).name
+        subtotal = Decimal(0)
+        for item in sorted(lines, key=lambda i: (i.page, records.row_of(i.quote) or 0, i.position)):
+            rate = rates.get(item.id)
+            amount = estimate.money(item.quantity * rate) if rate is not None else None
+            subtotal += amount or Decimal(0)
+            row = records.row_of(item.quote)
+            sheet.append([bill, row, item.item or None, item.description, item.unit, item.quantity, rate, amount])
+        sheet.append([bill, None, None, "Subtotal", None, None, None, subtotal])
+        total += subtotal
+    sheet.append([None, None, None, "Total", None, None, None, total])
     workbook.save(folder / "Priced BOQ.xlsx")
     return "Priced BOQ.xlsx"
 
@@ -119,7 +136,8 @@ def build(home: Path, session: Session, tender_id: str, spread: bool, now: datet
     client_files, covered = _client_format(home, session, tender_id, folder, rates)
     built.files += client_files
     if any(i.id not in covered for i in items):
-        built.files.append(_quantix_format(folder, [i for i in items if i.id not in covered], rates, summary.currency))
+        uncovered = [i for i in items if i.id not in covered]
+        built.files.append(_quantix_format(session, folder, uncovered, rates, summary.currency))
 
     checklist = openpyxl.Workbook()
     sheet = checklist.active

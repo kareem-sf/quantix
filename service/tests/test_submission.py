@@ -197,6 +197,21 @@ def test_a_work_schedule_takes_its_quantities_from_the_boq(client, tender):
         )
 
 
+def test_without_the_client_columns_each_priced_line_names_its_bill_and_row(client, tender, tmp_path):
+    tender_id = tender[0]
+    built = client.post(f"/tenders/{tender_id}/export", json={"spread_markups": False}).json()
+    assert built["files"] == ["Priced BOQ.xlsx", "Checklist.xlsx"]
+    sheet = openpyxl.load_workbook(tmp_path / "exports" / built["folder"] / "Priced BOQ.xlsx").active
+    assert [list(row) for row in sheet.iter_rows(values_only=True)] == [
+        ["Bill", "Row", "Item", "Description", "Unit", "Quantity", "Rate", "Amount"],
+        ["Bill.xlsx", 2, "3.1", "Excavation", "m3", 1240, 18.5, 22940],
+        ["Bill.xlsx", 3, "4.3", "Slab reinforcement", "t", 28.1, 3488, 98012.8],
+        ["Bill.xlsx", 4, "6.3", "Waterproofing", "m2", 980, None, None],
+        ["Bill.xlsx", None, None, "Subtotal", None, None, None, 120952.8],
+        [None, None, None, "Total", None, None, None, 120952.8],
+    ]
+
+
 def test_pricing_columns_come_from_the_client_header(client, tender):
     tender_id, layla, bill, itt = tender
     with client.app.state.sessions() as session:
