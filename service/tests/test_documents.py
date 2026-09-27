@@ -153,6 +153,18 @@ def test_page_images_and_originals(client, tender):
     assert client.get(f"/documents/{documents['Conditions.pdf']['id']}/file").content == PDF
 
 
+def test_a_close_up_enlarges_part_of_a_page(tmp_path):
+    from PIL import Image
+
+    path = tmp_path / "sheet.pdf"
+    path.write_bytes(PDF)
+    whole = Image.open(io.BytesIO(readers.render_page(path, 1, width=612)))
+    close = Image.open(io.BytesIO(readers.render_page(path, 1, width=612, region=(72, 60, 225, 90))))
+    assert whole.size == (612, 792)
+    assert close.size == (612, 120)  # 153 x 30 points, four times larger
+    assert close.convert("L").getextrema()[0] < 128  # the title's letters are in it
+
+
 def test_rejects_paths_that_leave_the_package(client, tender):
     assert upload(client, tender, {"../outside.pdf": PDF}).status_code == 400
 

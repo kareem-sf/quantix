@@ -16,6 +16,7 @@ from quantix.takeoff import records
 from quantix.takeoff.models import Measurement, Scale
 
 router = APIRouter(tags=["takeoff"])
+UI_VERTICES = 50_000  # what the screen snaps to; the office snaps on the service against every point
 
 
 class ScaleOut(BaseModel):
@@ -191,7 +192,7 @@ def get_vertices(document_id: str, number: int, session: DB, request: Request) -
     if document is None or document.kind != "pdf" or tenders.get_tender(session, document.tender_id) is None:
         raise HTTPException(status_code=404, detail="That page can't be measured.")
     path = library.stored_file(request.app.state.home, document)
-    return [list(p) for p in readers.vector_points(path, number)]
+    return [list(p) for p in readers.vector_points(path, number)[:UI_VERTICES]]
 
 
 @router.post("/tenders/{tender_id}/scales", status_code=201)

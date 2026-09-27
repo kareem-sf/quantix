@@ -143,8 +143,12 @@ def read_page(ctx: RunContext[Turn], document_id: str, page: int) -> str:
         return f"{document.name}, page {page}:\n{found.text}"
 
 
-def view_page(ctx: RunContext[Turn], document_id: str, page: int) -> ToolReturn | str:
-    """Look at a page as an image: drawings, scans, tables and stamps. Cite it as "<document name>, page <n>"."""
+def view_page(
+    ctx: RunContext[Turn], document_id: str, page: int, region: list[float] | None = None
+) -> ToolReturn | str:
+    """Look at a page as an image: drawings, scans, tables and stamps. Cite it as "<document name>, page <n>".
+    To read small detail such as a scale bar, a dimension's ticks or a corner, zoom in: region is the part to
+    enlarge as [left, top, right, bottom] in view_page pixels of the whole page."""
     if not ctx.deps.sees_images:
         return BLIND
     with _working(ctx) as (session, me):
@@ -153,9 +157,24 @@ def view_page(ctx: RunContext[Turn], document_id: str, page: int) -> ToolReturn 
             raise ValueError(f"Only PDF pages can be viewed; {document.name} has {document.page_count or 0} pages.")
         me.now = f"Looking at {document.name}, page {page}"
         path = library.stored_file(ctx.deps.home, document)
-    image = readers.render_page(path, page, width=1600)
+        factor = _points(session, ctx.deps.tender_id, document_id, page)
+    if region is None:
+        return ToolReturn(
+            return_value=f"The image of {document.name}, page {page} follows.",
+            content=[BinaryContent(data=readers.render_page(path, page, width=VIEW_WIDTH), media_type="image/png")],
+        )
+    if len(region) != 4 or not (region[0] < region[2] and region[1] < region[3]):
+        raise ModelRetry("Give the region as [left, top, right, bottom] with left < right and top < bottom.")
+    left, top, right, bottom = region
+    image = readers.render_page(path, page, width=VIEW_WIDTH, region=tuple(v * factor for v in region))
+    k = (right - left) / VIEW_WIDTH
     return ToolReturn(
-        return_value=f"The image of {document.name}, page {page} follows.",
+        return_value=(
+            f"A close-up of {document.name}, page {page}, from ({left:.0f}, {top:.0f}) to ({right:.0f}, "
+            f"{bottom:.0f}) follows, enlarged {1 / k:.1f} times. A point at (u, v) in it is at "
+            f"({left:.0f} + u × {k:.4f}, {top:.0f} + v × {k:.4f}) in view_page pixels: give those to the takeoff "
+            "tools."
+        ),
         content=[BinaryContent(data=image, media_type="image/png")],
     )
 

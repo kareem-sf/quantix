@@ -191,8 +191,8 @@ def find_text(path: Path, number: int, text: str, limit: int = 20) -> list[tuple
             document.close()
 
 
-@lru_cache(maxsize=32)
-def vector_points(path: Path, number: int, limit: int = 50_000) -> tuple[tuple[float, float], ...]:
+@lru_cache(maxsize=4)  # a site layout can hold several hundred thousand points
+def vector_points(path: Path, number: int, limit: int = 2_000_000) -> tuple[tuple[float, float], ...]:
     """The end and corner points of the lines drawn on a PDF page, in points from the top left. Takeoff snaps to
     them so measurements land exactly on the drawing. A scan has none."""
     found: set[tuple[float, float]] = set()
@@ -216,13 +216,21 @@ def vector_points(path: Path, number: int, limit: int = 50_000) -> tuple[tuple[f
     return tuple(found)
 
 
-def render_page(path: Path, number: int, width: int = 1400) -> bytes:
-    """A PNG of one PDF page, about `width` pixels wide."""
+def render_page(
+    path: Path, number: int, width: int = 1400, region: tuple[float, float, float, float] | None = None
+) -> bytes:
+    """A PNG of one PDF page, about `width` pixels wide; or of a region of it (left, top, right, bottom in points
+    from the top left), enlarged to that width."""
     with PDFIUM:
         document = pdfium.PdfDocument(path)
         try:
             page = document[number - 1]
-            image = page.render(scale=width / page.get_width()).to_pil()
+            if region is None:
+                image = page.render(scale=width / page.get_width()).to_pil()
+            else:
+                left, top, right, bottom = region
+                crop = (left, page.get_height() - bottom, page.get_width() - right, top)  # trimmed from each side
+                image = page.render(scale=width / (right - left), crop=crop).to_pil()
         finally:
             document.close()
     buffer = BytesIO()
