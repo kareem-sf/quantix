@@ -60,6 +60,20 @@ def durations(session: Session, tender_id: str, activities: list[ActivityIn]) ->
     return rows
 
 
+def _amount(value: Decimal) -> str:
+    return f"{value:,.3f}".rstrip("0").rstrip(".")
+
+
+def schedule_text(rows: list[Duration], sequence: str) -> str:
+    """A work schedule: each line's duration as Quantix worked it out, then the planned sequence and overlaps."""
+    lines = [
+        f"- {r.reference}, {r.description[:80]}: {_amount(r.quantity)} {r.unit} at {_amount(r.output)} {r.unit} a "
+        f"day × {r.crews} crew{'s' if r.crews > 1 else ''} = {r.days} day{'s' if r.days != 1 else ''}"
+        for r in rows
+    ]
+    return "\n".join(["Durations, from the BOQ quantities and the assumed outputs:", *lines, "", sequence.strip()])
+
+
 def requirements(session: Session, tender_id: str) -> list[Requirement]:
     query = select(Requirement).where(Requirement.tender_id == tender_id)
     return list(session.scalars(query.order_by(Requirement.created_at)))

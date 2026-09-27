@@ -177,6 +177,12 @@ def test_a_work_schedule_takes_its_quantities_from_the_boq(client, tender):
             ("3.1", Decimal("1240"), 7),  # 1,240 m3 at 200 a day is 6.2: a started day counts
             ("6.3", Decimal("980"), 2),
         ]
+        assert submission.schedule_text(rows, "Excavation first, then waterproofing: 9 days.") == (
+            "Durations, from the BOQ quantities and the assumed outputs:\n"
+            "- 3.1, Excavation: 1,240 m3 at 100 m3 a day × 2 crews = 7 days\n"
+            "- 6.3, Waterproofing: 980 m2 at 500 m2 a day × 1 crew = 2 days\n\n"
+            "Excavation first, then waterproofing: 9 days."
+        )
         with pytest.raises(ValueError, match="There is no BOQ item 9.9"):
             submission.durations(session, tender_id, [activity(boq_item="9.9", output=1, crews=1)])
 

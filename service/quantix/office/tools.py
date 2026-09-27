@@ -664,22 +664,21 @@ def list_requirements(ctx: RunContext[Turn]) -> str:
     return "\n".join(rows) or "The checklist is empty. Add requirements with add_requirements."
 
 
-def work_out_durations(ctx: RunContext[Turn], activities: list[submission.ActivityIn]) -> str:
-    """Durations for a work schedule: for each BOQ line, the output you assume for one crew in a day and the
-    number of crews. Quantix takes the quantity from the BOQ and works out the days. Put the result in your draft
-    with the sequence and overlaps you plan, and state the outputs as your assumptions."""
-    with _working(ctx, "Working out the programme durations") as (session, _):
+def draft_work_schedule(
+    ctx: RunContext[Turn], requirement: str, title: str, activities: list[submission.ActivityIn], sequence: str
+) -> str:
+    """Draft the work schedule for its checklist requirement. activities: each BOQ line with the output you assume
+    for one crew in a day and the number of crews; Quantix takes the quantity from the BOQ, works out the days and
+    writes them into the draft. sequence: the order of the work, the overlaps you plan and the overall duration of
+    each substation or part, in days, with your assumptions."""
+    with _working(ctx, f"Drafting {title}") as (session, me):
+        found = submission.find_requirement(session, ctx.deps.tender_id, requirement)
         rows = submission.durations(session, ctx.deps.tender_id, activities)
-
-    def amount(value: Decimal) -> str:
-        return f"{value:,.3f}".rstrip("0").rstrip(".")
-
-    lines = [
-        f"{r.reference} | {r.description[:70]} | {amount(r.quantity)} {r.unit} | "
-        f"{amount(r.output)} {r.unit} a day × {r.crews} crew{'s' if r.crews > 1 else ''} | {r.days} days"
-        for r in rows
-    ]
-    return "\n".join([*lines, f"{sum(r.days for r in rows)} days if every line ran one after another."])
+        text = submission.schedule_text(rows, sequence)
+        status = "office_approved" if ctx.deps.autonomous else "proposed"
+        submission.draft(session, found, me.id, title, text, status)
+    waiting = "It is in the checklist." if ctx.deps.autonomous else "It is waiting for the engineer."
+    return f"{text}\n\n{waiting} {sum(r.days for r in rows)} days if every line ran one after another."
 
 
 def draft_document(ctx: RunContext[Turn], requirement: str, title: str, text: str) -> str:
@@ -735,7 +734,7 @@ COMMON: list[Callable] = [
     search_past_tenders,
     add_requirements,
     list_requirements,
-    work_out_durations,
+    draft_work_schedule,
     draft_document,
     set_pricing_columns,
 ]
