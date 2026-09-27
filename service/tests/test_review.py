@@ -240,6 +240,9 @@ def test_after_two_send_backs_the_manager_escalates(client, office_with_work):
     assert [s["label"] for s in decision["sources"]] == ["BOQ line 3.1", "BOQ line 3.1: The line to price"]
     client.post(f"/decisions/{decision['id']}/answer", json={"answer": suggestions[0]})
     assert decide(client, tender_id, rania_id, third, False, suggestions[0]).endswith("Sent back 1.")
+    for _ in range(2):  # the count starts again from the engineer's answer
+        assert decide(client, tender_id, rania_id, propose(), False, note).endswith("Sent back 1.")
+    assert "Escalate it to the engineer" in decide(client, tender_id, rania_id, propose(), False, note)
 
 
 def test_the_manager_escalates_through_his_tool(client, office_with_work, tmp_path):

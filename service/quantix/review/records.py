@@ -373,21 +373,27 @@ def _same_work(kind: str, record: Any) -> Any:
 
 
 def _sent_back_before(session: Session, tender_id: str, p: Pending) -> list[str]:
-    """Why the same work was sent back before, oldest first."""
+    """Why the same work was sent back since the engineer last answered an escalation about it, oldest first."""
     if p.kind not in REVIEWED_KINDS:
         return []
     model = REVIEWED_KINDS[p.kind][0]
-    query = select(model).where(
-        model.tender_id == tender_id, model.status == "rejected", model.id != p.record.id, _same_work(p.kind, p.record)
+    query = select(model).where(model.tender_id == tender_id, _same_work(p.kind, p.record))
+    versions = list(session.scalars(query.order_by(model.created_at)))
+    answers = select(Decision.decided_at).where(
+        Decision.subject_id.in_([v.id for v in versions]), Decision.status == "answered"
     )
-    return [r.reason or "" for r in session.scalars(query.order_by(model.created_at))]
+    answered = max(session.scalars(answers), default=None)
+    return [
+        v.reason or ""
+        for v in versions
+        if v.id != p.record.id and v.status == "rejected" and (answered is None or v.created_at > answered)
+    ]
 
 
 def _send_back(session: Session, tender_id: str, p: Pending, manager: Staff, note: str) -> None:
     r = p.record
     earlier = _sent_back_before(session, tender_id, p)
-    answered = select(Decision.id).where(Decision.subject_id == r.id, Decision.status == "answered")
-    if len(earlier) >= 2 and session.scalars(answered).first() is None:
+    if len(earlier) >= 2:
         raise ValueError(
             f"it has been sent back {len(earlier)} times already and still isn't right (last: {earlier[-1]}). "
             "Escalate it to the engineer with escalate: the problem, where it shows and your suggested corrections"
