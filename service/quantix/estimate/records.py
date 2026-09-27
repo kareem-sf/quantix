@@ -180,12 +180,14 @@ def save_to_library(session: Session, rate: Rate, currency: str) -> int:
 
 
 class PreliminaryIn(BaseModel):
-    """One site cost, priced for the whole job."""
+    """One site cost, priced for the whole job. Quantix multiplies quantity by rate: for a premium or a financing
+    cost, give the amount it is charged on as the quantity and the rate as a fraction, e.g. third-party liability
+    as 3,600,000 (SAR of subcontract value) × 0.003."""
 
     item: str = Field(description="e.g. Site engineer, Plant mobilisation, Third-party liability insurance")
-    quantity: Decimal = Field(gt=0, description="e.g. 3 (months) or 1 (sum)")
-    unit: str = Field(description="e.g. month, trip, sum")
-    rate: Decimal = Field(gt=0, description="The price per unit, in the tender's currency")
+    quantity: Decimal = Field(gt=0, description="e.g. 3 (months), 1 (sum) or 3600000 (SAR insured)")
+    unit: str = Field(description="e.g. month, trip, sum, SAR insured")
+    rate: Decimal = Field(gt=0, description="The price per unit, e.g. 18000 a month, or 0.003 for a 0.3% premium")
 
 
 def preliminary_cost(item: dict) -> Decimal:
