@@ -1,5 +1,6 @@
 """Packages, enquiries, quotes, levelling and the choice. Quantix does the levelling arithmetic."""
 
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from quantix.boq import records as boq
 from quantix.boq.models import BoqItem
+from quantix.documents.arabic import searchable
 from quantix.documents.evidence import check_quote, numbers_in
 from quantix.estimate import records as estimate
 from quantix.estimate.models import Rate
@@ -33,29 +35,115 @@ class Exclusion(BaseModel):
     quote: str = Field(description="Where the quote says it is excluded")
 
 
+# Words that say what kind of company it is, not which one: "ABC Contracting Co. W.L.L." is ABC Contracting
+LEGAL_FORMS = {
+    *("co", "company", "llc", "ltd", "limited", "inc", "incorporated", "corp", "corporation", "plc", "the"),
+    *("est", "establishment", "wll", "spc", "fze", "fzco", "fzc", "jsc", "شركه", "مؤسسه", "ذمم"),
+}
+
+
 def directory(session: Session, words: str = "") -> list[Company]:
     rows = session.scalars(select(Company).where(Company.owner_id == LOCAL_OWNER).order_by(Company.name))
     terms = words.lower().split()
-    return [c for c in rows if all(t in f"{c.name} {c.trades}".lower() for t in terms)]
+    return [c for c in rows if all(t in " ".join([c.name, *c.aliases, c.trades]).lower() for t in terms)]
+
+
+def firm_key(name: str) -> str:
+    """A firm's name as Quantix compares it, ignoring case, punctuation, Arabic letter forms and legal forms."""
+    words = re.split(r"[\W_]+", searchable(name.replace(".", "")))
+    return " ".join(w for w in words if w and w not in LEGAL_FORMS)
+
+
+def _same(session: Session, name: str) -> Company | None:
+    """The firm in the directory with this name, or another name it goes by."""
+    key = firm_key(name)
+    return next((c for c in directory(session) if key and key in {firm_key(n) for n in [c.name, *c.aliases]}), None)
+
+
+def near(session: Session, name: str) -> list[Company]:
+    """Firms that may be this one: every word of the shorter name is in the other."""
+    words = set(firm_key(name).split())
+    found = []
+    for company in directory(session):
+        others = [set(firm_key(n).split()) for n in [company.name, *company.aliases]]
+        if words and any(other and (words <= other or other <= words) for other in others):
+            found.append(company)
+    return found
 
 
 def find_company(session: Session, name: str) -> Company:
-    wanted = name.strip().lower()
-    company = next((c for c in directory(session) if c.name.lower() == wanted), None)
+    company = _same(session, name)
     if company is None:
-        raise ValueError(f"{name} is not in the directory. Add it with add_company first.")
+        maybe = near(session, name)
+        raise ValueError(
+            f"{name} is not in the directory. "
+            + (
+                f"Did you mean {' or '.join(c.name for c in maybe)}? Use the name the directory has."
+                if maybe
+                else "Add it with add_company first."
+            )
+        )
     return company
 
 
-def add_company(session: Session, by: str, name: str, kind: str, trades: str, email=None, phone=None) -> Company:
+class NearDuplicate(ValueError):
+    """A new firm whose name may be one already in the directory."""
+
+    def __init__(self, name: str, firms: list[Company]):
+        self.firms = [c.name for c in firms]
+        super().__init__(
+            f"{name} may be the same firm as {' or '.join(self.firms)}, already in the directory. If it is, use that "
+            "name; if it is a different firm, say so when you add it."
+        )
+
+
+def add_company(
+    session: Session,
+    by: str,
+    name: str,
+    kind: str,
+    trades: str,
+    email=None,
+    phone=None,
+    different_from: list[str] | None = None,
+) -> Company:
+    """Add a firm, once. A name that is only another spelling of a firm in the directory is refused; one that may be
+    the same firm needs `different_from` naming it."""
     if kind not in ("subcontractor", "supplier"):
         raise ValueError("A company is a subcontractor or a supplier.")
-    if any(c.name.lower() == name.strip().lower() for c in directory(session)):
-        raise ValueError(f"{name} is already in the directory.")
+    if not firm_key(name):
+        raise ValueError(f"“{name}” is not a firm's name.")
+    same = _same(session, name)
+    if same is not None:
+        raise ValueError(f"{name} is already in the directory as {same.name}. Use that name.")
+    confirmed = {firm_key(n) for n in different_from or []}
+    maybe = [c for c in near(session, name) if firm_key(c.name) not in confirmed]
+    if maybe:
+        raise NearDuplicate(name, maybe)
     company = Company(name=name.strip(), kind=kind, trades=trades.strip(), email=email, phone=phone, added_by=by)
     session.add(company)
     session.flush()
     return company
+
+
+def merge(session: Session, duplicate: Company, into: Company) -> None:
+    """The engineer's word that two entries are one firm: its enquiries and quotes move to `into`, which keeps the
+    duplicate's names so they find it from now on, and the duplicate goes."""
+    if duplicate.id == into.id:
+        raise ValueError("Choose another firm to merge it into.")
+    theirs = {q.package_id for q in session.scalars(select(Quote).where(Quote.company_id == into.id))}
+    both = [q for q in session.scalars(select(Quote).where(Quote.company_id == duplicate.id)) if q.package_id in theirs]
+    if both:
+        names = ", ".join(session.get(Package, q.package_id).name for q in both)
+        raise ValueError(f"Both have a quote for {names}: a firm has one quote per package.")
+    for model in (Enquiry, Quote):
+        for record in session.scalars(select(model).where(model.company_id == duplicate.id)):
+            record.company_id = into.id
+    names = [n for n in [duplicate.name, *duplicate.aliases] if firm_key(n) != firm_key(into.name)]
+    into.aliases = [*into.aliases, *(n for n in names if n not in into.aliases)]
+    into.email, into.phone = into.email or duplicate.email, into.phone or duplicate.phone
+    session.delete(duplicate)
+    session.flush()
 
 
 def packages(session: Session, tender_id: str) -> list[Package]:

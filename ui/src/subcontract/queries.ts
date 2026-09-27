@@ -57,10 +57,36 @@ export function useDirectory(query: string) {
   });
 }
 
+/** The firm being added may be one already in the directory: `firms` are their names. */
+export class MaybeSameFirm extends Error {
+  constructor(
+    message: string,
+    readonly firms: string[],
+  ) {
+    super(message);
+  }
+}
+
 export function useAddCompany() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: async (body: Omit<Company, "id" | "added_by">) => must(await api.POST("/directory", { body })),
+    mutationFn: async (body: components["schemas"]["CompanyIn"]) => {
+      const result = await api.POST("/directory", { body });
+      const detail = (result.error as { detail?: { message?: string; firms?: string[] } } | undefined)?.detail;
+      if (result.response.status === 409 && detail?.message && detail.firms) {
+        throw new MaybeSameFirm(detail.message, detail.firms);
+      }
+      return must(result);
+    },
+    onSuccess: () => client.invalidateQueries({ queryKey: ["directory"] }),
+  });
+}
+
+export function useMergeCompany() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, into }: { id: string; into: string }) =>
+      ok(await api.POST("/directory/{company_id}/merge", { params: { path: { company_id: id } }, body: { into } })),
     onSuccess: () => client.invalidateQueries({ queryKey: ["directory"] }),
   });
 }

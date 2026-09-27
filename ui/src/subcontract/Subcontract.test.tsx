@@ -130,4 +130,34 @@ describe("Directory", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Remove" }));
     await waitFor(() => expect(service.state.directory).toEqual([]));
   });
+
+  it("asks before adding a firm that may already be there, and merges one entered twice", async () => {
+    const firm = (id: string, name: string) => ({
+      id,
+      name,
+      kind: "subcontractor" as const,
+      trades: "Earthworks",
+      email: null,
+      phone: null,
+      aliases: [],
+      added_by: "s2",
+    });
+    const directory = [firm("co1", "Gulf Groundworks"), firm("co2", "الخليج للحفريات")];
+    const service = fakeService({ tenders: [tender], directory });
+    openApp("/directory");
+
+    await userEvent.type(await screen.findByLabelText("Company"), "Gulf Groundworks Dammam");
+    await userEvent.type(screen.getByLabelText("Trades"), "Earthworks");
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(await screen.findByText("Gulf Groundworks Dammam may be the same firm as Gulf Groundworks.")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Add as a different firm" }));
+    await waitFor(() => expect(service.state.directory.map((c) => c.name)).toContain("Gulf Groundworks Dammam"));
+
+    const arabic = (await screen.findByText("الخليج للحفريات")).closest(".border-b") as HTMLElement;
+    await userEvent.click(within(arabic).getByRole("button", { name: "Same firm as…" }));
+    await userEvent.selectOptions(within(arabic).getByLabelText("The same firm as"), "Gulf Groundworks");
+    await userEvent.click(within(arabic).getByRole("button", { name: "Merge" }));
+    await waitFor(() => expect(service.state.directory.map((c) => c.name)).not.toContain("الخليج للحفريات"));
+    expect(await screen.findByText("Also الخليج للحفريات")).toBeTruthy();
+  });
 });

@@ -495,3 +495,24 @@ The firm's rules held 0 lessons from any of it.
     and the allowance pausing and resuming the office. 130 service tests pass.
   - 3 new interface tests. 60 interface tests pass, and so does the typecheck.
   - Three `test_office.py` tests sometimes time out in a full run, at HEAD too, on a `wait_for` between turns.
+
+## 27 September 2026: one name per firm
+
+From the same article (an alias table, checked before anything merges, so one entity never becomes two). The
+directory matched a firm only by its exact name. A quote headed "ABC Contracting Co." for the directory's "ABC
+Contracting" was refused with "Add it with add_company first", which is how one firm became two.
+
+- **A firm's name is compared, not its spelling.** Quantix ignores case, punctuation, Arabic letter forms and legal
+  forms (Co., LLC, W.L.L., Est., شركة, مؤسسة, ذ.م.م). Recording a quote, drafting an enquiry or recommending under
+  another spelling finds the firm; a recorded quote's reply names it as the directory does. Adding it again is
+  refused.
+- **A name that may be a firm already there asks first.** When every word of the shorter name is in the other, as
+  with "ABC Contracting" and "ABC General Contracting", staff add it only with `different_from` naming the firm.
+  The engineer's Directory offers "Add as a different firm". A name the directory doesn't have suggests the firms
+  it may mean.
+- **The engineer merges a firm entered twice.** "Same firm as…" on a Directory row moves its enquiries and quotes
+  to the chosen firm. That firm keeps the other name, shown as "Also …", so the name finds it from then on.
+  Contacts it lacked are kept. Two quotes for one package can't be merged. Migration 0017 adds
+  `companies.aliases`.
+- **Checks:** 2 new service tests and 1 new interface test. The service suite, interface suite, typecheck, Ruff and
+  the format check pass. On the running app, every read route answers both real tenders without a server error.

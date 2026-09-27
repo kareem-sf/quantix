@@ -751,8 +751,33 @@ export interface paths {
         /** Get Directory */
         get: operations["get_directory_directory_get"];
         put?: never;
-        /** Add Company */
+        /**
+         * Add Company
+         * @description Add a firm. 409 when it may be a firm already in the directory: the detail names them, and adding it again
+         *     with them in `different_from` confirms it is another firm.
+         */
         post: operations["add_company_directory_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/directory/{company_id}/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Merge Company
+         * @description The engineer says a firm is the same as another: its enquiries and quotes move there, and its name stays as
+         *     one of the other firm's names.
+         */
+        post: operations["merge_company_directory__company_id__merge_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1151,6 +1176,12 @@ export interface components {
             email?: string | null;
             /** Phone */
             phone?: string | null;
+            /**
+             * Different From
+             * @description Firms in the directory the engineer says it isn't
+             * @default []
+             */
+            different_from: string[];
         };
         /** CompanyOut */
         CompanyOut: {
@@ -1169,6 +1200,8 @@ export interface components {
             phone?: string | null;
             /** Id */
             id: string;
+            /** Aliases */
+            aliases: string[];
             /** Added By */
             added_by: string;
         };
@@ -1620,6 +1653,14 @@ export interface components {
             reviewed_by: string | null;
             /** Review Note */
             review_note: string | null;
+        };
+        /** Merge */
+        Merge: {
+            /**
+             * Into
+             * @description The firm the duplicate is the same as
+             */
+            into: string;
         };
         /** MessageIn */
         MessageIn: {
@@ -3965,6 +4006,48 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["CompanyOut"];
                 };
+            };
+            /** @description It may be a firm already there */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    merge_company_directory__company_id__merge_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                company_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Merge"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

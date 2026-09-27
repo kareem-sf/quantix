@@ -32,6 +32,8 @@ class Company(Base):
     email: Mapped[str | None] = mapped_column(String(200))
     phone: Mapped[str | None] = mapped_column(String(60))
     notes: Mapped[str | None] = mapped_column(Text)
+    # other names the firm goes by, kept when the engineer merges a duplicate into it, so the name finds it again
+    aliases: Mapped[list[str]] = mapped_column(JSON, default=list)
     added_by: Mapped[str] = mapped_column(String(32))  # "engineer" or the staff member who added it
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
 

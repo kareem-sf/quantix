@@ -100,6 +100,12 @@ A master resource and rate library, the subcontractor and supplier directory, pa
 company rules and preferences (markups, standard exclusions and qualifications, house style), including the
 lessons the engineer kept. Every new team reads them. Dated information is revalidated before reuse.
 
+Each firm is in the directory once. Quantix knows a firm by its name whatever the case, punctuation, Arabic letter
+forms or legal form ("ABC Contracting Co. W.L.L." is ABC Contracting), so a quote under another spelling is the
+same firm's. A name that may be a firm already there is added only once the adder says it is a different firm.
+When a firm was entered twice anyway, the engineer merges the entries: its enquiries and quotes move to one, which
+keeps the other name so it finds the firm from then on.
+
 ## AI
 
 API keys for Anthropic, OpenAI, Google, xAI and one OpenAI-compatible endpoint. ChatGPT/Codex and Grok subscriptions

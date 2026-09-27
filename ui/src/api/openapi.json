@@ -2774,6 +2774,7 @@
           "subcontract"
         ],
         "summary": "Add Company",
+        "description": "Add a firm. 409 when it may be a firm already in the directory: the detail names them, and adding it again\nwith them in `different_from` confirms it is another firm.",
         "operationId": "add_company_directory_post",
         "parameters": [
           {
@@ -2807,6 +2808,65 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "It may be a firm already there"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/directory/{company_id}/merge": {
+      "post": {
+        "tags": [
+          "subcontract"
+        ],
+        "summary": "Merge Company",
+        "description": "The engineer says a firm is the same as another: its enquiries and quotes move there, and its name stays as\none of the other firm's names.",
+        "operationId": "merge_company_directory__company_id__merge_post",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Company Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Merge"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -4030,6 +4090,15 @@
               }
             ],
             "title": "Phone"
+          },
+          "different_from": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Different From",
+            "description": "Firms in the directory the engineer says it isn't",
+            "default": []
           }
         },
         "type": "object",
@@ -4086,6 +4155,13 @@
             "type": "string",
             "title": "Id"
           },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Aliases"
+          },
           "added_by": {
             "type": "string",
             "title": "Added By"
@@ -4097,6 +4173,7 @@
           "kind",
           "trades",
           "id",
+          "aliases",
           "added_by"
         ],
         "title": "CompanyOut"
@@ -5570,6 +5647,20 @@
           "review_note"
         ],
         "title": "MeasurementOut"
+      },
+      "Merge": {
+        "properties": {
+          "into": {
+            "type": "string",
+            "title": "Into",
+            "description": "The firm the duplicate is the same as"
+          }
+        },
+        "type": "object",
+        "required": [
+          "into"
+        ],
+        "title": "Merge"
       },
       "MessageIn": {
         "properties": {

@@ -244,9 +244,22 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     }
     if (path === "/directory" && method === "GET") return json(state.directory);
     if (path === "/directory" && method === "POST") {
-      const company = { id: `co${state.directory.length + 1}`, added_by: "engineer", ...body };
+      const { different_from: differentFrom, ...fields } = body;
+      const firms = state.directory
+        .filter((c) => fields.name.toLowerCase().includes(c.name.toLowerCase()) && !differentFrom.includes(c.name))
+        .map((c) => c.name);
+      const message = `${fields.name} may be the same firm as ${firms[0]}.`;
+      if (firms.length) return json({ detail: { message, firms } }, 409);
+      const company = { id: `co${state.directory.length + 1}`, added_by: "engineer", aliases: [], ...fields };
       state.directory.push(company);
       return json(company, 201);
+    }
+    const merged = path.match(/^\/directory\/(\w+)\/merge$/);
+    if (merged && method === "POST") {
+      const duplicate = state.directory.find((c) => c.id === merged[1])!;
+      state.directory = state.directory.filter((c) => c !== duplicate);
+      state.directory.find((c) => c.id === body.into)!.aliases.push(duplicate.name);
+      return new Response(null, { status: 204 });
     }
     if (path.startsWith("/directory/") && method === "DELETE") {
       state.directory = state.directory.filter((c) => `/directory/${c.id}` !== path);

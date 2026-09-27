@@ -558,16 +558,28 @@ def search_directory(ctx: RunContext[Turn], words: str = "") -> str:
         rows = subcontract.directory(session, words)[:40]
     if not rows:
         return "Nobody in the directory matches. Add a company with add_company."
-    return "\n".join(f"{c.name} · {c.kind} · {c.trades}" + (f" · {c.email}" if c.email else "") for c in rows)
+    return "\n".join(
+        f"{c.name} · {c.kind} · {c.trades}"
+        + (f" · also known as {', '.join(c.aliases)}" if c.aliases else "")
+        + (f" · {c.email}" if c.email else "")
+        for c in rows
+    )
 
 
 def add_company(
-    ctx: RunContext[Turn], name: str, kind: str, trades: str, email: str | None = None, phone: str | None = None
+    ctx: RunContext[Turn],
+    name: str,
+    kind: str,
+    trades: str,
+    email: str | None = None,
+    phone: str | None = None,
+    different_from: list[str] | None = None,
 ) -> str:
     """Add a subcontractor or supplier to the firm's directory, e.g. from the tender's approved vendor list.
-    kind is subcontractor or supplier."""
+    kind is subcontractor or supplier. Each firm is in the directory once: search it first. If Quantix says the name
+    may be a firm already there and it is a different firm, add it again with different_from naming that firm."""
     with _working(ctx, f"Adding {name} to the directory") as (session, me):
-        subcontract.add_company(session, me.id, name, kind, trades, email, phone)
+        subcontract.add_company(session, me.id, name, kind, trades, email, phone, different_from)
     return f"{name} is in the directory."
 
 
@@ -602,16 +614,10 @@ def record_quote(
     the quote excludes with your estimate of what it adds. Quantix levels the quotes."""
     with _working(ctx, f"Recording {company}'s quote") as (session, me):
         found_package = subcontract.find_package(session, ctx.deps.tender_id, package)
-        subcontract.record_quote(
-            session,
-            found_package,
-            subcontract.find_company(session, company),
-            me.id,
-            document_id,
-            lines,
-            exclusions or [],
-        )
-    return f"{company}'s quote is recorded. Use levelling to compare the quotes."
+        firm = subcontract.find_company(session, company)  # the directory's name, however the quote spells it
+        subcontract.record_quote(session, found_package, firm, me.id, document_id, lines, exclusions or [])
+        name = firm.name
+    return f"{name}'s quote is recorded. Use levelling to compare the quotes."
 
 
 def levelling(ctx: RunContext[Turn], package: str) -> str:
