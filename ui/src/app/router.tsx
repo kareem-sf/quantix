@@ -20,7 +20,7 @@ function Shell() {
   return (
     <div className="flex h-full">
       <Rail />
-      <main className="flex min-w-0 grow flex-col items-center overflow-y-auto">
+      <main className="flex min-w-0 grow flex-col items-center-safe overflow-y-auto">
         <Outlet />
       </main>
     </div>

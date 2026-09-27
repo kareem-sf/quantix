@@ -32,7 +32,7 @@ export function DecisionPage() {
   }
 
   return (
-    <div className="flex w-[640px] flex-col gap-6 pt-12">
+    <div className="flex w-full max-w-[704px] flex-col gap-6 px-8 pt-12">
       <div className="flex items-center justify-between text-ink-2">
         <Link to={`/tenders/${tenderId}`} className="flex items-center gap-1 hover:text-ink">
           <IconChevronLeft className="size-4" stroke={1.75} />

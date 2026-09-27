@@ -17,7 +17,7 @@ export function NewTender() {
   }
 
   return (
-    <form onSubmit={submit} className="flex w-[600px] flex-col gap-7 pt-24">
+    <form onSubmit={submit} className="flex w-full max-w-[664px] flex-col gap-7 px-8 pt-24">
       <div className="flex flex-col gap-1.5">
         <h1 className="text-[28px] font-semibold tracking-tight">Start a tender</h1>
         <p className="text-sm text-ink-2">Name the tender. You can add the package once it’s created.</p>

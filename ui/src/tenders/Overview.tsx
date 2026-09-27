@@ -73,7 +73,7 @@ export function Overview() {
   const state = { working: " The office is working.", paused: " The office is paused.", idle: "" }[office.data.state];
 
   return (
-    <div className="flex min-h-full w-[720px] flex-col pt-14">
+    <div className="flex min-h-full w-full max-w-[784px] flex-col px-8 pt-14">
       <span className="text-ink-3">{tender.data.name}</span>
       <h1 className="mt-1.5 mb-1 text-[28px] font-semibold tracking-tight">
         {waiting.length === 0

@@ -21,7 +21,7 @@ const primary = "h-9 rounded-lg bg-ink px-4 text-[13px] text-white disabled:bg-l
 
 export function Settings() {
   return (
-    <div className="flex w-[640px] flex-col gap-9 py-11">
+    <div className="flex w-full max-w-[704px] flex-col gap-9 px-8 py-11">
       <h1 className="text-[22px] font-semibold tracking-tight">Settings</h1>
       <OfficeMode />
       <Connections />
