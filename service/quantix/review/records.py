@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from quantix.boq import records as boq
@@ -27,7 +27,7 @@ from quantix.review.models import Acceptance
 from quantix.subcontract import records as subcontract
 from quantix.subcontract.models import Company, Enquiry, Package, Quote
 from quantix.submission import records as submission
-from quantix.submission.models import Draft, Requirement
+from quantix.submission.models import Draft, PricingColumns, Requirement
 from quantix.takeoff import records as takeoff
 from quantix.takeoff.models import Measurement, Scale
 
@@ -41,9 +41,28 @@ REVIEWED_KINDS: dict[str, Any] = {
     "markups": (Markups, estimate),
     "draft": (Draft, submission),
 }
-KIND_NAMES = {"boq": "BOQ lines", "fact": "facts", "scale": "scales", "measurement": "measurements", "rate": "rates"}
-KIND_NAMES |= {"markups": "markups", "draft": "drafts", "checklist": "checklist items", "enquiry": "enquiries"}
-KIND_NAMES |= {"recommendation": "quote recommendations"}
+NAMES = {  # one, many
+    "boq": ("BOQ line", "BOQ lines"),
+    "fact": ("fact", "facts"),
+    "scale": ("scale", "scales"),
+    "measurement": ("measurement", "measurements"),
+    "rate": ("rate", "rates"),
+    "markups": ("set of markups", "sets of markups"),
+    "draft": ("draft", "drafts"),
+    "checklist": ("checklist item", "checklist items"),
+    "enquiry": ("enquiry", "enquiries"),
+    "recommendation": ("quote recommendation", "quote recommendations"),
+    "quote": ("quote", "quotes"),
+    "company": ("company", "companies"),
+    "package": ("package", "packages"),
+    "columns": ("set of pricing columns", "sets of pricing columns"),
+}
+
+
+def _counted(n: int, kind: str) -> str:
+    return f"{n} {NAMES[kind][0 if n == 1 else 1]}"
+
+
 CHECKED = {kind: model for kind, (model, _) in REVIEWED_KINDS.items()} | {"recommendation": Package}
 
 
@@ -117,8 +136,7 @@ def counts(session: Session, tender_id: str) -> str:
         kinds = by_producer.setdefault(names.get(p.producer, "Someone"), {})
         kinds[p.kind] = kinds.get(p.kind, 0) + 1
     return "; ".join(
-        f"{name}: " + ", ".join(f"{n} {KIND_NAMES[k] if n > 1 else k}" for k, n in kinds.items())
-        for name, kinds in by_producer.items()
+        f"{name}: " + ", ".join(_counted(n, k) for k, n in kinds.items()) for name, kinds in by_producer.items()
     )
 
 
@@ -518,3 +536,28 @@ def escalate(
     session.add(decision)
     session.flush()
     return decision
+
+
+def filed_since(session: Session, staff_id: str, since: datetime) -> str:
+    """What someone filed since a moment, e.g. "1 draft, 3 rates"; empty when they filed nothing."""
+    made = [(kind, model, model.proposed_by) for kind, (model, _) in REVIEWED_KINDS.items()]
+    made += [
+        ("checklist", Requirement, Requirement.added_by),
+        ("enquiry", Enquiry, Enquiry.created_by),
+        ("quote", Quote, Quote.proposed_by),
+        ("company", Company, Company.added_by),
+        ("package", Package, Package.created_by),
+        ("columns", PricingColumns, PricingColumns.proposed_by),
+    ]
+    counts = [
+        (kind, session.scalar(select(func.count()).select_from(model).where(by == staff_id, model.created_at >= since)))
+        for kind, model, by in made
+    ]
+    recommended = select(func.count()).select_from(Package)
+    counts.append(
+        (
+            "recommendation",
+            session.scalar(recommended.where(Package.recommended_by == staff_id, Package.recommended_at >= since)),
+        )
+    )
+    return ", ".join(_counted(n, kind) for kind, n in counts if n)

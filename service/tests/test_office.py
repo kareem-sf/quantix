@@ -101,7 +101,10 @@ def office_brain(messages, info) -> ModelResponse:
         if len(done) == 2:
             task_id = re.search(r"- (\w+): find the tender security clause", prompt).group(1)
             return call(
-                "complete_task", task_id=task_id, result="Tender security is one percent (Conditions.pdf, page 1)."
+                "complete_task",
+                task_id=task_id,
+                result="Tender security is one percent (Conditions.pdf, page 1).",
+                only_reported=True,  # finding a clause files nothing
             )
         return DONE
     return DONE

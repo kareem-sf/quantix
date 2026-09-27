@@ -20,7 +20,7 @@ from quantix.documents import library, readers
 from quantix.documents.models import Document
 from quantix.estimate import records as estimate
 from quantix.office import records
-from quantix.office.models import TEAM, Staff
+from quantix.office.models import TEAM, Staff, Task
 from quantix.review import audit
 from quantix.review import records as reviews
 from quantix.subcontract import records as subcontract
@@ -226,9 +226,24 @@ def ask_engineer(ctx: RunContext[Turn], title: str, question: str, options: list
     return "The question is waiting for the engineer."
 
 
-def complete_task(ctx: RunContext[Turn], task_id: str, result: str) -> str:
-    """Finish one of your tasks with a clear result the Manager can use, citing documents and pages."""
+def complete_task(ctx: RunContext[Turn], task_id: str, result: str, only_reported: bool = False) -> str:
+    """Finish one of your tasks with a clear result the Manager can use, citing documents and pages. Quantix checks
+    that you filed the work since the task began (a draft, measurement, rate, BOQ line or other record). For a task
+    that only asked you to find, read or check something, set only_reported to true."""
     with _working(ctx) as (session, me):
+        task = session.get(Task, task_id)
+        if task is not None and task.staff_id == me.id and task.status == "open":
+            filed = reviews.filed_since(session, me.id, task.created_at)
+            if not filed and task.title.startswith("Redo "):
+                raise ValueError(
+                    "You haven't filed the corrected work yet. Redo it with its tool, then complete the task."
+                )
+            if not filed and not only_reported:
+                raise ValueError(
+                    "You haven't filed anything since this task began. If it asked you to draft, measure, price, enter "
+                    "or record something, do that with its tool first. If it only asked you to find, read or check "
+                    "something, complete it again with only_reported set to true."
+                )
         task = records.complete(session, me, task_id, result)
         me.now = f"Finished: {task.title}"
     return "Done. The Manager has your result."

@@ -1,9 +1,17 @@
 """The Tender Manager reviews everything his staff propose before it reaches the engineer."""
 
+import re
 from decimal import Decimal
 
 import pytest
-from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart, UserPromptPart
+from pydantic_ai.messages import (
+    ModelResponse,
+    RetryPromptPart,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from test_documents import PDF, make_xlsx, read_all, upload
 from test_office import scripted, wait_for
 
@@ -279,3 +287,37 @@ def test_the_manager_escalates_through_his_tool(client, office_with_work, tmp_pa
     ]
     [decision] = client.get(f"/tenders/{tender_id}/decisions").json()
     assert (decision["subject_kind"], decision["subject_id"]) == ("fact", fact["id"])
+
+
+def test_a_task_is_done_only_once_its_work_is_filed(client, office_with_work, tmp_path):
+    tender_id, rania_id, omar_id = office_with_work
+    [slab] = [i for i in client.get(f"/tenders/{tender_id}/boq").json()["items"] if i["item"] == "4.2"]
+    decide(client, tender_id, rania_id, slab["id"], False, "Use the unit as printed, m3, not م3.")  # Omar's redo task
+    settings.save(tmp_path, office_ai={"connection_id": "scripted", "model": "brain"})
+    refused: list[str] = []
+
+    def brain(messages, info):
+        if "You are Omar Haddad" not in info.instructions:
+            return ModelResponse(parts=[TextPart("Done.")])
+        refused[:] = [str(p.content) for m in messages for p in m.parts if isinstance(p, RetryPromptPart)]
+        if refused:
+            return ModelResponse(parts=[TextPart("Done.")])
+        prompt = next(str(p.content) for m in messages for p in m.parts if isinstance(p, UserPromptPart))
+        task_id = re.search(r"- (\w+): Redo BOQ item 4.2", prompt).group(1)
+        claim = {"task_id": task_id, "result": "Entered it again as m3.", "only_reported": True}
+        return ModelResponse(parts=[ToolCallPart("complete_task", claim)])  # claims the redo without doing it
+
+    client.app.state.office.model = lambda: scripted(brain)
+    client.app.state.office.engineer_spoke(tender_id)
+    wait_for(lambda o: refused, client, tender_id)
+    assert refused[0].startswith("You haven't filed the corrected work yet. Redo it with its tool")
+    assert [t["status"] for t in client.get(f"/tenders/{tender_id}/tasks").json()] == ["open"]
+
+    with client.app.state.sessions() as session:
+        since = office.open_tasks(session, session.get(Staff, omar_id))[0].created_at
+        assert reviews.filed_since(session, omar_id, since) == ""
+        omar = session.get(Staff, omar_id)
+        line = boq.ItemIn(item="4.2", description="Slab", unit="m3", quantity=Decimal("312.4"),
+                          document_id=slab["source"]["document_id"], page=1, quote=QUOTES[1])  # fmt: skip
+        boq.propose_items(session, tender_id, omar, [line])
+        assert reviews.filed_since(session, omar_id, since) == "1 BOQ line"

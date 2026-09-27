@@ -366,3 +366,24 @@ What the office can't settle now reaches the engineer with its evidence, instead
 
   All 26 workbook rows with quantities are in the BOQ: columns G (Rev.01 quantity) and E (unit) were found from
   the entered rows.
+
+## 27 September 2026: the review running on the real tender
+
+I answered the stale programme question as the engineer, and reopened the approved programme because it left
+out Earthwork / C.2.7.2. The office then ran the new flow live:
+- the Manager reviewed with `review_queue`, `review_details` and `review`, audited with `audit_tender`, and escalated
+  twice with sources;
+- the checks caught a redraft that dropped every 8486 line.
+
+What it showed, and what changed:
+- **Reopen** was offered only on office-approved work, so the engineer couldn't take back their own approval. It is
+  now on every approved draft, rate, fact, scale and markups.
+- **A redraft listed the 8485 lines twice** where the 8486 lines belonged. `draft_work_schedule` now refuses a line
+  listed twice, and names the same number in the other bill.
+- **The two-send-backs rule** counted rejections from before the engineer answered, so every redraft went back to
+  the engineer. The count now starts from the engineer's latest answer on the same work.
+- **A send-back gave the maker no task**, so he waited to be told. It now opens a "Redo …" task for them.
+- **A staff member closed tasks claiming work he never filed.** `complete_task` now checks what they filed since the
+  task began:
+  - a "Redo …" task needs the corrected work filed;
+  - any other task needs filed work, or a statement that it only asked for a report.
