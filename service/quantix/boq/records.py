@@ -105,21 +105,22 @@ def reference(item: BoqItem) -> str:
     return f"{item.section} / {number}" if item.section else number
 
 
-def find_item(session: Session, tender_id: str, reference: str) -> BoqItem:
+def find_item(session: Session, tender_id: str, name: str) -> BoqItem:
     """A BOQ item by its number, or by "<section> / <number>" when several bills share the number. An unnumbered
     line is "row <n>", its row in the client's workbook."""
-    section, _, number = reference.strip().rpartition(" / ")
+    section, _, number = name.strip().rpartition(" / ")
     row = _ROW.fullmatch(number.strip())
     query = select(BoqItem).where(
         BoqItem.tender_id == tender_id, BoqItem.item == ("" if row else number.strip()), BoqItem.status.in_(ACTIVE)
     )
-    found = [
-        i
-        for i in session.scalars(query)
-        if (not section or (i.section or "").lower() == section.lower()) and (not row or _row(i) == row.group(1))
-    ]
+    numbered = [i for i in session.scalars(query) if not row or _row(i) == row.group(1)]
+    found = [i for i in numbered if not section or (i.section or "").lower() == section.lower()]
     if not found:
-        raise ValueError(f"There is no BOQ item {reference}. Use list_boq to see the items.")
+        elsewhere = " or ".join(f"“{reference(i)}”" for i in numbered)
+        raise ValueError(
+            f"There is no BOQ item {name}."
+            + (f" That number is {elsewhere}." if elsewhere else " Use list_boq to see the items.")
+        )
     if len(found) > 1:
         sections = ", ".join(f"“{i.section or 'no section'}”" for i in found)
         raise ValueError(f"Item {number} is in more than one bill: {sections}. Give it as “<section> / {number}”.")

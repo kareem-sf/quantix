@@ -206,8 +206,11 @@ def test_bills_that_reuse_item_numbers_are_told_apart_by_section(client, package
         ):
             records.find_item(session, tender_id, "3.1")
         assert records.find_item(session, tender_id, "8486 · earthwork / 3.1").section == "8486 · Earthwork"
-        with pytest.raises(ValueError, match="There is no BOQ item 8487 / 3.1"):
+        with pytest.raises(ValueError) as wrong_bill:
             records.find_item(session, tender_id, "8487 / 3.1")
+        assert str(wrong_bill.value) == (  # says what the number is, so the next try is right
+            "There is no BOQ item 8487 / 3.1. That number is “8485 · Earthwork / 3.1” or “8486 · Earthwork / 3.1”."
+        )
         second = records.find_item(session, tender_id, "8486 · Earthwork / 3.1")
         records.decide(session, second, False, "Wrong unit.")
         session.commit()
