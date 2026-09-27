@@ -110,7 +110,12 @@ def test_the_price_is_computed_from_quantities_rates_and_markups(client, tender)
             session,
             tender_id,
             priya,
-            Decimal("0.08"),
+            [
+                estimate.PreliminaryIn(item="Site engineer", quantity=Decimal(3), unit="month", rate=Decimal(3000)),
+                estimate.PreliminaryIn(
+                    item="Plant mobilisation", quantity=Decimal(1), unit="sum", rate=Decimal("676.22")
+                ),
+            ],
             Decimal("0.05"),
             Decimal("0.07"),
             Decimal("-1000"),
@@ -119,6 +124,10 @@ def test_the_price_is_computed_from_quantities_rates_and_markups(client, tender)
         session.commit()
 
     result = client.get(f"/tenders/{tender_id}/estimate").json()
+    assert [(p["item"], p["cost"]) for p in result["markups"]["preliminary_items"]] == [
+        ("Site engineer", "9000.00"),
+        ("Plant mobilisation", "676.22"),
+    ]
     rows = {i["item"]: i for i in result["items"]}
     assert (rows["3.1"]["rate"]["rate"], rows["3.1"]["amount"]) == ("18.50", "22940.00")
     assert [line["cost"] for line in rows["4.3"]["rate"]["lines"]] == ["992.00", "2415.00", "72.00", "9.00"]

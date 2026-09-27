@@ -507,10 +507,17 @@ def propose_rate(
 
 
 def propose_markups(
-    ctx: RunContext[Turn], preliminaries: Decimal, overheads: Decimal, profit: Decimal, adjustment: Decimal, note: str
+    ctx: RunContext[Turn],
+    preliminaries: list[estimate.PreliminaryIn],
+    overheads: Decimal,
+    profit: Decimal,
+    adjustment: Decimal,
+    note: str,
 ) -> str:
-    """Propose the tender's markups as fractions (0.08 is 8%): preliminaries on the net cost, overheads, profit, and
-    a lump-sum adjustment. Explain them in the note. Quantix computes the totals."""
+    """Propose the tender's markups: preliminaries as the site's own costs priced item by item (site staff for the
+    programme's months, plant mobilisation, site facilities, insurances the tender requires, testing), overheads
+    and profit as fractions (0.06 is 6%), and a lump-sum adjustment. Explain your assumptions in the note.
+    Quantix totals the preliminaries and computes the price."""
     with _working(ctx, "Proposing the markups") as (session, me):
         status = "office_approved" if ctx.deps.autonomous else "proposed"
         estimate.propose_markups(

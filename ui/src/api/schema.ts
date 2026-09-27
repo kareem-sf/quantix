@@ -1335,8 +1335,8 @@ export interface components {
         MarkupsOut: {
             /** Id */
             id: string;
-            /** Preliminaries */
-            preliminaries: string;
+            /** Preliminary Items */
+            preliminary_items: components["schemas"]["PreliminaryOut"][];
             /** Overheads */
             overheads: string;
             /** Profit */
@@ -1509,6 +1509,19 @@ export interface components {
             text: string;
             /** Has Text */
             has_text: boolean;
+        };
+        /** PreliminaryOut */
+        PreliminaryOut: {
+            /** Item */
+            item: string;
+            /** Quantity */
+            quantity: string;
+            /** Unit */
+            unit: string;
+            /** Rate */
+            rate: string;
+            /** Cost */
+            cost: string;
         };
         /** PricedItem */
         PricedItem: {

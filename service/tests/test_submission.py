@@ -74,10 +74,13 @@ def tender(client):
             )
         zero = Decimal(0)
         estimate.propose_markups(
-            session, tender_id, layla.id, Decimal("0.10"), zero, zero, zero, "Site costs", status="approved"
+            session, tender_id, layla.id, [SITE_COSTS], zero, zero, zero, "Site costs", status="approved"
         )
         session.commit()
         return tender_id, layla.id, docs["Bill.xlsx"]["id"], docs["ITT.pdf"]["id"]
+
+
+SITE_COSTS = estimate.PreliminaryIn(item="Site costs", quantity=Decimal(1), unit="sum", rate=Decimal("12095.28"))
 
 
 def requirement(title, quote, itt, section="Commercial"):
@@ -194,7 +197,7 @@ def test_the_package_is_built_in_the_client_format_with_markups_in_the_rates(cli
     before = hashlib.sha256(stored.read_bytes()).hexdigest()
 
     built = client.post(f"/tenders/{tender_id}/export", json={"spread_markups": True}).json()
-    # Net 1240 × 18.50 + 28.1 × 3488.00 = 22,940.00 + 98,012.80 = 120,952.80; preliminaries 10% = 12,095.28.
+    # Net 1240 × 18.50 + 28.1 × 3488.00 = 22,940.00 + 98,012.80 = 120,952.80; site costs 12,095.28 (10%).
     # The total 133,048.08 ÷ 120,952.80 = 1.1, so the rates become 20.35 and 3,836.80.
     assert (Decimal(built["factor"]), built["summary_total"], built["priced_total"]) == (
         Decimal("1.1"),

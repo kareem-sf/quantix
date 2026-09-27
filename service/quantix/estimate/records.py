@@ -179,25 +179,38 @@ def save_to_library(session: Session, rate: Rate, currency: str) -> int:
     return len(entries)
 
 
+class PreliminaryIn(BaseModel):
+    """One site cost, priced for the whole job."""
+
+    item: str = Field(description="e.g. Site engineer, Plant mobilisation, Third-party liability insurance")
+    quantity: Decimal = Field(gt=0, description="e.g. 3 (months) or 1 (sum)")
+    unit: str = Field(description="e.g. month, trip, sum")
+    rate: Decimal = Field(gt=0, description="The price per unit, in the tender's currency")
+
+
+def preliminary_cost(item: dict) -> Decimal:
+    return money(Decimal(str(item["quantity"])) * Decimal(str(item["rate"])))
+
+
 def propose_markups(
     session: Session,
     tender_id: str,
     by: str,
-    preliminaries: Decimal,
+    preliminaries: list[PreliminaryIn],
     overheads: Decimal,
     profit: Decimal,
     adjustment: Decimal,
     note: str,
     status: str = "proposed",
 ) -> Markups:
-    for name, value in (("preliminaries", preliminaries), ("overheads", overheads), ("profit", profit)):
+    for name, value in (("overheads", overheads), ("profit", profit)):
         if not 0 <= value < 1:
-            raise ValueError(f"Give {name} as a fraction between 0 and 1, e.g. 0.08 for 8%.")
+            raise ValueError(f"Give {name} as a fraction between 0 and 1, e.g. 0.06 for 6%.")
     for older in session.scalars(select(Markups).where(Markups.tender_id == tender_id, Markups.status == "proposed")):
         older.status = "replaced"
     markups = Markups(
         tender_id=tender_id,
-        preliminaries=preliminaries,
+        preliminary_items=[item.model_dump(mode="json") for item in preliminaries],
         overheads=overheads,
         profit=profit,
         adjustment=adjustment,
@@ -256,7 +269,7 @@ def summary(session: Session, tender_id: str) -> Summary:
         result.net += money(item.quantity * rate_of(rate))
     markups = current_markups(session, tender_id)
     if markups:
-        result.preliminaries = money(result.net * markups.preliminaries)
+        result.preliminaries = sum((preliminary_cost(i) for i in markups.preliminary_items), Decimal(0))
         result.overheads = money((result.net + result.preliminaries) * markups.overheads)
         result.profit = money((result.net + result.preliminaries + result.overheads) * markups.profit)
         result.adjustment = markups.adjustment

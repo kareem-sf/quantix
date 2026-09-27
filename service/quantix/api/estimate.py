@@ -56,9 +56,17 @@ class PricedItem(BaseModel):
     amount: Decimal | None
 
 
+class PreliminaryOut(BaseModel):
+    item: str
+    quantity: Decimal
+    unit: str
+    rate: Decimal
+    cost: Decimal
+
+
 class MarkupsOut(BaseModel):
     id: str
-    preliminaries: Decimal
+    preliminary_items: list[PreliminaryOut]
     overheads: Decimal
     profit: Decimal
     adjustment: Decimal
@@ -171,8 +179,22 @@ def get_estimate(tender_id: str, session: DB) -> EstimateOut:
     markups = records.current_markups(session, tender_id)
     return EstimateOut(
         items=items,
-        markups=MarkupsOut.model_validate(markups, from_attributes=True) if markups else None,
+        markups=_markups(markups) if markups else None,
         summary=SummaryOut(**vars(records.summary(session, tender_id))),
+    )
+
+
+def _markups(markups: Markups) -> MarkupsOut:
+    items = [PreliminaryOut(**i, cost=records.preliminary_cost(i)) for i in markups.preliminary_items]
+    return MarkupsOut(
+        id=markups.id,
+        preliminary_items=items,
+        overheads=markups.overheads,
+        profit=markups.profit,
+        adjustment=markups.adjustment,
+        note=markups.note,
+        status=markups.status,
+        proposed_by=markups.proposed_by,
     )
 
 

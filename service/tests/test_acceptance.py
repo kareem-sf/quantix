@@ -71,7 +71,13 @@ def phases(docs):
             ("propose_rate", {"boq_item": "4.3", "basis": "estimate", "unit_rate": "3488.00", "note": estimate_note}),
             (
                 "propose_markups",
-                {"preliminaries": "0.10", "overheads": "0", "profit": "0", "adjustment": "0", "note": "Site costs."},
+                {
+                    "preliminaries": [{"item": "Site costs", "quantity": 1, "unit": "sum", "rate": "15672.28"}],
+                    "overheads": "0",
+                    "profit": "0",
+                    "adjustment": "0",
+                    "note": "Site costs.",
+                },
             ),
         ],
         "SUBCONTRACT": [
@@ -226,7 +232,7 @@ def test_a_synthetic_tender_goes_through_every_gate_to_a_built_package(client, t
     client.post(f"/requirements/{priced_boq['id']}/ready", json={"ready": True, "note": "Attached as the workbook."})
     assert gates() == {"boq": 0, "facts": 0, "takeoff": 0, "pricing": 0, "subcontract": 0, "submission": 0}
 
-    # Net 22,940.00 + 98,012.80 + 35,770.00 = 156,722.80; preliminaries 10% = 15,672.28; total 172,395.08.
+    # Net 22,940.00 + 98,012.80 + 35,770.00 = 156,722.80; site costs 15,672.28 (10%); total 172,395.08.
     summary = client.get(f"/tenders/{tender_id}/estimate").json()["summary"]
     assert (summary["net"], summary["total"], summary["vat"], summary["total_with_vat"]) == (
         "156722.80",

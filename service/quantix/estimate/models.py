@@ -70,8 +70,9 @@ class Markups(Reviewed, Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     tender_id: Mapped[str] = mapped_column(ForeignKey("tenders.id", ondelete="CASCADE"))
-    preliminaries: Mapped[Decimal] = mapped_column(Numeric(8, 4))  # fractions: 0.08 is 8%
-    overheads: Mapped[Decimal] = mapped_column(Numeric(8, 4))
+    # the site's own costs, priced item by item: {item, quantity, unit, rate}; Quantix totals them
+    preliminary_items: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    overheads: Mapped[Decimal] = mapped_column(Numeric(8, 4))  # fractions: 0.06 is 6%
     profit: Mapped[Decimal] = mapped_column(Numeric(8, 4))
     adjustment: Mapped[Decimal] = mapped_column(Numeric(18, 2))  # a lump sum added to (or taken off) the price
     note: Mapped[str] = mapped_column(Text)

@@ -396,7 +396,7 @@ function SummaryPanel({ tenderId, summary, markups }: { tenderId: string; summar
   const pct = (value: string) => `${(Number(value) * 100).toFixed(1).replace(/\.0$/, "")}%`;
   const rows: [string, string][] = [
     ["Net cost", summary.net],
-    [`Preliminaries${markups ? ` ${pct(markups.preliminaries)}` : ""}`, summary.preliminaries],
+    ["Preliminaries", summary.preliminaries],
     [`Overheads${markups ? ` ${pct(markups.overheads)}` : ""}`, summary.overheads],
     [`Profit${markups ? ` ${pct(markups.profit)}` : ""}`, summary.profit],
     ["Adjustment", summary.adjustment],
@@ -446,6 +446,18 @@ function SummaryPanel({ tenderId, summary, markups }: { tenderId: string; summar
       {markups ? (
         <div className="flex flex-col gap-2 rounded-[10px] bg-rail p-3">
           <span className="font-medium">Markups · {statusLabel(markups.status)}</span>
+          {markups.preliminary_items.length > 0 && (
+            <ul aria-label="Preliminaries" className="flex flex-col gap-1">
+              {markups.preliminary_items.map((p) => (
+                <li key={p.item} className="flex justify-between gap-3">
+                  <span className="min-w-0 text-ink-2">
+                    {p.item} · {Number(p.quantity).toLocaleString("en-US")} {p.unit} × {money(p.rate)}
+                  </span>
+                  <span className="shrink-0">{money(p.cost)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
           <span className="leading-normal text-[#27272A]">{markups.note}</span>
           {markups.status === "proposed" && (
             <span className="flex gap-3">
