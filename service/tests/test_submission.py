@@ -123,6 +123,10 @@ def test_drafts_wait_for_review_and_the_engineer_marks_what_they_provide(client,
         assert (
             submission.find_requirement(session, tender_id, "Technical · Method statement for concrete works") == method
         )
+        with pytest.raises(
+            ValueError, match="Give one of these titles exactly: .*“Method statement for concrete works”"
+        ):
+            submission.find_requirement(session, tender_id, "method statement")  # a guess is told what there is
         submission.draft(session, method, layla, "Method statement", "First try.")
         second = submission.draft(session, method, layla, "Method statement", "Pour sequence.\n\nCuring for 7 days.")
         session.commit()
