@@ -22,6 +22,7 @@ class CompanyFields(BaseModel):
     trades: str = Field(min_length=1)
     email: str | None = None
     phone: str | None = None
+    website: str | None = None
 
 
 class CompanyIn(CompanyFields):

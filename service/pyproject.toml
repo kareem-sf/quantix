@@ -24,6 +24,7 @@ dependencies = [
     "python-pptx>=1.0",
     "rapidocr>=3.9.2",
     "python-bidi>=0.6",
+    "httpx>=0.28",
 ]
 
 [project.optional-dependencies]

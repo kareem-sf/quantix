@@ -131,6 +131,24 @@ describe("Directory", () => {
     await waitFor(() => expect(service.state.directory).toEqual([]));
   });
 
+  it("links a firm found on the web to its website", async () => {
+    const firm = {
+      id: "co1",
+      name: "Green Concrete Readymix",
+      kind: "supplier" as const,
+      trades: "ready-mixed concrete",
+      email: null,
+      phone: null,
+      website: "https://greenconcrete.example",
+      aliases: [],
+      added_by: "s2",
+    };
+    fakeService({ tenders: [tender], directory: [firm] });
+    openApp("/directory");
+
+    expect(await screen.findByRole("link", { name: "Website" })).toHaveAttribute("href", "https://greenconcrete.example");
+  });
+
   it("asks before adding a firm that may already be there, and merges one entered twice", async () => {
     const firm = (id: string, name: string) => ({
       id,

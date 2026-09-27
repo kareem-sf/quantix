@@ -112,6 +112,7 @@ def add_company(
     email=None,
     phone=None,
     different_from: list[str] | None = None,
+    website: str | None = None,
 ) -> Company:
     """Add a firm, once. A name that is only another spelling of a firm in the directory is refused; one that may be
     the same firm needs `different_from` naming it."""
@@ -126,7 +127,9 @@ def add_company(
     maybe = [c for c in near(session, name) if firm_key(c.name) not in confirmed]
     if maybe:
         raise NearDuplicate(name, maybe)
-    company = Company(name=name.strip(), kind=kind, trades=trades.strip(), email=email, phone=phone, added_by=by)
+    company = Company(
+        name=name.strip(), kind=kind, trades=trades.strip(), email=email, phone=phone, website=website, added_by=by
+    )
     session.add(company)
     session.flush()
     return company

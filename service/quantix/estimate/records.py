@@ -14,7 +14,7 @@ from quantix.boq import records as boq
 from quantix.boq.models import BoqItem, Fact
 from quantix.core.review import APPROVED, LIVE, PROPOSED, REVIEWED, UNDECIDED
 from quantix.documents import meaning
-from quantix.documents.evidence import check_quote, numbers_in
+from quantix.documents.evidence import check_quote, check_web_quote, numbers_in
 from quantix.documents.library import superseded
 from quantix.estimate.models import LibraryResource, Markups, Rate
 from quantix.office import records as office
@@ -74,6 +74,7 @@ def propose_rate(
     quote: str | None = None,
     library_id: str | None = None,
     status: str = PROPOSED,
+    web_page_id: str | None = None,
 ) -> Rate:
     item = boq.find_item(session, tender_id, item_number)
     if (unit_rate is None) == (not lines):
@@ -91,12 +92,23 @@ def propose_rate(
     elif basis == "library":
         if library_id is None or session.get(LibraryResource, library_id) is None:
             raise ValueError("That library entry doesn't exist. Use search_library to find it.")
+    elif basis == "web":
+        if not (web_page_id and quote):
+            raise ValueError("A web price needs the saved page's id from read_web_page and the quoted line.")
+        check_web_quote(session, web_page_id, quote)
+        if unit_rate is not None and unit_rate not in numbers_in(quote):
+            raise ValueError(f"The rate {unit_rate} is not in the quoted line.")
+        if len(note.strip()) < 20:
+            raise ValueError(
+                "A web price needs a note: what it covers and how it becomes this item's rate (delivery, tax, units)."
+            )
+        _check_not_settled(session, item)
     elif basis == "estimate":
         if len(note.strip()) < 20:
             raise ValueError("An estimated rate needs its reasoning in the note: outputs, prices and assumptions.")
         _check_not_settled(session, item)
     else:
-        raise ValueError("The basis is quote, library or estimate.")
+        raise ValueError("The basis is quote, library, web or estimate.")
     # the newest proposal for an item replaces any still being decided, so one rate per line is reviewed
     for older in session.scalars(select(Rate).where(Rate.boq_item_id == item.id, Rate.status.in_(UNDECIDED))):
         older.status = "replaced"
@@ -109,8 +121,9 @@ def propose_rate(
         # only the evidence the basis calls for, which was checked above
         document_id=document_id if basis == "quote" else None,
         page=page if basis == "quote" else None,
-        quote=quote if basis == "quote" else None,
+        quote=quote if basis in ("quote", "web") else None,
         library_id=library_id if basis == "library" else None,
+        web_page_id=web_page_id if basis == "web" else None,
         note=note.strip(),
         proposed_by=by,
         status=status,

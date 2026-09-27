@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -10,7 +10,7 @@ from quantix import tenders
 from quantix.api.tenders import DB
 from quantix.boq import records as boq
 from quantix.core.review import REVIEWED, UNDECIDED
-from quantix.documents.models import Document
+from quantix.documents.models import Document, WebPage
 from quantix.estimate import records
 from quantix.estimate.models import LibraryResource, Markups, Rate
 from quantix.office import records as office
@@ -29,6 +29,12 @@ class LineOut(BaseModel):
     cost: Decimal
 
 
+class WebSource(BaseModel):
+    url: str
+    title: str
+    read_at: datetime
+
+
 class RateOut(BaseModel):
     id: str
     basis: str
@@ -40,6 +46,7 @@ class RateOut(BaseModel):
     page: int | None
     quote: str | None
     library_id: str | None
+    web_page: WebSource | None
     note: str
     status: str
     proposed_by: str
@@ -145,6 +152,7 @@ def _rate(session: Session, rate: Rate | None) -> RateOut | None:
     if rate.lines:
         lines = [LineOut(**{"wastage": 0, **line}, cost=records.line_cost(line)) for line in rate.lines]
     document = session.get(Document, rate.document_id) if rate.document_id else None
+    page = session.get(WebPage, rate.web_page_id) if rate.web_page_id else None
     return RateOut(
         id=rate.id,
         basis=rate.basis,
@@ -156,6 +164,7 @@ def _rate(session: Session, rate: Rate | None) -> RateOut | None:
         page=rate.page,
         quote=rate.quote,
         library_id=rate.library_id,
+        web_page=WebSource(url=page.url, title=page.title, read_at=page.read_at) if page else None,
         note=rate.note,
         status=rate.status,
         proposed_by=rate.proposed_by,

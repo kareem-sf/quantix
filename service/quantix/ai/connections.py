@@ -1,4 +1,4 @@
-"""AI connections and their keys, kept in ~/.quantix/auth.json."""
+"""AI connections and their keys, and the web research keys, kept in ~/.quantix/auth.json."""
 
 import uuid
 from datetime import UTC, datetime
@@ -40,6 +40,24 @@ def add(home: Path, provider: str, label: str, api_key: str, base_url: str | Non
 def remove(home: Path, connection_id: str) -> None:
     def change(data: dict[str, Any]) -> None:
         data["connections"] = [c for c in data["connections"] if c["id"] != connection_id]
+
+    jsonfile.update(_path(home), _empty(), change)
+
+
+def web_keys(home: Path) -> dict[str, str]:
+    """The web research services' keys the engineer added, by service."""
+    return jsonfile.read(_path(home), _empty()).get("web", {})
+
+
+def set_web_key(home: Path, service: str, api_key: str | None) -> None:
+    """Keep a web research service's key, or forget it with None."""
+
+    def change(data: dict[str, Any]) -> None:
+        keys = data.setdefault("web", {})
+        if api_key is None:
+            keys.pop(service, None)
+        else:
+            keys[service] = api_key
 
     jsonfile.update(_path(home), _empty(), change)
 

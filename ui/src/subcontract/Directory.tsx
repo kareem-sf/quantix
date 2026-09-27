@@ -53,7 +53,17 @@ export function Directory() {
             <span className="min-w-0 truncate text-ink-2" dir="auto">
               {c.trades}
             </span>
-            <span className="min-w-0 truncate text-ink-3">{[c.email, c.phone].filter(Boolean).join(" · ")}</span>
+            <span className="min-w-0 truncate text-ink-3">
+              {[c.email, c.phone].filter(Boolean).join(" · ")}
+              {c.website && (
+                <>
+                  {(c.email || c.phone) && " · "}
+                  <a href={c.website} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                    Website
+                  </a>
+                </>
+              )}
+            </span>
             <span className="flex justify-end gap-3">
               <button onClick={() => setMerging(merging === c.id ? null : c.id)} className="text-ink-3 hover:text-ink">
                 Same firm as…

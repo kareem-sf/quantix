@@ -160,6 +160,7 @@ describe("Office", () => {
         { label: "The rate for BOQ item 4.3", boq_item_id: "b43" },
         { label: "Bill.xlsx, page 1", document_id: "d1", page: 1 },
         { label: "Where the tender stands" },
+        { label: "Green Concrete Readymix, read 27 Sep 2026", url: "https://readymix.example/c35" },
       ],
     };
     fakeService({
@@ -177,6 +178,10 @@ describe("Office", () => {
       "/tenders/t1/documents?doc=d1&page=1",
     );
     expect(screen.getByText("Where the tender stands")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Green Concrete Readymix, read 27 Sep 2026" })).toHaveAttribute(
+      "href",
+      "https://readymix.example/c35",
+    );
   });
 
   it("messages a person directly and can stop the office", async () => {

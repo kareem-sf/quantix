@@ -633,3 +633,41 @@ looking at the image, and not at all when its AI can't see images.
 - **Checks:** 9 new service tests (5 OCR, 4 reading) and 1 interface test. OCR runs only in its own tests; elsewhere
   a blank page would keep it busy. 149 service tests and 63 interface tests pass, and so do the typecheck, Ruff and
   the format check.
+
+## 27 September 2026: web research
+
+The engineer asked for live market data: rates, suppliers, subcontractors, technical datasheets and outputs. They
+chose two services with a fallback, and web research on by default in general words only.
+
+- **Two tools for every person in the office.** `search_web` takes a few general words (at most 120 characters;
+  the rules say never the client's or the project's name) and returns up to 8 results. `read_web_page` reads a
+  page in parts of 8,000 characters. Only the search words and page addresses leave the computer.
+- **Two services, one after the other.** Firecrawl answers first and needs no key: without one it gives a free
+  daily allowance per computer. TinyFish takes over when Firecrawl can't answer (a limit, an error, no reply), once
+  the engineer has added its free key. Settings has a "Web research" section for both keys; a key is kept only once
+  its service accepts it. Keys live in `auth.json` under `web`.
+- **Every page read is saved** in `web_pages`, as it was then. A page read in the past week is reused rather than
+  read again. Its text comes to the office marked as information to check, not instructions.
+- **A web price is evidence, checked like a quote.** `propose_rate` takes the basis "web" with the saved page's id
+  and the quoted line: the quote must be on the saved page and a unit rate must be in the quote. The note must say
+  how the market price becomes the rate. It goes through the Manager's review and the engineer's gate like any
+  rate, and can't replace a rate the engineer approved. The Estimate shows "A market price from the web" with the
+  quote and a link to the page, and the date it was read.
+- **Also:** a message to the engineer can give a web page it read as a source, which opens the page; the directory
+  keeps a firm's website, which `add_company` takes and the Directory links to. The rules and the evidence rule in
+  AGENTS.md and the spec now include web pages.
+- Migration 0021 adds `web_pages`, `rates.web_page_id` (without a database constraint: SQLite can only add one by
+  rebuilding the table) and `companies.website`.
+- **Live check:** through Quantix's own code and Firecrawl without a key, "ready mix concrete C35 price per cubic
+  metre Riyadh" found a Riyadh supplier's 149 to 250 SAR range and its product page read as clean text; "bitumen
+  waterproofing membrane supplier Riyadh" found Sika Saudi Arabia, Madar and Bitumat. TinyFish is checked only
+  against its documented responses: it needs the engineer's free key.
+- **Checks:** 3 new service tests (the fallback, a web price resting on the saved page, the keys) and 4 new interface
+  tests (a web price, a web source in the chat, the keys, a firm's website). 156 service tests and 68 interface
+  tests pass; typecheck, Ruff and the format check pass. Migrations 0020 and 0021 rehearsed on a copy of the real
+  database: only `web_pages` is new, every other row count unchanged.
+- **On the real tender, meaning search is live:** the running app fetched the model and indexed all 9,544 pages
+  with text in both SEC tenders, 28,342 passages from 9,209 computed vectors. "who pays for water and electricity
+  on site" finds the responsibility matrix and the purchase order's site storage clause; "retention money" finds
+  the three retention clauses. "penalty for late completion" misses the liquidated damages clause, which
+  "liquidated damages" finds.

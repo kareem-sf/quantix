@@ -54,6 +54,7 @@ const priced: Priced = {
     page: 1,
     quote: "Rebar B500B cut and bent 2,300.00",
     library_id: null,
+    web_page: null,
     note: "Steel price from Al-Rajhi’s quote of 17 September, excluding delivery.",
     status: "reviewed",
     proposed_by: "s3",
@@ -94,6 +95,28 @@ describe("Pricing", () => {
     await userEvent.click(within(panel).getByLabelText("Save to the company library"));
     await userEvent.click(within(panel).getByRole("button", { name: "Approve rate" }));
     await waitFor(() => expect(service.state.decided).toEqual([{ id: "r1", approve: true, reason: null, save_to_library: true }]));
+  });
+
+  it("shows a market price from the web with the page it was read from", async () => {
+    const web = {
+      ...priced.rate!,
+      basis: "web",
+      source_document: null,
+      document_id: null,
+      page: null,
+      quote: "C35/20 OPC | 230.00 SAR",
+      web_page: { url: "https://readymix.example/c35", title: "Green Concrete Readymix", read_at: "2026-09-27T10:00:00Z" },
+    };
+    fakeService({ tenders: [tender], staff: [priya], items: [rebar], priced: [{ ...priced, rate: web }], summary });
+    openApp("/tenders/t1/estimate?item=i43");
+
+    const panel = await screen.findByRole("complementary", { name: "Item 4.3" });
+    expect(await within(panel).findByText("A market price from the web")).toBeInTheDocument();
+    expect(within(panel).getByRole("link", { name: /^Green Concrete Readymix, read 27 Sept? 2026$/ })).toHaveAttribute(
+      "href",
+      "https://readymix.example/c35",
+    );
+    expect(within(panel).getByText("“C35/20 OPC | 230.00 SAR”")).toBeInTheDocument();
   });
 
   it("reopens a rate the office approved after the Manager's review, with the reason", async () => {

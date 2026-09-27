@@ -125,7 +125,7 @@ def test_the_manager_answers_how_a_line_was_priced_from_its_record(client, tende
     with client.app.state.sessions() as session:
         item_id = boq.find_item(session, tender_id, "4.3").id
     assert answer["sources"] == [
-        {"label": "The rate for BOQ item 4.3", "document_id": None, "page": None, "boq_item_id": item_id}
+        {"label": "The rate for BOQ item 4.3", "document_id": None, "page": None, "boq_item_id": item_id, "url": None}
     ]
 
 
@@ -162,7 +162,9 @@ def test_only_what_someone_opened_can_be_given_as_a_source(client, tender, tmp_p
         f"You haven't opened rate {rate_id[:8]}. Open it with open_record first.",
     ]
     answer = client.get(chat).json()[-1]
-    assert answer["sources"] == [{"label": "Bill.xlsx, page 1", "document_id": bill, "page": 1, "boq_item_id": None}]
+    assert answer["sources"] == [
+        {"label": "Bill.xlsx, page 1", "document_id": bill, "page": 1, "boq_item_id": None, "url": None}
+    ]
 
 
 def test_work_promised_to_the_engineer_becomes_a_task_that_wakes_its_owner(client, tender, tmp_path):

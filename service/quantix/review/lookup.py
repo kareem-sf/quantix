@@ -14,7 +14,7 @@ from quantix.boq.models import FACT_KINDS, BoqItem, Fact
 from quantix.core.review import APPROVED, UNDECIDED
 from quantix.documents import library
 from quantix.documents.arabic import searchable
-from quantix.documents.models import Document
+from quantix.documents.models import Document, WebPage
 from quantix.estimate import records as estimate
 from quantix.estimate.models import Markups, Rate
 from quantix.office import records as office
@@ -445,6 +445,12 @@ def cited(session: Session, tender_id: str, staff_id: str, text: str) -> dict[st
         if office.has_opened(session, staff_id, "summary", key):
             return {"label": SUMMARIES[key]}
         raise ValueError(f"You haven't looked at {key} yet: call it first, then give it as a source.")
+    if wanted.startswith(("https://", "http://")):
+        query = select(WebPage).where(WebPage.url == wanted).order_by(WebPage.read_at.desc())
+        read = next((p for p in session.scalars(query) if office.has_opened(session, staff_id, "web", p.id)), None)
+        if read is None:
+            raise ValueError(f"You haven't read {wanted}. Read it with read_web_page first.")
+        return {"label": f"{read.title}, read {read.read_at:%d %b %Y}", "url": read.url}
     page = _PAGE_REF.match(wanted)
     if page:
         document = _document_named(session, tender_id, page["name"])

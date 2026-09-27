@@ -2,12 +2,14 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import urlparse
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, StringConstraints, model_validator
 
 from quantix import settings, tenders
 from quantix.ai import check, connections, providers
 from quantix.api.tenders import DB
+from quantix.documents import web
 from quantix.office import records
 from quantix.review import scorecard
 
@@ -127,6 +129,45 @@ async def check_model(connection_id: str, body: CheckRequest, home: Home) -> Con
     ok, message, sees_images = await check.check_model(model)
     connections.record_check(home, connection_id, body.model, ok, message, sees_images)
     return _out(_connection(home, connection_id))
+
+
+class WebKeys(BaseModel):
+    """The web research keys the engineer added, as hints; None for a service without one."""
+
+    firecrawl: str | None
+    tinyfish: str | None
+
+
+class WebKey(BaseModel):
+    api_key: Text
+
+
+def _web_keys(home: Path) -> WebKeys:
+    keys = connections.web_keys(home)
+    return WebKeys(**{s: f"…{keys[s][-4:]}" if s in keys else None for s in web.SERVICES})
+
+
+@router.get("/web/keys")
+def get_web_keys(home: Home) -> WebKeys:
+    return _web_keys(home)
+
+
+@router.put("/web/keys/{service}")
+def set_web_key(service: Literal["firecrawl", "tinyfish"], body: WebKey, home: Home) -> WebKeys:
+    """Keep a web research key once the service accepts it."""
+    try:
+        web.check_key(service, body.api_key)
+    except httpx.HTTPStatusError as error:
+        raise HTTPException(status_code=400, detail="The key was refused.") from error
+    except httpx.HTTPError as error:
+        raise HTTPException(status_code=502, detail="The service couldn't be reached. Try again later.") from error
+    connections.set_web_key(home, service, body.api_key)
+    return _web_keys(home)
+
+
+@router.delete("/web/keys/{service}", status_code=204)
+def remove_web_key(service: Literal["firecrawl", "tinyfish"], home: Home) -> None:
+    connections.set_web_key(home, service, None)
 
 
 @router.get("/settings")

@@ -31,6 +31,7 @@ class DecisionSource(BaseModel):
     document_id: str | None = None
     page: int | None = None
     boq_item_id: str | None = None
+    url: str | None = None  # a web page the office read
 
 
 class MessageOut(BaseModel):

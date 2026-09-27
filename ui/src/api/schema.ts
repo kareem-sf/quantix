@@ -130,6 +130,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/web/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Web Keys */
+        get: operations["get_web_keys_web_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/web/keys/{service}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Web Key
+         * @description Keep a web research key once the service accepts it.
+         */
+        put: operations["set_web_key_web_keys__service__put"];
+        post?: never;
+        /** Remove Web Key */
+        delete: operations["remove_web_key_web_keys__service__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/settings": {
         parameters: {
             query?: never;
@@ -1221,6 +1259,8 @@ export interface components {
             email?: string | null;
             /** Phone */
             phone?: string | null;
+            /** Website */
+            website?: string | null;
             /**
              * Different From
              * @description Firms in the directory the engineer says it isn't
@@ -1243,6 +1283,8 @@ export interface components {
             email?: string | null;
             /** Phone */
             phone?: string | null;
+            /** Website */
+            website?: string | null;
             /** Id */
             id: string;
             /** Aliases */
@@ -1348,6 +1390,8 @@ export interface components {
             page?: number | null;
             /** Boq Item Id */
             boq_item_id?: string | null;
+            /** Url */
+            url?: string | null;
         };
         /** DocumentOut */
         DocumentOut: {
@@ -1989,6 +2033,7 @@ export interface components {
             quote: string | null;
             /** Library Id */
             library_id: string | null;
+            web_page: components["schemas"]["WebSource"] | null;
             /** Note */
             note: string;
             /** Status */
@@ -2337,6 +2382,33 @@ export interface components {
             producer: string;
             /** Line */
             line: string;
+        };
+        /** WebKey */
+        WebKey: {
+            /** Api Key */
+            api_key: string;
+        };
+        /**
+         * WebKeys
+         * @description The web research keys the engineer added, as hints; None for a service without one.
+         */
+        WebKeys: {
+            /** Firecrawl */
+            firecrawl: string | null;
+            /** Tinyfish */
+            tinyfish: string | null;
+        };
+        /** WebSource */
+        WebSource: {
+            /** Url */
+            url: string;
+            /** Title */
+            title: string;
+            /**
+             * Read At
+             * Format: date-time
+             */
+            read_at: string;
         };
     };
     responses: never;
@@ -2691,6 +2763,105 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ConnectionOut"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_web_keys_web_keys_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebKeys"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_web_key_web_keys__service__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                service: "firecrawl" | "tinyfish";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebKey"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebKeys"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_web_key_web_keys__service__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                service: "firecrawl" | "tinyfish";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

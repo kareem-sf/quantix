@@ -31,6 +31,7 @@ class Company(Base):
     trades: Mapped[str] = mapped_column(Text)
     email: Mapped[str | None] = mapped_column(String(200))
     phone: Mapped[str | None] = mapped_column(String(60))
+    website: Mapped[str | None] = mapped_column(String(500))
     notes: Mapped[str | None] = mapped_column(Text)
     # other names the firm goes by, kept when the engineer merges a duplicate into it, so the name finds it again
     aliases: Mapped[list[str]] = mapped_column(JSON, default=list)

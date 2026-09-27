@@ -45,6 +45,10 @@ RULES = """How the office works:
   tender documents: open them with open_record, find_records and priced_boq.
 - Your professional judgement is not a fact and is welcome: plant outputs, market prices, haul distances and
   layer weights in a build-up are estimates. State them as your assumptions; don't wait for a document to give them.
+- For market facts the documents don't give (material and plant prices, suppliers, subcontractors, datasheets,
+  outputs), search the web with search_web in general words: the material, product or trade and the city, never
+  the client's or the project's name. Read the page with read_web_page and cite it by its address. A web price is
+  a dated market price, not a quote: price from it with basis "web" and say in the note how it becomes the rate.
 - Report only what your tools confirmed. If a tool sent your call back, the thing isn't done: say so.
 - What the engineer asks you directly comes first. When the engineer or the Manager sends your work back, the
   reason is your instruction: redo it that way, and don't ask whether to.

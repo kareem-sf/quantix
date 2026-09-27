@@ -17,7 +17,7 @@ from quantix.boq import records as boq
 from quantix.boq.models import FACT_KINDS, BoqItem, Fact
 from quantix.core.review import APPROVED, PROPOSED, REVIEWED
 from quantix.documents import library
-from quantix.documents.models import Document
+from quantix.documents.models import Document, WebPage
 from quantix.estimate import records as estimate
 from quantix.estimate.models import Markups, Rate
 from quantix.office import records as office
@@ -260,7 +260,10 @@ def details(session: Session, p: Pending) -> str:
                 f" = {estimate.line_cost(line)}"
                 for line in r.lines
             )
-        if r.quote:
+        if r.web_page_id:
+            page = session.get(WebPage, r.web_page_id)
+            text += f"\nOn the web page {page.title} ({page.url}), read {page.read_at:%d %b %Y}: “{r.quote}”"
+        elif r.quote:
             text += f"\nQuoted on {_where(session, r.document_id, r.page)}: “{r.quote}”"
         return text + f"\nNote: {r.note}"
     if p.kind == "markups":

@@ -48,6 +48,9 @@ Each domain module owns its models, its service functions and the agent tools th
   keeps the better. The words go into the page's text (rows of the page, cells split by `|`), the keyword index
   and then the meaning index, with `pages.ocr` (the model, `empty` or `failed`) and `pages.ocr_score`. The same
   file in another tender is read once. `read_page` says when a page was read by OCR and how sure it was.
+- Web research sends only search words and page addresses: to Firecrawl (without a key, or with the engineer's)
+  and to TinyFish when Firecrawl can't answer and the engineer has added its key. Pages read are saved in the
+  database, so what the office cites from them can be checked.
 - Every record belongs to a tender, and every tender belongs to an owner, so accounts can be added later.
 - Long work is kept in the database, not only in memory. After a restart, interrupted work resumes or is shown as
   stopped (see Turns below).

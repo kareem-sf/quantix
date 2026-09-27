@@ -25,6 +25,11 @@ import {
 } from "./queries";
 
 const COLUMNS = "grid grid-cols-[56px_minmax(0,1fr)_84px_40px_84px_104px_132px] gap-3";
+const BASIS: Record<string, string> = {
+  quote: "From a quote",
+  library: "From the company library",
+  web: "A market price from the web",
+};
 
 /** One status for the row: the BOQ line first, then its rate. */
 function rowStatus(item: BoqItem, rate: Rate | null | undefined): [label: string, dot: string] {
@@ -343,7 +348,7 @@ function ItemPanel(props: { tenderId: string; item: BoqItem; priced?: Priced; pe
           {pricedBy && <Face id={pricedBy.id} size={24} />}
           <span className="flex flex-col gap-1">
             <span className="font-medium">
-              {rate.basis === "quote" ? "From a quote" : rate.basis === "library" ? "From the company library" : "Estimated"}
+              {BASIS[rate.basis] ?? "Estimated"}
               {pricedBy && <span className="font-normal text-ink-3"> · {firstName(pricedBy)}</span>}
             </span>
             <span className="text-[#27272A]">{rate.note}</span>
@@ -354,6 +359,23 @@ function ItemPanel(props: { tenderId: string; item: BoqItem; priced?: Priced; pe
               >
                 {rate.source_document}, page {rate.page}
               </Link>
+            )}
+            {rate.web_page && (
+              <>
+                <a
+                  href={rate.web_page.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-medium underline underline-offset-4"
+                  dir="auto"
+                >
+                  {rate.web_page.title}, read{" "}
+                  {new Date(rate.web_page.read_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                </a>
+                <span className="text-[#27272A]" dir="auto">
+                  “{rate.quote}”
+                </span>
+              </>
             )}
           </span>
         </div>

@@ -66,6 +66,29 @@ describe("Settings", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps a free web research key, and forgets it", async () => {
+    const service = fakeService();
+    openApp("/settings");
+
+    await userEvent.type(await screen.findByLabelText("TinyFish key"), "tf-key-1234");
+    await userEvent.click(screen.getByRole("button", { name: "Save the TinyFish key" }));
+    expect(await screen.findByText("Key …1234")).toBeInTheDocument();
+    expect(service.state.webKeys).toEqual({ firecrawl: null, tinyfish: "…1234" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(service.state.webKeys.tinyfish).toBeNull());
+    expect(await screen.findByLabelText("TinyFish key")).toBeInTheDocument();
+  });
+
+  it("shows why a web research key was refused", async () => {
+    fakeService({ fail: { "/web/keys/firecrawl": "The key was refused." } });
+    openApp("/settings");
+
+    await userEvent.type(await screen.findByLabelText("Firecrawl key"), "wrong");
+    await userEvent.click(screen.getByRole("button", { name: "Save the Firecrawl key" }));
+    expect(await screen.findByText("The key was refused.")).toBeInTheDocument();
+  });
+
   it("switches the office to fully autonomous", async () => {
     const service = fakeService();
     openApp("/settings");

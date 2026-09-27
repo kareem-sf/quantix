@@ -5,6 +5,7 @@ from sqlalchemy import Boolean, Float, ForeignKey, Integer, LargeBinary, String,
 from sqlalchemy.orm import Mapped, mapped_column
 
 from quantix.core.db import Base, UTCDateTime
+from quantix.tenders import LOCAL_OWNER
 
 # waiting → reading → read | unreadable | failed; a document later replaced by a newer copy becomes "replaced".
 STATUSES = ("waiting", "reading", "read", "unreadable", "failed", "replaced")
@@ -59,6 +60,19 @@ class PageChunk(Base):
     start: Mapped[int] = mapped_column(Integer)  # where the passage starts and stops in the page's text
     stop: Mapped[int] = mapped_column(Integer)
     digest: Mapped[str | None] = mapped_column(String(64))
+
+
+class WebPage(Base):
+    """A web page the office read, saved as it was then, so what the office cites from it can be checked."""
+
+    __tablename__ = "web_pages"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: uuid.uuid4().hex)
+    owner_id: Mapped[str] = mapped_column(String(64), default=LOCAL_OWNER)
+    url: Mapped[str] = mapped_column(String(2000))
+    title: Mapped[str] = mapped_column(String(300))
+    text: Mapped[str] = mapped_column(Text)
+    read_at: Mapped[datetime] = mapped_column(UTCDateTime, default=lambda: datetime.now(UTC))
 
 
 class Vector(Base):

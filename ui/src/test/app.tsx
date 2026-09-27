@@ -8,7 +8,7 @@ import type { SearchHit, TenderDocument } from "../documents/queries";
 import type { BoqItem, Fact, LibraryEntry, Markups, Priced, Summary } from "../estimate/queries";
 import type { Decision, Message, Staff, Task } from "../office/queries";
 import type { Comparison, Measurement, Sheet } from "../takeoff/queries";
-import type { Connection, OfficeSettings, Usage } from "../settings/queries";
+import type { Connection, OfficeSettings, Usage, WebKeys } from "../settings/queries";
 import type { Profile, Rule } from "../company/queries";
 import type { Company, Package } from "../subcontract/queries";
 import type { Requirement } from "../submission/queries";
@@ -58,6 +58,8 @@ export interface FakeState {
   lessons: Lesson[];
   /** How each AI has done, and what each tender used. */
   usage: Usage;
+  /** The web research keys, as hints. */
+  webKeys: WebKeys;
   /** Answer the next POST to this path with this error detail. */
   fail: Record<string, string>;
 }
@@ -100,6 +102,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     audit: [],
     lessons: [],
     usage: { models: [], tenders: [] },
+    webKeys: { firecrawl: null, tinyfish: null },
     fail: {},
     ...initial,
   };
@@ -383,6 +386,13 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     if (connection && method === "DELETE") {
       state.connections = state.connections.filter((c) => c !== connection);
       return new Response(null, { status: 204 });
+    }
+
+    if (path === "/web/keys") return json(state.webKeys);
+    const webKey = path.match(/^\/web\/keys\/(firecrawl|tinyfish)$/);
+    if (webKey) {
+      state.webKeys = { ...state.webKeys, [webKey[1]]: method === "PUT" ? `…${body.api_key.slice(-4)}` : null };
+      return method === "PUT" ? json(state.webKeys) : new Response(null, { status: 204 });
     }
 
     if (path === "/settings" && method === "GET") return json(state.settings);

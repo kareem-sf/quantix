@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from quantix.documents import library
 from quantix.documents.arabic import searchable
-from quantix.documents.models import Document
+from quantix.documents.models import Document, WebPage
 
 _DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹٫٬", "01234567890123456789.,")
 _NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
@@ -44,6 +44,19 @@ def check_quote(session: Session, tender_id: str, document_id: str, page: int, q
             f"“{missing[:80]}” is not on {document.name}, page {page}. Quote the page exactly as read_page shows it."
         )
     return document
+
+
+def check_web_quote(session: Session, web_page_id: str, quote: str) -> WebPage:
+    """The saved web page, if `quote` appears on it."""
+    page = session.get(WebPage, web_page_id)
+    if page is None:
+        raise ValueError(f"No saved web page has the id {web_page_id}. Read the page with read_web_page first.")
+    missing = missing_piece(page.text, quote)
+    if missing is not None:
+        raise ValueError(
+            f"“{missing[:80]}” is not on the saved page {page.url}. Quote it exactly as read_web_page shows it."
+        )
+    return page
 
 
 def numbers_in(text: str) -> set[Decimal]:

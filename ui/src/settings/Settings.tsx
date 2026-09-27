@@ -9,10 +9,14 @@ import {
   useModels,
   useRemoveConnection,
   useSettings,
+  useRemoveWebKey,
+  useSetWebKey,
   useUpdateSettings,
   useUsage,
+  useWebKeys,
   type Connection,
   type Provider,
+  type WebService,
 } from "./queries";
 
 const input = "h-9 rounded-lg border border-line-strong px-3 text-[13px] outline-none focus:border-ink";
@@ -26,6 +30,7 @@ export function Settings() {
       <OfficeMode />
       <Connections />
       <OfficeAI />
+      <WebResearch />
       <Scorecard />
       <Allowance />
     </div>
@@ -318,6 +323,64 @@ function Scorecard() {
 }
 
 /** The most AI tokens one tender's office may use before it pauses, and what each tender has used. */
+function WebResearch() {
+  const keys = useWebKeys();
+  return (
+    <Section title="Web research">
+      <p className="leading-normal text-ink-3">
+        The office looks up prices, suppliers, subcontractors and datasheets on the web, in general words only, never
+        the client’s or the project’s name. It works without a key. A free Firecrawl key allows more searches a day; a
+        free TinyFish key is the backup when Firecrawl can’t answer.
+      </p>
+      <WebKeyRow service="firecrawl" label="Firecrawl" note="Optional" hint={keys.data?.firecrawl} />
+      <WebKeyRow service="tinyfish" label="TinyFish" note="Backup" hint={keys.data?.tinyfish} />
+    </Section>
+  );
+}
+
+function WebKeyRow(props: { service: WebService; label: string; note: string; hint: string | null | undefined }) {
+  const save = useSetWebKey();
+  const remove = useRemoveWebKey();
+  const [key, setKey] = useState("");
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    save.mutate({ service: props.service, api_key: key }, { onSuccess: () => setKey("") });
+  }
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-subtle py-3">
+      <div className="flex items-center justify-between">
+        <span className="flex flex-col gap-0.5">
+          <span className="font-medium">{props.label}</span>
+          <span className="text-ink-3">{props.hint ? `Key ${props.hint}` : props.note}</span>
+        </span>
+        {props.hint && (
+          <button onClick={() => remove.mutate(props.service)} className="text-ink-3 hover:text-ink">
+            Remove
+          </button>
+        )}
+      </div>
+      {!props.hint && (
+        <form onSubmit={submit} className="flex items-center gap-2">
+          <input
+            aria-label={`${props.label} key`}
+            type="password"
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            placeholder="Free key"
+            className={`${input} grow`}
+          />
+          <button aria-label={`Save the ${props.label} key`} disabled={!key.trim() || save.isPending} className={secondary}>
+            {save.isPending ? "Checking…" : "Save"}
+          </button>
+        </form>
+      )}
+      {save.isError && <p className="text-attention">{save.error.message}</p>}
+    </div>
+  );
+}
+
 function Allowance() {
   const settings = useSettings();
   const update = useUpdateSettings();

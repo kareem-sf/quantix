@@ -545,6 +545,163 @@
         }
       }
     },
+    "/web/keys": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Get Web Keys",
+        "operationId": "get_web_keys_web_keys_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebKeys"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/web/keys/{service}": {
+      "put": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Set Web Key",
+        "description": "Keep a web research key once the service accepts it.",
+        "operationId": "set_web_key_web_keys__service__put",
+        "parameters": [
+          {
+            "name": "service",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "firecrawl",
+                "tinyfish"
+              ],
+              "type": "string",
+              "title": "Service"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebKey"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebKeys"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Remove Web Key",
+        "operationId": "remove_web_key_web_keys__service__delete",
+        "parameters": [
+          {
+            "name": "service",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "firecrawl",
+                "tinyfish"
+              ],
+              "type": "string",
+              "title": "Service"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/settings": {
       "get": {
         "tags": [
@@ -4314,6 +4471,17 @@
             ],
             "title": "Phone"
           },
+          "website": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Website"
+          },
           "different_from": {
             "items": {
               "type": "string"
@@ -4373,6 +4541,17 @@
               }
             ],
             "title": "Phone"
+          },
+          "website": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Website"
           },
           "id": {
             "type": "string",
@@ -4751,6 +4930,17 @@
               }
             ],
             "title": "Boq Item Id"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
           }
         },
         "type": "object",
@@ -6778,6 +6968,16 @@
             ],
             "title": "Library Id"
           },
+          "web_page": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WebSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "note": {
             "type": "string",
             "title": "Note"
@@ -6825,6 +7025,7 @@
           "page",
           "quote",
           "library_id",
+          "web_page",
           "note",
           "status",
           "proposed_by",
@@ -7898,6 +8099,77 @@
           "line"
         ],
         "title": "Waiting"
+      },
+      "WebKey": {
+        "properties": {
+          "api_key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Api Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "api_key"
+        ],
+        "title": "WebKey"
+      },
+      "WebKeys": {
+        "properties": {
+          "firecrawl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Firecrawl"
+          },
+          "tinyfish": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tinyfish"
+          }
+        },
+        "type": "object",
+        "required": [
+          "firecrawl",
+          "tinyfish"
+        ],
+        "title": "WebKeys",
+        "description": "The web research keys the engineer added, as hints; None for a service without one."
+      },
+      "WebSource": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "read_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Read At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url",
+          "title",
+          "read_at"
+        ],
+        "title": "WebSource"
       }
     }
   }

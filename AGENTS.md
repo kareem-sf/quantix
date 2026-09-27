@@ -19,8 +19,8 @@ stays in the loop and approves at every gate. The specification is `docs/spec.md
 - **Quantix computes, the model proposes.** Agents submit records through `propose`. Quantix validates them, checks
   their evidence and calculates every quantity, extension, total and comparison. A model never states a computed
   number as fact.
-- **Evidence.** Every factual finding cites a document location that exists and was read. Keep imported, read and
-  reviewed coverage distinct.
+- **Evidence.** Every factual finding cites a document location that exists and was read, or a web page Quantix
+  saved when it was read. Keep imported, read and reviewed coverage distinct.
 - **Staff are generated.** The Manager hires staff per tender with generated profiles. There is no default roster,
   fixed role list or hard-coded persona.
 - **Talk is real.** The team conversation shows only messages that agents actually sent through their tools.

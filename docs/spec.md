@@ -106,6 +106,13 @@ A master resource and rate library, the subcontractor and supplier directory, pa
 company rules and preferences (markups, standard exclusions and qualifications, house style), including the
 lessons the engineer kept. Every new team reads them. Dated information is revalidated before reuse.
 
+**Web research.** For market facts the documents don't give (material and plant prices, suppliers,
+subcontractors, datasheets, outputs), the office searches the web in general words, never the client's or the
+project's name. Quantix saves every page the office reads, as it was then, and checks a quote from it the way it
+checks a quote from a document. A web price is a dated market price, not a quote: it goes through the same review
+and gate, with a note on how it becomes the rate. Search works without a key; free keys in Settings add more
+searches and a backup service.
+
 Each firm is in the directory once. Quantix knows a firm by its name whatever the case, punctuation, Arabic letter
 forms or legal form ("ABC Contracting Co. W.L.L." is ABC Contracting), so a quote under another spelling is the
 same firm's. A name that may be a firm already there is added only once the adder says it is a different firm.
