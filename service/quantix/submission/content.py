@@ -38,6 +38,7 @@ class Item:
 @dataclass
 class ListBlock:
     items: list[Item]
+    start: int = 1  # the first number of a numbered list
 
 
 @dataclass
@@ -92,7 +93,8 @@ def from_markdown(text: str, title: str = "") -> list[Block]:
         kind = token.type
         if kind in ("bullet_list_open", "ordered_list_open"):
             if not lists:  # a nested list continues its parent's block, one level in
-                current = ListBlock([])
+                # "2. Time schedule" after a bulleted list starts a new list that counts on from 2
+                current = ListBlock([], start=int(token.attrGet("start") or 1))
                 blocks.append(current)
             lists.append(kind == "ordered_list_open")
         elif kind in ("bullet_list_close", "ordered_list_close"):
@@ -129,9 +131,28 @@ def from_markdown(text: str, title: str = "") -> list[Block]:
         elif kind in ("fence", "code_block"):
             blocks += [Paragraph([Run(line)]) for line in token.content.splitlines() if line.strip()]
     first = blocks[0] if blocks else None
-    if isinstance(first, Paragraph) and plain(first.runs).strip().lower() == title.strip().lower():
-        blocks.pop(0)  # the title again, as the draft's first line
+    if isinstance(first, Paragraph) and title.strip():
+        opening, _, rest = plain(first.runs).strip().partition("\n")
+        if opening.strip().lower() == title.strip().lower():  # the title again, as the draft's first line
+            if rest.strip():
+                blocks[0] = _without_first_line(first)
+            else:
+                blocks.pop(0)
     return blocks
+
+
+def _without_first_line(paragraph: Paragraph) -> Paragraph:
+    """The paragraph from its second line, keeping which runs are bold."""
+    runs, dropped = [], False
+    for run in paragraph.runs:
+        if not dropped:
+            if "\n" in run.text:
+                dropped, text = True, run.text.split("\n", 1)[1]
+                if text:
+                    runs.append(Run(text, run.bold))
+            continue
+        runs.append(run)
+    return Paragraph(runs)
 
 
 def _runs(children) -> list[Run]:

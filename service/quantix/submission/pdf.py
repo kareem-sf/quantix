@@ -78,7 +78,7 @@ def _paragraph(pdf: _Pages, runs: list[Run]) -> None:
 
 
 def _list(pdf: _Pages, block: ListBlock) -> None:
-    counts: dict[int, int] = {}
+    counts: dict[int, int] = {0: block.start - 1}
     pdf.set_font("Noto", size=10)
     for item in block.items:
         counts = {level: n for level, n in counts.items() if level <= item.level}
@@ -86,7 +86,8 @@ def _list(pdf: _Pages, block: ListBlock) -> None:
         marker = f"{counts[item.level]}." if item.numbered else ("•" if item.level == 0 else "–")
         pdf.set_x(MARGIN + 2 + item.level * 7)
         pdf.cell(6, 5, marker)
-        pdf.multi_cell(0, 5, _markdown(item.runs), markdown=True, new_x="LMARGIN", new_y="NEXT")
+        align = "R" if is_arabic("".join(r.text for r in item.runs)) else "L"  # fpdf2 would justify
+        pdf.multi_cell(0, 5, _markdown(item.runs), markdown=True, align=align, new_x="LMARGIN", new_y="NEXT")
         pdf.ln(0.8)
     pdf.ln(1.2)
 

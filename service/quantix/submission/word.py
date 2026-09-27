@@ -42,7 +42,7 @@ def write(document: Document, head: Letterhead, path: Path, landscape: bool = Fa
     section.header_distance = section.footer_distance = Cm(1)
     width = (section.page_width - section.left_margin - section.right_margin) / 360000  # in cm
     _header(section, head, width)
-    _footer(section, head, document.title, width)
+    _footer(section, head, document.title, width, word.styles["Footer"])
 
     word.add_paragraph(document.title, style="Title")
     if document.facts:
@@ -212,7 +212,7 @@ def _table(word, block: Table, width: float) -> None:
 
 def _list(word, block: ListBlock) -> None:
     numbering = word.part.numbering_part.numbering_definitions._numbering
-    restarted: dict[str, int] = {}  # one fresh count per numbered list, so each starts at 1
+    restarted: dict[str, int] = {}  # one fresh count per numbered list, from the list's own first number
     for item in block.items:
         style = ("List Number" if item.numbered else "List Bullet") + (" 2" if item.level else "")
         paragraph = _runs(word.add_paragraph(style=style), item.runs)
@@ -220,7 +220,7 @@ def _list(word, block: ListBlock) -> None:
             if style not in restarted:
                 style_num = word.styles[style].element.pPr.numPr.numId.val
                 num = numbering.add_num(numbering.num_having_numId(style_num).abstractNumId.val)
-                num.add_lvlOverride(ilvl=0).add_startOverride(1)
+                num.add_lvlOverride(ilvl=0).add_startOverride(block.start if item.level == 0 else 1)
                 restarted[style] = num.numId
             properties = paragraph._p.get_or_add_pPr().get_or_add_numPr()
             properties.get_or_add_ilvl().val = 0
@@ -261,8 +261,10 @@ def _header(section, head: Letterhead, width: float) -> None:
     header.paragraphs[0]._p.getparent().remove(header.paragraphs[0]._p)  # the template's empty first line
 
 
-def _footer(section, head: Letterhead, title: str, width: float) -> None:
+def _footer(section, head: Letterhead, title: str, width: float, style) -> None:
     paragraph = section.footer.paragraphs[0]
+    style.font.size, style.font.color.rgb = Pt(8), MUTED  # Word sets page numbers in the paragraph's style
+    paragraph.style = style
     paragraph.paragraph_format.tab_stops.add_tab_stop(Cm(width), WD_TAB_ALIGNMENT.RIGHT)
     _runs(paragraph, [Run(f"{head.tender} · {title}\t")], size=8, color=MUTED)
     for text, instruction in (("Page ", "PAGE"), (" of ", "NUMPAGES")):

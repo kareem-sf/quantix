@@ -493,3 +493,44 @@ def test_the_work_programme_is_laid_out_from_quantix_durations(client, tender, t
     ]
     texts = [p.text for p in schedule.paragraphs if p.text]
     assert "Excavation first, then waterproofing." in texts and texts[-1] == "Overall duration: 9 working days"
+
+
+def test_numbered_points_broken_by_bullets_count_on_in_word_and_pdf(tmp_path):
+    from docx.oxml.ns import qn
+
+    from quantix.submission import pdf, word
+    from quantix.submission.content import Document, Letterhead, ListBlock, from_markdown
+
+    blocks = from_markdown("1. Performance guarantee\n- Clause 10.1\n2. Time schedule\n- Annexure D, page 3\n")
+    assert [(b.start, [i.numbered for i in b.items]) for b in blocks if isinstance(b, ListBlock)] == [
+        (1, [True]),
+        (1, [False]),
+        (2, [True]),  # counts on from the letter's own 2
+        (1, [False]),
+    ]
+    head, letter = Letterhead("", [], None, "Synthetic school"), Document("Clarification query", blocks)
+    pdf.write(letter, head, tmp_path / "query.pdf")
+    text = pdfium.PdfDocument(tmp_path / "query.pdf")[0].get_textpage().get_text_range()
+    assert "2." in text and text.count("1.") == 1
+
+    word.write(letter, head, tmp_path / "query.docx")
+    document = docx.Document(tmp_path / "query.docx")
+    numbered = [p for p in document.paragraphs if p.style.name == "List Number"]
+    numbering = document.part.numbering_part.numbering_definitions._numbering
+    starts = [
+        numbering.num_having_numId(p._p.pPr.numPr.numId.val).find(qn("w:lvlOverride")).find(qn("w:startOverride"))
+        for p in numbered
+    ]
+    assert [s.get(qn("w:val")) for s in starts] == ["1", "2"]
+
+
+def test_a_draft_that_opens_with_its_own_title_does_not_repeat_it():
+    from quantix.submission.content import Paragraph, Run, from_markdown
+
+    blocks = from_markdown(
+        "CLIENT CLARIFICATION QUERY\nProject: **SEC 8485**\n\nPlease clarify.", "Client Clarification Query"
+    )
+    assert blocks[:2] == [
+        Paragraph([Run("Project: "), Run("SEC 8485", bold=True)]),
+        Paragraph([Run("Please clarify.")]),
+    ]
