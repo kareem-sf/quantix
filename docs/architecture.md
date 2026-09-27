@@ -88,6 +88,18 @@ Each domain module owns its models, its service functions and the agent tools th
   `audit_tender`. `GET /tenders/{id}/audit` serves the Overview. The build endpoint fills the package's not-ready list
   from the audit's blockers.
 - **Evidence.** A cited location must exist and must have been read in that agent's run.
+- **Newer copies.** A changed file with the same path replaces the older copy (`replaced`). As the reader saves
+  the newer copy, in the same transaction, `quantix/review/revisions.py` moves the work that cites an older copy
+  onto it wherever what the work cites is unchanged. That means:
+  - the quoted words, on the same page or on the one page that has them;
+  - a workbook row with the same cells, when rows were added or taken out above it;
+  - the drawing within 20 points of a measurement or a scale line.
+
+  The document's note says how much moved. Work left on an older copy is a blocker in the record checks and in the
+  audit, and a newer copy that leaves some wakes the Manager, whose briefing lists it. Staff redo it from the
+  newer copy. A BOQ line is revised in place, so its rate and measurements stay with it. A checklist item takes
+  the new clause and goes back to the Manager. A scale or measurement on the newer copy replaces the older copy's.
+  A fact, or a rate priced from a quote, may replace an approved one that rests on an older copy.
 
 ## Quantity take-off
 

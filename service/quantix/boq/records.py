@@ -10,7 +10,9 @@ from sqlalchemy.orm import Session
 
 from quantix.boq.models import FACT_KINDS, BoqItem, Fact
 from quantix.core.review import LIVE, PROPOSED, REVIEWED, UNDECIDED
+from quantix.documents import library
 from quantix.documents.evidence import check_quote, numbers_in
+from quantix.documents.models import Document
 from quantix.office import records as office
 from quantix.office.models import ENGINEER, Staff
 
@@ -41,13 +43,25 @@ def _source_line(document_id: str, page: int, quote: str) -> tuple[str, int, str
     return document_id, page, f"row {row.group(1)}" if row else " ".join(quote.lower().split())
 
 
+def _revise(item: BoqItem, by: Staff, line: ItemIn, older_copy: str) -> None:
+    """A line entered again from the newer copy of its document: the same line, so its rate and measurements stay
+    with it, back to the Tender Manager's review with what the older copy said."""
+    item.reason = f"Entered again from the newer copy of {older_copy}. The older copy said: “{item.quote}”"
+    item.description, item.unit, item.quantity = line.description.strip(), line.unit.strip(), line.quantity
+    item.document_id, item.page, item.quote = line.document_id, line.page, line.quote.strip()
+    item.status, item.proposed_by, item.created_at = PROPOSED, by.id, datetime.now(UTC)
+    item.reviewed_by = item.reviewed_at = item.review_note = item.decided_at = None
+
+
 def propose_items(session: Session, tender_id: str, by: Staff, items: list[ItemIn]) -> str:
-    """Save the items that check out, for the Tender Manager's review; report the others so they can be corrected."""
+    """Save the items that check out, for the Tender Manager's review; report the others so they can be corrected.
+    A line that rests on an older copy of its document is revised from the newer copy."""
     active = list(session.scalars(select(BoqItem).where(BoqItem.tender_id == tender_id, BoqItem.status.in_(LIVE))))
-    taken = {(i.section or "", i.item) for i in active}
+    older = {(i.section or "", i.item): i for i in active if library.superseded(session, i.document_id)}
+    taken = {(i.section or "", i.item) for i in active} - older.keys()
     lines_in = {_source_line(i.document_id, i.page, i.quote) for i in active}  # the same client line, however filed
     position = session.scalar(select(func.max(BoqItem.position)).where(BoqItem.tender_id == tender_id)) or 0
-    saved, problems = 0, []
+    saved, revised, problems = 0, 0, []
     for line in items:
         try:
             check_quote(session, tender_id, line.document_id, line.page, line.quote)
@@ -65,9 +79,15 @@ def propose_items(session: Session, tender_id: str, by: Staff, items: list[ItemI
         except ValueError as error:
             problems.append(f"item {line.item}: {error}")
             continue
-        position += 1
-        taken.add((line.section or "", line.item.strip()))
+        key = (line.section or "", line.item.strip())
+        taken.add(key)
         lines_in.add(_source_line(line.document_id, line.page, line.quote))
+        if key in older:
+            stale = older.pop(key)
+            _revise(stale, by, line, session.get(Document, stale.document_id).name)
+            revised += 1
+            continue
+        position += 1
         session.add(
             BoqItem(
                 tender_id=tender_id,
@@ -85,6 +105,8 @@ def propose_items(session: Session, tender_id: str, by: Staff, items: list[ItemI
         )
         saved += 1
     report = f"Saved {saved} BOQ items for the Tender Manager's review."
+    if revised:
+        report += f" Revised {revised} from the newer copy of their document, for his review."
     return report + ("\nNot saved: " + "; ".join(problems) if problems else "")
 
 
@@ -161,7 +183,7 @@ def propose_fact(
     check_quote(session, tender_id, document_id, page, quote)
     earlier = list(session.scalars(select(Fact).where(Fact.tender_id == tender_id, Fact.kind == kind)))
     settled = next((f for f in earlier if f.status == "approved"), None)
-    if settled is not None:
+    if settled is not None and not library.superseded(session, settled.document_id):
         raise ValueError(
             f"The engineer approved the {FACT_KINDS[kind].lower()}: {settled.value}. If the documents say otherwise, "
             "say why with raise_concern."

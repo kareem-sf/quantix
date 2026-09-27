@@ -22,6 +22,7 @@ from quantix.documents.evidence import numbers_in
 from quantix.documents.models import Document
 from quantix.estimate import records as estimate
 from quantix.estimate.models import LibraryResource, Markups, Rate
+from quantix.review import revisions
 from quantix.subcontract import records as subcontract
 from quantix.subcontract.models import Package, Quote
 from quantix.submission.models import Draft
@@ -61,8 +62,9 @@ class Finding:
 def for_record(session: Session, home: Path, kind: str, record: Any, blockers_only: bool = False) -> list[Finding]:
     """What the checks find in one record the office proposed. Blockers only skips reading the drawing, which only
     ever warns."""
+    found = _older_copy(session, record)
     if kind == "measurement":
-        found = _measurement(session, home, record, read_drawing=not blockers_only)
+        found += _measurement(session, home, record, read_drawing=not blockers_only)
     else:
         check = {
             "boq": _item,
@@ -72,8 +74,19 @@ def for_record(session: Session, home: Path, kind: str, record: Any, blockers_on
             "draft": _draft,
             "recommendation": _recommendation,
         }.get(kind)
-        found = check(session, home, record) if check else []
+        found += check(session, home, record) if check else []
     return [f for f in found if f.severity == BLOCKER] if blockers_only else found
+
+
+def _older_copy(session: Session, record: Any) -> list[Finding]:
+    """Work that rests on a document the engineer has replaced by a newer copy, and didn't move onto it."""
+    if isinstance(record, Package):  # a recommendation rests on the quote it recommends
+        record = session.get(Quote, record.recommended_quote_id) if record.recommended_quote_id else None
+    why = revisions.problem(session, record) if record is not None else None
+    if why is None:
+        return []
+    page = next((p["page"] for p in record.lines + record.exclusions), 1) if isinstance(record, Quote) else record.page
+    return [Finding(f"older-copy:{record.id}", BLOCKER, why, _page_ref(session, record.document_id, page))]
 
 
 def _money(value: Decimal) -> str:

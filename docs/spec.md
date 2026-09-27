@@ -70,7 +70,10 @@ choices · Markups and final price · Release.
 
 1. **Documents.** Import a tender package and keep the originals unchanged. Read PDF, XLSX/XLSM, DOCX and scanned
    pages (OCR, Arabic included, in the correct reading order). Group the documents, search them by exact words and
-   by meaning, and view them page by page. DWG files are listed and flagged as not readable yet.
+   by meaning, and view them page by page. DWG files are listed and flagged as not readable yet. A newer copy of a
+   file, such as an addendum's revised bill or drawing, replaces the older one. The office's work moves onto the
+   newer copy wherever what it cites is unchanged there, and Quantix says how much moved. The rest must be done again
+   from the newer copy, and holds the release until it is.
 2. **BOQ.** Import the client BOQ from Excel, PDF or Word with source references. Record the method of measurement
    the tender states.
 3. **Quantity Take-Off.** Staff set and check each sheet's scale, then place measurements (length, area, count) as

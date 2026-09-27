@@ -235,7 +235,8 @@ def details(session: Session, p: Pending) -> str:
     """Everything the Manager needs to check the record against its source."""
     r = p.record
     if p.kind in ("boq", "fact"):
-        return f"From {_where(session, r.document_id, r.page)}: “{r.quote}”"
+        revised = f"\n{r.reason}" if r.reason else ""  # a BOQ line entered again from a newer copy
+        return f"From {_where(session, r.document_id, r.page)}: “{r.quote}”{revised}"
     if p.kind == "scale":
         return (
             f"Set from “{r.dimension}” as {r.length_m} m between {r.line} (page points) on "

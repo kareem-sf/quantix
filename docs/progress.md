@@ -422,3 +422,30 @@ work's state outside the model and the process, and keep a trace of every run.
   - 0009 rebuilt tenders the same way when it added `outcome`. It is applied already, and new migrations are
     covered by the test.
 - **Checks:** 122 service tests. Each new test fails when the behaviour it covers is taken out.
+
+## 27 September 2026: addenda carry the work over
+
+From the article "300 agents, one graph, and a loop that edits the loop" (route work by its state, and re-check
+only what changed). A newer copy of a file replaced the older one. The work citing the older copy stayed approved
+and nothing flagged it, so a price could still rest on a superseded bill or drawing.
+
+- **Unchanged work moves onto the newer copy.** As the newer copy is read, Quantix moves each piece of work whose
+  source is unchanged:
+  - the quoted words on the same page, or on the one page that has them;
+  - a workbook row with the same cells, when an addendum added rows above it;
+  - the drawing within 20 points of a measurement or a scale line.
+
+  The document's note says how much moved.
+- **Changed work holds the release.** Work left on an older copy is a blocker: the Manager can't accept it, and
+  the audit lists it even when it is approved. A newer copy that leaves work behind wakes the Manager, and his
+  briefing lists each piece and who did it.
+- **Redoing it replaces the older work.**
+  - A BOQ line is revised in place, so its rate and measurements stay with it. The Manager sees what the older
+    copy said.
+  - A checklist item takes the new clause and goes back to his review.
+  - A scale or measurement on the newer copy replaces the older copy's.
+  - A fact, or a rate priced from a quote, may replace an approved one that rests on an older copy.
+- Migration 0015 adds `documents.read_at`.
+- **Checks:** 3 new service tests: a revised bill with a row added above and a changed quantity, a drawing revised
+  around one measurement, and revised conditions changing a fact and a checklist item. The service suite, Ruff and
+  the format check pass for these files.

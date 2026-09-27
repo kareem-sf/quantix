@@ -20,7 +20,7 @@ from quantix.documents.models import Document
 from quantix.estimate import records as estimate
 from quantix.office import records as office
 from quantix.office.models import Staff
-from quantix.review import checks
+from quantix.review import checks, revisions
 from quantix.review import records as reviews
 from quantix.review.checks import BLOCKER, WARNING, Finding, Ref
 from quantix.review.models import Acceptance
@@ -53,6 +53,7 @@ def findings(session: Session, home: Path, tender_id: str) -> list[Finding]:
         *_missing_rows(session, tender_id),
         *_documents(session, tender_id),
         *_records(session, home, tender_id),
+        *_older_copies(session, tender_id),
     ]
     unique = list({f.key: f for f in found}.values())
     return sorted(unique, key=lambda f: f.severity != BLOCKER)
@@ -252,6 +253,16 @@ def _records(session: Session, home: Path, tender_id: str) -> list[Finding]:
                 label = module.label(session, record)
                 found.append(Finding(f.key, f.severity, f"{label[0].upper()}{label[1:]}: {f.message}", f.refs))
     return found
+
+
+def _older_copies(session: Session, tender_id: str) -> list[Finding]:
+    """Checklist items, quotes and pricing columns that still rest on an older copy of a document. The other work
+    on older copies shows through the record checks, or waits in the Manager's queue."""
+    return [
+        Finding(f"older-copy:{s.record.id}", BLOCKER, f"{s.label[0].upper()}{s.label[1:]}: {s.problem}")
+        for s in revisions.stale(session, tender_id)
+        if s.kind in revisions.OTHERS.values()
+    ]
 
 
 class Accepted(BaseModel):

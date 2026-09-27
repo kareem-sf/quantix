@@ -19,6 +19,7 @@ from quantix.office import agents, records
 from quantix.office.models import ENGINEER, TEAM, Message, Staff, TurnRecord
 from quantix.office.tools import Stopped, Turn
 from quantix.review import records as reviews
+from quantix.review import revisions
 from quantix.tenders import Tender
 
 log = logging.getLogger("quantix.office")
@@ -178,8 +179,12 @@ class Office:
             if member.status == "released":  # released earlier in this pass
                 return False
             new = records.inbox(session, member)
-            # the Tender Manager also wakes for work his staff put in his review queue
-            to_review = member.is_manager and reviews.has_new(session, tender_id, member.reviewed_up_to)
+            # the Tender Manager also wakes for work his staff put in his review queue, and for work a newer copy of a
+            # document left on the older copy
+            to_review = member.is_manager and (
+                reviews.has_new(session, tender_id, member.reviewed_up_to)
+                or revisions.news(session, tender_id, member.reviewed_up_to)
+            )
             if not new and not to_review and not records.unfinished(session, staff_id):
                 return False
             history = self._carry.pop(staff_id, None)

@@ -133,9 +133,26 @@ def set_scale(
     )
     session.add(scale)
     session.flush()
+    _replace_on_older_copies(session, scale)
     if status in APPROVED:
         _replace_older_scales(session, scale)
     return scale
+
+
+def _replace_on_older_copies(session: Session, record: Scale | Measurement) -> None:
+    """Work done on the newer copy of a drawing replaces the same work on its older copies, which no longer holds:
+    the sheet's scale, or the measurements of the same BOQ line (or of the same label, if not linked to one)."""
+    older = [d.id for d in library.copies(session, session.get(Document, record.document_id)) if d.status == "replaced"]
+    if not older:
+        return
+    model = type(record)
+    query = select(model).where(model.document_id.in_(older), model.page == record.page, model.status.in_(LIVE))
+    if isinstance(record, Measurement) and record.boq_item_id:
+        query = query.where(Measurement.boq_item_id == record.boq_item_id)
+    elif isinstance(record, Measurement):
+        query = query.where(Measurement.label == record.label)
+    for stale in session.scalars(query):
+        stale.status = "replaced"
 
 
 def _replace_older_scales(session: Session, scale: Scale) -> None:
@@ -194,6 +211,7 @@ def measure(
     )
     session.add(measurement)
     session.flush()
+    _replace_on_older_copies(session, measurement)
     return measurement
 
 

@@ -133,18 +133,28 @@ def find_requirement(session: Session, tender_id: str, title: str) -> Requiremen
 
 
 def add_requirements(session: Session, tender_id: str, by: str, items: list[RequirementIn]) -> str:
-    """Save the requirements whose clause checks out; report the others so they can be corrected."""
-    taken = [r.title for r in requirements(session, tender_id)]
+    """Save the requirements whose clause checks out; report the others so they can be corrected. A requirement that
+    rests on an older copy of its document takes its clause from the newer copy, and goes back to the Manager."""
+    checklist = requirements(session, tender_id)
+    taken = [r.title for r in checklist]
     saved, problems = 0, []
     for item in items:
         same = next((t for t in taken if office.same_subject(item.title, t)), None)
-        if same:
+        earlier = next((r for r in checklist if r.title == same), None)
+        stale = earlier is not None and library.superseded(session, earlier.document_id)
+        if same and not stale:
             problems.append(f"{item.title}: the checklist already has “{same}”")
             continue
         try:
             check_quote(session, tender_id, item.document_id, item.page, item.quote)
         except ValueError as error:
             problems.append(f"{item.title}: {error}")
+            continue
+        if stale:
+            earlier.document_id, earlier.page, earlier.quote = item.document_id, item.page, item.quote
+            earlier.added_by, earlier.created_at = by, datetime.now(UTC)
+            earlier.reviewed_by = earlier.reviewed_at = earlier.review_note = None
+            saved += 1
             continue
         session.add(
             Requirement(
@@ -271,8 +281,9 @@ def set_pricing_columns(
             raise ValueError(f"Give the {label} column as a letter, e.g. F.")
         if not re.search(_CELL.format(column), quote):
             raise ValueError(f"The header you quoted has no cell in column {column}.")
+    every_copy = [d.id for d in library.copies(session, document)]  # a newer copy's columns replace an older one's
     for older in session.scalars(
-        select(PricingColumns).where(PricingColumns.document_id == document_id, PricingColumns.sheet == sheet)
+        select(PricingColumns).where(PricingColumns.document_id.in_(every_copy), PricingColumns.sheet == sheet)
     ):
         session.delete(older)
     columns = PricingColumns(

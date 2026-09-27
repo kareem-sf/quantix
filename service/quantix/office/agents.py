@@ -23,6 +23,7 @@ from quantix.office import records, tools
 from quantix.office.models import ENGINEER, TEAM, Message, Staff
 from quantix.office.tools import Persona, Turn
 from quantix.review import records as reviews
+from quantix.review import revisions
 from quantix.subcontract import records as subcontract
 from quantix.submission import records as submission
 from quantix.takeoff import records as takeoff
@@ -131,6 +132,15 @@ def situation(session: Session, member: Staff, new: list[Message]) -> str:
     queue = reviews.counts(session, member.tender_id) if member.is_manager else ""
     if queue:
         parts.append(f"Waiting for your review: {queue}. Go through them with review_queue before anything else.")
+    older = revisions.stale(session, member.tender_id) if member.is_manager else []
+    if older:
+        parts.append(
+            "The engineer added newer copies of documents. Quantix moved the work whose source is unchanged onto "
+            "them; this work still rests on the older copies and must be done again from the newer ones. Send back "
+            "what is in your queue, and give the rest to whoever did it:\n"
+            + "\n".join(f"- {s.label[0].upper()}{s.label[1:]}, by {names.get(s.by, 'someone')}" for s in older[:20])
+            + (f"\n… and {len(older) - 20} more." if len(older) > 20 else "")
+        )
     tasks = records.open_tasks(session, member)
     if tasks:
         parts.append("Your open tasks:\n" + "\n".join(f"- {t.id}: {t.title}. {t.brief}" for t in tasks))
@@ -177,8 +187,10 @@ def standing(session: Session, tender_id: str) -> str:
     with_manager = Counter(p.kind for p in reviews.pending(session, tender_id))
     approved = sum(i.status in APPROVED for i in items)
     reviewed = sum(i.status == REVIEWED for i in items)
+    older = len(revisions.stale(session, tender_id))
     return "\n".join(
-        [
+        ([f"- Work on older copies of documents, to do again from the newer copies: {older}."] if older else [])
+        + [
             f"- BOQ: {len(items)} lines, {approved} approved, {reviewed} waiting for the engineer, "
             f"{with_manager['boq']} with the Tender Manager.",
             f"- Estimate: {price.priced} of {price.items} lines priced; {price.reviewing} rates with the Tender "

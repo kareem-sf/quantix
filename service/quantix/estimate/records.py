@@ -14,6 +14,7 @@ from quantix.boq import records as boq
 from quantix.boq.models import BoqItem, Fact
 from quantix.core.review import APPROVED, LIVE, PROPOSED, REVIEWED, UNDECIDED
 from quantix.documents.evidence import check_quote, numbers_in
+from quantix.documents.library import superseded
 from quantix.estimate.models import LibraryResource, Markups, Rate
 from quantix.office import records as office
 from quantix.office.models import ENGINEER
@@ -121,10 +122,11 @@ def propose_rate(
 
 
 def _check_not_settled(session: Session, item: BoqItem) -> None:
-    """A line the engineer has approved takes a new estimate only once they have sent a rate on it back since."""
+    """A line the engineer has approved takes a new estimate only once they have sent a rate on it back since, or
+    the quote it was priced from has been replaced by a newer copy."""
     rates = session.scalars(select(Rate).where(Rate.boq_item_id == item.id, Rate.decided_at.is_not(None)))
     decided = sorted(rates, key=lambda r: r.decided_at)
-    if decided and decided[-1].status == "approved":
+    if decided and decided[-1].status == "approved" and not superseded(session, decided[-1].document_id):
         raise ValueError(
             f"The engineer approved {rate_of(decided[-1])} for {boq.reference(item)}; a new estimate doesn't replace "
             "it. If you think it is wrong, say why with raise_concern. A quote for the line can replace it."

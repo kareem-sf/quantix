@@ -25,6 +25,7 @@ class Document(Base):
     group_name: Mapped[str | None] = mapped_column(String(200))
     description: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=lambda: datetime.now(UTC))
+    read_at: Mapped[datetime | None] = mapped_column(UTCDateTime)  # when Quantix finished with it, however it went
 
     @property
     def name(self) -> str:

@@ -3,6 +3,8 @@
 import hashlib
 import logging
 import threading
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
@@ -61,6 +63,23 @@ def documents(session: Session, tender_id: str) -> list[Document]:
     return list(session.scalars(query))
 
 
+def superseded(session: Session, document_id: str | None) -> bool:
+    """Whether a newer copy of the file has replaced this one."""
+    document = session.get(Document, document_id) if document_id else None
+    return document is not None and document.status == "replaced"
+
+
+def copies(session: Session, document: Document) -> list[Document]:
+    """Every copy of the same file in the tender, the current one included."""
+    query = select(Document).where(Document.tender_id == document.tender_id, Document.path == document.path)
+    return list(session.scalars(query))
+
+
+def newer_copy(session: Session, document: Document) -> Document | None:
+    """The copy that replaced this one, or None if it is current."""
+    return next((d for d in copies(session, document) if d.status != "replaced" and d.id != document.id), None)
+
+
 def page(session: Session, document_id: str, number: int) -> Page | None:
     return session.scalars(select(Page).where(Page.document_id == document_id, Page.number == number)).first()
 
@@ -96,11 +115,22 @@ def snippet(page_text: str, words: list[str], width: int = 200) -> str:
 
 
 class Reader:
-    """Reads waiting documents one at a time on a background thread."""
+    """Reads waiting documents one at a time on a background thread.
 
-    def __init__(self, home: Path, sessions: sessionmaker[Session]):
+    `on_read` runs in the same transaction that saves a read document, before anything else can see it as read, and
+    returns what to add to its note. `after_read` runs once it is saved."""
+
+    def __init__(
+        self,
+        home: Path,
+        sessions: sessionmaker[Session],
+        on_read: Callable[[Session, Document], str | None] | None = None,
+        after_read: Callable[[], None] | None = None,
+    ):
         self.home = home
         self.sessions = sessions
+        self.on_read = on_read
+        self.after_read = after_read
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="quantix-reader", daemon=True)
@@ -171,14 +201,23 @@ class Reader:
                             f"{scans} of {len(pages)} pages are scans without text. "
                             "The office reads them from the page image."
                         )
-                session.execute(
+                    session.execute(update(Document).where(Document.id == document.id).values(page_count=len(pages)))
+                if self.on_read is not None:
+                    session.refresh(document)
+                    try:
+                        added = self.on_read(session, document)
+                    except Exception:  # noqa: BLE001  (the document is read even if what follows from it fails)
+                        log.exception("Following up the reading of %s failed", document.id)
+                        added = None
+                    note = " ".join(n for n in (note, added) if n) or None
+                saved = session.execute(
                     update(Document)
                     .where(Document.id == document.id, Document.status == "reading")
-                    .values(status=outcome, note=note)
+                    .values(status=outcome, note=note, read_at=datetime.now(UTC))
                 )
-                if outcome == "read":
-                    session.execute(update(Document).where(Document.id == document.id).values(page_count=len(pages)))
                 session.commit()
+                if saved.rowcount and self.after_read is not None:
+                    self.after_read()
             except Exception:  # noqa: BLE001  (one bad file must never stop the reader for every other file)
                 session.rollback()
                 log.exception("Saving %s failed", document_id)
