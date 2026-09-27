@@ -405,7 +405,8 @@ def measure(
     """Measure on a drawing whose scale is set. kind is length (a polyline), area (a closed outline) or count (one
     point per thing counted). Points are in view_page pixels. unit: length m, or m2 with a height as multiplier_m;
     area m2, or m3 with a thickness; count nr. Link the BOQ item number it belongs to when there is one.
-    Quantix computes the quantity from your points."""
+    Quantix computes the quantity from your points. Take the points from what you see: look at the sheet with
+    view_page, then zoom in on each corner with its region before you place a point there."""
     if not ctx.deps.sees_images:
         return BLIND
     with _working(ctx, f"Measuring {label}") as (session, me):

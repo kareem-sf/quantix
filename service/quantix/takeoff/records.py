@@ -106,6 +106,12 @@ def set_scale(
     span = math.dist(line[0], line[1])
     if span < 10:
         raise ValueError("The two points are too close together to set a scale; use a longer dimension.")
+    current = scale_for(session, document_id, page)
+    if by != ENGINEER and current is not None and current.status == "approved":
+        raise ValueError(
+            f"The engineer approved this sheet's scale (about 1:{drawing_ratio(current.metres_per_point):,}). "
+            "Measure on it; if you think it is wrong, say why with raise_concern."
+        )
     ratio = drawing_ratio(length_m / span)
     fits, printed = _fits_printed_scale(found.text, ratio)
     if by != ENGINEER and not fits:

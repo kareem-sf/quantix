@@ -145,6 +145,16 @@ def test_the_office_cannot_set_a_scale_the_sheet_contradicts(client, sheet):
     assert str(refused.value).startswith("Those two points make the sheet about 1:2,835, but it prints 1:250.")
     with client.app.state.sessions() as session:  # 1:283 is within 20% of the printed 1:250
         takeoff.set_scale(session, tender_id, qs_id, drawing, 1, [[100, 100], [500, 100]], 40, "40.00", "proposed")
+        session.commit()
+
+
+def test_the_office_measures_on_the_scale_the_engineer_approved(client, sheet):
+    from quantix.takeoff import records as takeoff
+
+    tender_id, drawing, qs_id = sheet
+    assert scale(client, tender_id, drawing).status_code == 201  # the engineer's, approved
+    with client.app.state.sessions() as session, pytest.raises(ValueError, match="The engineer approved this sheet's"):
+        takeoff.set_scale(session, tender_id, qs_id, drawing, 1, [[100, 100], [490, 100]], 40, "40.00", "proposed")
 
 
 def test_the_rules_are_explained_when_broken(client, sheet):
