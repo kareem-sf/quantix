@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from quantix.boq import records as boq
 from quantix.boq.models import BoqItem
+from quantix.documents import meaning
 from quantix.documents.arabic import searchable
 from quantix.documents.evidence import check_quote, numbers_in
 from quantix.estimate import records as estimate
@@ -43,9 +44,14 @@ LEGAL_FORMS = {
 
 
 def directory(session: Session, words: str = "") -> list[Company]:
-    rows = session.scalars(select(Company).where(Company.owner_id == LOCAL_OWNER).order_by(Company.name))
+    """Firms with every word in their names or trades, then firms whose trades are close to the words in meaning."""
+    rows = list(session.scalars(select(Company).where(Company.owner_id == LOCAL_OWNER).order_by(Company.name)))
     terms = words.lower().split()
-    return [c for c in rows if all(t in " ".join([c.name, *c.aliases, c.trades]).lower() for t in terms)]
+    matched = [all(t in " ".join([c.name, *c.aliases, c.trades]).lower() for t in terms) for c in rows]
+    others = [c for c, m in zip(rows, matched, strict=True) if not m]
+    return [c for c, m in zip(rows, matched, strict=True) if m] + meaning.closest(
+        session, words, others, lambda c: f"{c.name} · {c.kind} · {c.trades}"
+    )
 
 
 def firm_key(name: str) -> str:

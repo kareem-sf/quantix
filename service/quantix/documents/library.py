@@ -11,7 +11,7 @@ from typing import BinaryIO
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
-from quantix.documents import readers
+from quantix.documents import meaning, readers
 from quantix.documents.arabic import searchable
 from quantix.documents.models import Document, Page
 
@@ -85,24 +85,37 @@ def page(session: Session, document_id: str, number: int) -> Page | None:
 
 
 def search(session: Session, tender_id: str, query: str, limit: int = 40) -> list[dict]:
-    """Pages containing every word of the query, best matches first."""
+    """Pages with every word of the query, and pages that say the same in other words or in the other language,
+    best matches first. A page found both ways ranks highest."""
     words = [w for w in searchable(query).split() if w]
     if not words:
         return []
     match = " ".join('"' + w.replace('"', '""') + '"' for w in words)
-    rows = session.execute(
+    exact = session.scalars(
         text(
-            "SELECT d.id, d.path, p.number, p.text "
-            "FROM pages_fts JOIN pages p ON p.id = pages_fts.rowid JOIN documents d ON d.id = p.document_id "
+            "SELECT p.id FROM pages_fts JOIN pages p ON p.id = pages_fts.rowid "
+            "JOIN documents d ON d.id = p.document_id "
             "WHERE pages_fts MATCH :match AND d.tender_id = :tender AND d.status = 'read' "
             "ORDER BY rank LIMIT :limit"
         ),
         {"match": match, "tender": tender_id, "limit": limit},
-    )
-    return [
-        {"document_id": r[0], "name": r[1].rsplit("/", 1)[-1], "page": r[2], "snippet": snippet(r[3], words)}
-        for r in rows
-    ]
+    ).all()
+    close = meaning.close_pages(session, tender_id, query, limit)
+    ranks: dict[int, float] = {}  # reciprocal rank fusion of the two lists
+    for ranked in (exact, [page_id for page_id, *_ in close]):
+        for rank, page_id in enumerate(ranked):
+            ranks[page_id] = ranks.get(page_id, 0.0) + 1 / (60 + rank)
+    passage = {page_id: (start, stop) for page_id, _, start, stop in close}
+    hits = []
+    for page_id in sorted(ranks, key=lambda p: -ranks[p])[:limit]:
+        found = session.get(Page, page_id)
+        document = session.get(Document, found.document_id)
+        if page_id in passage and page_id not in exact:  # found by meaning alone: its closest passage
+            shown = _shorten(" ".join(found.text[slice(*passage[page_id])].split()))
+        else:
+            shown = snippet(found.text, words)
+        hits.append({"document_id": document.id, "name": document.name, "page": found.number, "snippet": shown})
+    return hits
 
 
 def snippet(page_text: str, words: list[str], width: int = 200) -> str:
@@ -110,8 +123,11 @@ def snippet(page_text: str, words: list[str], width: int = 200) -> str:
     lines = [line for line in page_text.splitlines() if line.strip()] or [""]
     best = max(lines, key=lambda line: sum(w in searchable(line) for w in words))
     marked = [f"[{word}]" if any(w in searchable(word) for w in words) else word for word in best.split()]
-    result = " ".join(marked)
-    return result if len(result) <= width else result[: width - 1].rsplit(" ", 1)[0] + " …"
+    return _shorten(" ".join(marked), width)
+
+
+def _shorten(line: str, width: int = 200) -> str:
+    return line if len(line) <= width else line[: width - 1].rsplit(" ", 1)[0] + " …"
 
 
 class Reader:

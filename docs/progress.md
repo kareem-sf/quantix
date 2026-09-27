@@ -548,3 +548,34 @@ engineer spoke next.
   and the four earlier versions with the reasons two were sent back.
 - **Checks:** 6 new service tests and 1 new interface test. 138 service tests pass, the interface suite and
   typecheck pass, Ruff and the format check pass.
+
+## 27 September 2026: search by meaning
+
+The spec asks for search "by exact words and by meaning"; only exact words were built. The engineer asked for
+meaning search (after Agent Zero's memory) and live web research, in that order.
+
+- **A small model on the engineer's computer.** multilingual-e5-small (int8 ONNX, 118 MB, and a 17 MB tokenizer),
+  English and Arabic, run with onnxruntime on half the processor threads, which measured faster than all of them.
+  The first start fetches it into `~/.quantix/models`, pinned to one revision and checked against SHA-256
+  digests. Offline, search goes by words alone and Quantix tries again later. No text leaves the computer.
+- **Pages are indexed in the background once read,** in passages of whole lines up to 800 characters. A passage
+  with fewer than 10 words, or one that isn't mostly letters and digits (a PDF font Quantix can't map), is left out.
+  Vectors are kept by the text's digest, so the same text is computed once: the two SEC substations share most of
+  their specification, so 14,446 passages came to 9,498 to compute: about 20 minutes at the 8 passages a second
+  measured on this laptop while other work ran.
+- **Hybrid search.** `search_documents` and the Documents search fuse the word matches and the meaning matches
+  (reciprocal rank fusion). A page counts as close in meaning when its best passage scores at least 0.05 above the
+  tender's median passage for that query. The model scores everything fairly alike, so a fixed cut-off doesn't
+  work: on 1,015 real passages, the right clause stood 0.05 to 0.11 above the median ("liquidated damages for
+  delay", "retention money", "who provides site offices and storage"), and searches for things the tender doesn't
+  have peaked at 0.036 to 0.048 ("termite treatment", "piling rig", "elevator maintenance").
+- **The rate library, the directory and past tenders** list what has the words first, then entries close in meaning
+  (a score of 0.84 or more, as a short name has no crowd to stand out from): "anti-termite" finds "Termite treatment
+  below slab", "concrete supply" finds the ready-mix supplier. The tools tell staff to check each is the same work.
+  One-word pairs such as "digging" and "Excavation" stay below the cut-off, and the words still find those.
+- Migration 0019 adds `vectors` and `page_chunks`. Rehearsed on a copy of the real database: every other row count
+  unchanged. A search over 18,000 indexed passages takes about 0.4 seconds.
+- **Not done:** the benchmark check's "alike" items and the lessons' duplicate check still compare words.
+- **Checks:** 3 new service tests (passages, hybrid search in English and Arabic, the library, directory and past
+  tenders). 141 service tests and 62 interface tests pass; typecheck, Ruff and the format check pass. CI keeps the
+  model in its cache.

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from quantix.boq.models import APPROVED, BoqItem
 from quantix.core.db import Base, UTCDateTime
+from quantix.documents import meaning
 from quantix.estimate import records as estimate
 from quantix.tenders import LOCAL_OWNER, Tender
 
@@ -44,7 +45,8 @@ class PastRate:
 
 
 def past_rates(session: Session, tender_id: str, words: str, limit: int = 20) -> list[PastRate]:
-    """Approved rates from the firm's other tenders for items whose description has every word, newest first."""
+    """Approved rates from the firm's other tenders for items whose description has every word, newest first, then
+    for items close to the words in meaning."""
     terms = words.lower().split()
     query = (
         select(BoqItem, Tender)
@@ -52,10 +54,12 @@ def past_rates(session: Session, tender_id: str, words: str, limit: int = 20) ->
         .where(Tender.owner_id == LOCAL_OWNER, Tender.id != tender_id, BoqItem.status.in_(APPROVED))
         .order_by(Tender.created_at.desc())
     )
+    rows = list(session.execute(query).tuples())
+    matched = [all(t in item.description.lower() for t in terms) for item, _ in rows]
+    others = [row for row, m in zip(rows, matched, strict=True) if not m]
+    close = meaning.closest(session, words, others, lambda row: row[0].description)
     found = []
-    for item, tender in session.execute(query):
-        if not all(t in item.description.lower() for t in terms):
-            continue
+    for item, tender in [row for row, m in zip(rows, matched, strict=True) if m] + close:
         rate = estimate.current_rate(session, item.id)
         if rate is None or rate.status not in APPROVED:
             continue

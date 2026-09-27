@@ -227,7 +227,9 @@ def choose(package_id: str, body: Choice, session: DB, request: Request) -> None
 
 @router.get("/directory")
 def get_directory(session: DB, q: str = "") -> list[CompanyOut]:
-    return [CompanyOut.model_validate(c, from_attributes=True) for c in records.directory(session, q)]
+    rows = records.directory(session, q)
+    session.commit()  # keeps the meaning of firms searched for the first time
+    return [CompanyOut.model_validate(c, from_attributes=True) for c in rows]
 
 
 @router.post("/directory", status_code=201, responses={409: {"description": "It may be a firm already there"}})

@@ -9,6 +9,8 @@ Quantix keeps its data in `~/.quantix`. Your original tender files are never cha
 ## Open Quantix
 
 Double-click **Start-Quantix.cmd**. It opens the desktop window, which starts the local service.
+The first start fetches the search model (about 135 MB) into `~/.quantix/models`; until it is ready, search
+goes by exact words.
 
 ## Development
 

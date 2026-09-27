@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from quantix.core.db import Base, UTCDateTime
@@ -43,3 +43,25 @@ class Page(Base):
     has_text: Mapped[bool] = mapped_column(Boolean)
     width: Mapped[float | None] = mapped_column(Float)  # PDF page size in points, for takeoff geometry
     height: Mapped[float | None] = mapped_column(Float)
+
+
+class PageChunk(Base):
+    """One passage of a page in the meaning index. A page with nothing readable gets one row without a digest, so
+    it counts as indexed."""
+
+    __tablename__ = "page_chunks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    page_id: Mapped[int] = mapped_column(ForeignKey("pages.id", ondelete="CASCADE"))
+    start: Mapped[int] = mapped_column(Integer)  # where the passage starts and stops in the page's text
+    stop: Mapped[int] = mapped_column(Integer)
+    digest: Mapped[str | None] = mapped_column(String(64))
+
+
+class Vector(Base):
+    """A text's meaning as the model computes it, kept by the text's digest so the same text is computed once."""
+
+    __tablename__ = "vectors"
+
+    digest: Mapped[str] = mapped_column(String(64), primary_key=True)
+    vector: Mapped[bytes] = mapped_column(LargeBinary)

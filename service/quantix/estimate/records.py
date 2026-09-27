@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from quantix.boq import records as boq
 from quantix.boq.models import BoqItem, Fact
 from quantix.core.review import APPROVED, LIVE, PROPOSED, REVIEWED, UNDECIDED
+from quantix.documents import meaning
 from quantix.documents.evidence import check_quote, numbers_in
 from quantix.documents.library import superseded
 from quantix.estimate.models import LibraryResource, Markups, Rate
@@ -305,8 +306,11 @@ def waiting(session: Session, tender_id: str) -> int:
 
 
 def library(session: Session, query: str = "") -> list[LibraryResource]:
-    """The firm's rates whose names contain every word of the query."""
+    """The firm's rates whose names contain every word of the query, then those close to it in meaning."""
     words = query.lower().split()
     query_rows = select(LibraryResource).where(LibraryResource.owner_id == LOCAL_OWNER)
-    rows = session.scalars(query_rows.order_by(LibraryResource.kind, LibraryResource.name))
-    return [r for r in rows if all(w in r.name.lower() for w in words)]
+    rows = list(session.scalars(query_rows.order_by(LibraryResource.kind, LibraryResource.name)))
+    matched = [all(w in r.name.lower() for w in words) for r in rows]
+    exact = [r for r, m in zip(rows, matched, strict=True) if m]
+    others = [r for r, m in zip(rows, matched, strict=True) if not m]
+    return exact + meaning.closest(session, query, others, lambda r: r.name)

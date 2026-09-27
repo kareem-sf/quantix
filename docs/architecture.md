@@ -38,6 +38,8 @@ Each domain module owns its models, its service functions and the agent tools th
   development the Vite server starts the service on a free port and forwards `/api` to it with the token, so the
   browser preview and the desktop window use the same path and the UI never holds the token or a key.
   Release packaging, which embeds the service in the desktop app, comes later.
+- Search by meaning runs on the engineer's computer: a small multilingual model, fetched once into
+  `~/.quantix/models` and checked against pinned digests. No document text leaves the computer for it.
 - Every record belongs to a tender, and every tender belongs to an owner, so accounts can be added later.
 - Long work is kept in the database, not only in memory. After a restart, interrupted work resumes or is shown as
   stopped (see Turns below).

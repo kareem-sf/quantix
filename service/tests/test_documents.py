@@ -4,8 +4,10 @@ import time
 import docx
 import openpyxl
 import pytest
+from sqlalchemy import exists, func, select
 
-from quantix.documents import library, readers
+from quantix.documents import library, meaning, readers
+from quantix.documents.models import Document, Page, PageChunk
 
 
 def make_pdf(pages: list[list[str]]) -> bytes:
@@ -84,6 +86,27 @@ def read_all(client, tender_id):
     raise AssertionError("The documents were not read in time.")
 
 
+def indexed(client, tender_id):
+    """Waits until the tender's pages are indexed by meaning."""
+    read_all(client, tender_id)
+    for _ in range(600):
+        with client.app.state.sessions() as session:
+            waiting = session.execute(
+                select(func.count(Page.id))
+                .join(Document, Document.id == Page.document_id)
+                .where(
+                    Document.tender_id == tender_id,
+                    Document.status == "read",
+                    Page.has_text,
+                    ~exists().where(PageChunk.page_id == Page.id),
+                )
+            ).scalar_one()
+        if meaning.loaded() and not waiting:
+            return
+        time.sleep(0.1)
+    raise AssertionError("The pages were not indexed in time.")
+
+
 def test_a_package_is_stored_and_read(client, tender, tmp_path):
     response = upload(
         client,
@@ -119,7 +142,7 @@ def test_a_package_is_stored_and_read(client, tender, tmp_path):
 
 def test_search_finds_pages_in_english_and_arabic(client, tender):
     upload(client, tender, {"Conditions.pdf": PDF, "Bill.xlsx": make_xlsx()})
-    read_all(client, tender)
+    indexed(client, tender)
 
     hits = client.get(f"/tenders/{tender}/search", params={"q": "tender security"}).json()
     assert [(h["name"], h["page"]) for h in hits] == [("Conditions.pdf", 1)]

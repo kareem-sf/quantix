@@ -15,6 +15,11 @@ jobs:
           python-version: "3.12"
       - run: pip install -e "./service[dev]"
       - run: ruff check service && ruff format --check service
+      - name: The meaning model the tests fetch once
+        uses: actions/cache@v6
+        with:
+          path: service/.pytest_cache/d/quantix-models
+          key: multilingual-e5-small-761b726
       - run: pytest service
 
   interface:

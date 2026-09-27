@@ -132,7 +132,8 @@ def list_documents(ctx: RunContext[Turn]) -> str:
 
 
 def search_documents(ctx: RunContext[Turn], query: str) -> str:
-    """Search every page of the tender's documents for these words. Returns document ids, pages and snippets."""
+    """Search every page of the tender's documents for these words, and for pages that say the same in other words
+    or in Arabic. Returns document ids, pages and snippets."""
     with _working(ctx, f"Searching the documents for “{query}”") as (session, _):
         hits = library.search(session, ctx.deps.tender_id, query, limit=15)
     if not hits:
@@ -583,7 +584,8 @@ def takeoff_summary(ctx: RunContext[Turn]) -> str:
 
 def search_library(ctx: RunContext[Turn], words: str) -> str:
     """Search the firm's rate library (labour, plant, material, subcontract and unit rates from earlier tenders).
-    Check each entry's date before relying on it."""
+    Entries with your words come first, then entries close in meaning: check each is the same work, and check its
+    date before relying on it."""
     with _working(ctx, f"Checking the rate library for “{words}”") as (session, _):
         rows = estimate.library(session, words)[:25]
     if not rows:
@@ -665,7 +667,8 @@ def estimate_summary(ctx: RunContext[Turn]) -> str:
 
 
 def search_directory(ctx: RunContext[Turn], words: str = "") -> str:
-    """Search the firm's directory of subcontractors and suppliers by name or trade."""
+    """Search the firm's directory of subcontractors and suppliers by name or trade. Firms with your words come
+    first, then firms whose trades are close in meaning."""
     with _working(ctx, "Checking the directory") as (session, _):
         rows = subcontract.directory(session, words)[:40]
     if not rows:
@@ -760,7 +763,8 @@ def recommend_quote(ctx: RunContext[Turn], package: str, company: str, reason: s
 
 def search_past_tenders(ctx: RunContext[Turn], words: str) -> str:
     """Rates the firm approved on its earlier tenders for similar items, with each tender's outcome and the date.
-    Use them as benchmarks; check that a rate is still current before relying on it."""
+    Items with your words come first, then items close in meaning. Use them as benchmarks; check that an item is the
+    same work and that its rate is still current before relying on it."""
     with _working(ctx, f"Looking up past tenders for “{words}”") as (session, _):
         found = company.past_rates(session, ctx.deps.tender_id, words)
     if not found:

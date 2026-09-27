@@ -255,7 +255,9 @@ def decide_markups(markups_id: str, body: DecisionIn, session: DB, request: Requ
 
 @router.get("/library")
 def get_library(session: DB, q: str = "") -> list[LibraryOut]:
-    return [LibraryOut.model_validate(r, from_attributes=True) for r in records.library(session, q)]
+    rows = records.library(session, q)
+    session.commit()  # keeps the meaning of names searched for the first time
+    return [LibraryOut.model_validate(r, from_attributes=True) for r in rows]
 
 
 @router.post("/library", status_code=201)

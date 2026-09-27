@@ -19,6 +19,7 @@ from quantix.api import (
 )
 from quantix.core.db import open_database
 from quantix.documents.library import Reader
+from quantix.documents.meaning import Indexer
 from quantix.office.runtime import Office
 from quantix.review import revisions
 
@@ -34,18 +35,26 @@ def create_app(home: Path, token: str) -> FastAPI:
     async def lifespan(app: FastAPI):
         app.state.sessions = open_database(home)
         app.state.office = Office(home, app.state.sessions)
+        app.state.indexer = Indexer(home, app.state.sessions)
+
+        def after_read() -> None:
+            app.state.office.wake()
+            app.state.indexer.wake()
+
         # a newer copy of a document takes over the work whose source is unchanged, and wakes the office for the rest
         app.state.reader = Reader(
             home,
             app.state.sessions,
             on_read=lambda session, document: revisions.carry_over(session, home, document),
-            after_read=app.state.office.wake,
+            after_read=after_read,
         )
         app.state.reader.start()
+        app.state.indexer.start()
         app.state.office.start()
         yield
         app.state.office.close()
         app.state.reader.stop()
+        app.state.indexer.stop()
         app.state.sessions.kw["bind"].dispose()
 
     app = FastAPI(title="Quantix", version="0.1.0", lifespan=lifespan)
