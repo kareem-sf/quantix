@@ -32,19 +32,14 @@ def requirements(session: Session, tender_id: str) -> list[Requirement]:
 def find_requirement(session: Session, tender_id: str, title: str) -> Requirement:
     """By its title, or as list_requirements shows it: "<section> · <title>"."""
     wanted = title.strip().lower()
-    found = next(
-        (
-            r
-            for r in requirements(session, tender_id)
-            if wanted in (r.title.lower(), f"{r.section} · {r.title}".lower())
-        ),
-        None,
-    )
+    checklist = requirements(session, tender_id)
+    found = next((r for r in checklist if wanted in (r.title.lower(), f"{r.section} · {r.title}".lower())), None)
     if found is None:
         raise ValueError(
-            f"There is no requirement called {title}. Use list_requirements to see them. For a letter to the client, "
-            "such as a clarification query, first add it with add_requirements in the section Correspondence, citing "
-            "the page it is about."
+            f"There is no requirement called {title}. Give one of these titles exactly: "
+            + "; ".join(f"“{r.title}”" for r in checklist[:40])
+            + ". For a letter to the client, such as a clarification query, first add it with add_requirements in the "
+            "section Correspondence, citing the page it is about."
         )
     return found
 
