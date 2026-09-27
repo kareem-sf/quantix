@@ -4,6 +4,7 @@ the work still to do as its own tasks, never with a promise to look."""
 import io
 import re
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -70,6 +71,9 @@ def priced_after_a_send_back(client, tender_id, priya_id) -> tuple[str, str]:
             "Fixed by a gang of four, rebar with 5% wastage.",
             lines=LINES,
         )
+        priya = session.get(Staff, priya_id)
+        [redo] = office.open_tasks(session, priya)
+        office.complete(session, priya, redo.id, "Priced again with the fixing labour and the tie wire.")
         [p] = reviews.pending(session, tender_id)
         reason = "The build-up covers labour, rebar with wastage, wire and plant."
         verdict = reviews.Verdict(record=p.ref, accept=True, note="Checked each line.", warnings_reason=reason)
@@ -228,6 +232,19 @@ def test_find_records_and_the_priced_boq(client, tender):
         assert rows[0] == "3.1 | Excavation | 1,240 m3 | not priced"
         assert foot == "Lines 1 to 3 of 3."
         assert lookup.priced(session, tender_id, start=3).splitlines()[1].startswith("6.3 | Waterproofing")
+
+
+def test_every_summary_the_office_looks_at_can_be_given_as_a_source(client, tender):
+    """A summary tool records that the person looked at it, so they can rest what they tell the engineer on it: the
+    Manager's update resting on what_changed was refused until every one of them was listed."""
+    source = Path(tools.__file__).read_text(encoding="utf-8")
+    recorded = set(re.findall(r'_opened\(ctx, session, "summary", "(\w+)"\)', source))
+    assert {"what_changed", "price_breakdown", "estimate_summary"} <= recorded
+    tender_id, priya_id, _ = tender
+    with client.app.state.sessions() as session:
+        for key in sorted(recorded):
+            office.note_opened(session, tender_id, priya_id, "summary", key)
+            assert lookup.cited(session, tender_id, priya_id, key) == {"label": lookup.SUMMARIES[key]}
 
 
 def fake_turn(client, tender_id, staff_id) -> SimpleNamespace:

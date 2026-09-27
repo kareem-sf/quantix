@@ -153,6 +153,24 @@ describe("Office", () => {
     expect(within(profile).getByText("Idle")).toBeInTheDocument();
   });
 
+  it("shows a released person's unfinished tasks as not done", async () => {
+    const nora: Staff = { ...omar, id: "s3", name: "Nora Al-Otaibi", status: "released" };
+    fakeService({
+      tenders: [tender],
+      settings: ready,
+      staff: [rania, nora],
+      messages: [said(1, "s3", "team", "The insurance annexure lists six covers.")],
+      tasks: [{ id: "k1", staff_id: "s3", title: "Audit the insurance annexure", brief: "Every limit.", status: "open", result: null }],
+    });
+    openApp("/tenders/t1/office");
+
+    const room = await screen.findByRole("region", { name: "Conversation" });
+    await userEvent.click(await within(room).findByRole("button", { name: "About Nora Al-Otaibi" }));
+    const profile = await screen.findByRole("complementary", { name: "Nora Al-Otaibi" });
+    expect(within(profile).getByText("Released from this tender")).toBeInTheDocument();
+    expect(within(profile).getByText("not done")).toBeInTheDocument();
+  });
+
   it("shows what an answer rests on, each opening its source", async () => {
     const answer: Message = {
       ...said(2, "s1", "s1", "Built up from a fixing gang, rebar with 5% wastage, tie wire and a bending machine."),

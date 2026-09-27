@@ -20,7 +20,7 @@ from quantix.core.review import APPROVED, PROPOSED, REVIEWED
 from quantix.documents import library
 from quantix.estimate import records as estimate
 from quantix.office import packs, records, tools
-from quantix.office.models import ENGINEER, TEAM, Message, Staff
+from quantix.office.models import ENGINEER, OFFICE, TEAM, Message, Staff
 from quantix.office.tools import Persona, Turn
 from quantix.review import lessons, revisions
 from quantix.review import records as reviews
@@ -80,6 +80,8 @@ items, quotes): your staff do, so every record gets a second pair of eyes.
   they will do. There is no standard team: choose roles from the actual work. Keep the team small: give work to
   the people you have before hiring anyone new, and release people whose work is done.
 - Give each person clear tasks with assign_task and follow up. Once work is with someone, leave it to them.
+  When Quantix notes that someone stopped with open tasks without filing or saying anything, find out why and
+  unblock them: tell them what they are missing, give the work to someone else, or escalate it.
 - A question from the engineer comes first: answer it before anything else. Your review queue comes next, every
   turn: open it with review_queue, check each record against its source
   pages and the rest of the tender with open_record, and decide with review. Accept only what you would defend
@@ -97,7 +99,8 @@ items, quotes): your staff do, so every record gets a second pair of eyes.
 STAFF_DUTIES = """You work for the Tender Manager.
 - Work on your open tasks. When one is done, call complete_task with a clear result and the pages you used.
 - Everything you propose goes to the Manager for review first, then to the engineer. Work sent back to you comes
-  as a task to redo it: redo it with the same tool, then complete the task.
+  as a task to redo it: open what was sent back with open_record, correct it rather than starting again, file it
+  with the same tool, then complete the task.
 - If something blocks you or needs the engineer's decision, say so in the team room and name the Manager: the
   Manager asks the engineer, so the same question never reaches them twice."""
 
@@ -125,7 +128,7 @@ def situation(session: Session, member: Staff, new: list[Message]) -> str:
     tender = tenders.get_tender(session, member.tender_id)
     team = records.team(session, member.tender_id)
     names = {m.id: m.first_name for m in records.team(session, member.tender_id, include_released=True)}
-    names[ENGINEER] = "Engineer"
+    names[ENGINEER], names[OFFICE] = "Engineer", "Quantix"
     documents = [d for d in library.documents(session, member.tender_id) if d.status != "replaced"]
 
     def line(m: Message) -> str:
@@ -169,7 +172,8 @@ def situation(session: Session, member: Staff, new: list[Message]) -> str:
     if tasks:
         parts.append("Your open tasks:\n" + "\n".join(f"- {t.id}: {t.title}. {t.brief}" for t in tasks))
     if member.is_manager:
-        given = [t for t in records.all_tasks(session, member.tender_id) if t.status == "open"]
+        active = {m.id for m in records.team(session, member.tender_id)}  # a released person's tasks wait for no one
+        given = [t for t in records.all_tasks(session, member.tender_id) if t.status == "open" and t.staff_id in active]
         if given:
             parts.append("Open tasks in the team:\n" + "\n".join(f"- {names[t.staff_id]}: {t.title}" for t in given))
     decisions = records.decisions(session, member.tender_id)

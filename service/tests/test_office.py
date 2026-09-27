@@ -4,6 +4,7 @@ import re
 import threading
 import time
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 import pytest
 from conftest import TOKEN
@@ -23,7 +24,7 @@ from test_documents import PDF, read_all, upload
 from quantix import settings
 from quantix.api.app import create_app
 from quantix.office import runtime
-from quantix.office.models import ENGINEER, TEAM, TurnRecord
+from quantix.office.models import ENGINEER, TEAM, Staff, TurnRecord
 
 
 def prompt_of(messages) -> str:
@@ -180,6 +181,7 @@ def test_the_office_works_a_request_through_to_a_decision(client, office):
     assert ("engineer", "message", "Check the tender security, please.") in said
     assert (rania["id"], "task", "Rania asked Omar to find the tender security clause") in said
     assert any(s == omar["id"] and t.startswith("Finished: find the tender security clause") for s, _, t in said)
+    assert not any("stopped with" in t for _, _, t in said)  # Omar finished his task, so there is nothing to note
 
     [task] = client.get(f"/tenders/{tender_id}/tasks").json()
     assert (task["status"], task["result"]) == ("done", "Tender security is one percent (Conditions.pdf, page 1).")
@@ -548,6 +550,59 @@ def test_finishing_a_task_twice_says_what_is_still_open(client, office):
         second = office_records.assign(session, tender_id, salem, rashid, "measure the areas", "Both sheets.")
         with pytest.raises(ValueError, match=f"Yours: {second.id} \\(measure the areas\\)."):
             office_records.complete(session, rashid, first.id, "Done again.")
+
+
+def test_someone_who_stops_silently_with_open_tasks_is_followed_up(client, office):
+    """Nothing else would wake them again, so their tasks would wait unseen: Quantix says so in the team room, which
+    brings the Manager in. The notice doesn't wake the person it names."""
+    from quantix.office import records as office_records
+
+    tender_id, use = office
+    with client.app.state.sessions() as session:
+        salem = office_records.hire(session, tender_id, "Salem Al Suwaidi", "Tender Manager", {}, is_manager=True)
+        rashid = office_records.hire(session, tender_id, "Rashid Al-Ghamdi", "Estimator", {})
+        office_records.assign(session, tender_id, salem, rashid, "redraft the insurance statement", "Keep the covers.")
+        session.commit()
+        salem_id, rashid_id = salem.id, rashid.id
+    briefings: list[str] = []
+
+    def brain(messages, info):
+        if "You are Salem" in info.instructions:
+            briefings.append(prompt_of(messages))
+            return DONE
+        return [call("list_documents"), DONE][len(returns(messages))]  # Rashid looks, then stops
+
+    use(brain)
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Carry on, please."})
+    wait_for(lambda o: len(turn_records(client, tender_id)) >= 3, client, tender_id)
+
+    notice = ("office", "note", "Rashid stopped with 1 open task, without filing or saying anything.")
+    assert notice in [(m["sender"], m["kind"], m["text"]) for m in team_room(client, tender_id)]
+    assert f"- Quantix, team room: {notice[2]}" in briefings[-1]
+    assert [t.staff_id for t in turn_records(client, tender_id)] == [salem_id, rashid_id, salem_id]
+
+
+def test_released_staff_leave_their_open_tasks_to_be_given_out_again(client, office):
+    from quantix.office import agents, tools
+    from quantix.office import records as office_records
+
+    tender_id, _ = office
+    with client.app.state.sessions() as session:
+        salem = office_records.hire(session, tender_id, "Salem Al Suwaidi", "Tender Manager", {}, is_manager=True)
+        nora = office_records.hire(session, tender_id, "Nora Al-Otaibi", "Commercial QS", {})
+        office_records.assign(session, tender_id, salem, nora, "audit the insurance annexure", "Every limit.")
+        session.commit()
+        salem_id = salem.id
+    state = client.app.state
+    turn = tools.Turn(state.home, state.sessions, tender_id, salem_id, False, threading.Event())
+    report = tools.release(SimpleNamespace(deps=turn), "Nora", "Her review is finished.")
+    assert report == (
+        "Nora has been released, leaving these tasks undone: audit the insurance annexure. Give any that still need "
+        "doing to someone else with assign_task."
+    )
+    with client.app.state.sessions() as session:  # the Manager's list shows only what someone on the team will do
+        briefing = agents.situation(session, session.get(Staff, salem_id), [])
+    assert "Open tasks in the team" not in briefing and "- Nora: audit the insurance annexure" not in briefing
 
 
 def test_only_the_manager_brings_decisions_to_the_engineer():

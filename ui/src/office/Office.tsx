@@ -254,7 +254,9 @@ function Profile(props: {
           {mine.map((t) => (
             <span key={t.id} className="flex justify-between gap-2.5 border-t border-subtle py-2">
               <span>{t.title}</span>
-              <span className="shrink-0 text-ink-3">{t.status === "done" ? "done" : "working"}</span>
+              <span className="shrink-0 text-ink-3">
+                {t.status === "done" ? "done" : member.status === "released" ? "not done" : "working"}
+              </span>
             </span>
           ))}
         </div>

@@ -92,12 +92,15 @@ Each domain module owns its models, its service functions and the agent tools th
 - **Real conversation.** Agents talk only through `message_engineer`, `post_to_team` and `raise_concern`. The team
   room is exactly those records. A reply to the engineer (they wrote last) carries its `sources`, each something the
   sender opened, or `next_steps`: up to 3 open at a time, each becomes the sender's own "Follow up" task. An open
-  task given, sent back or set since someone's last turn began wakes them once. The chat shows the sources as
+  task given, sent back or set since someone's last turn began wakes them once. Someone who ends a turn with open
+  tasks, having filed nothing and told no one, gets a plain notice from Quantix in the team room, which wakes the
+  Manager to find out why; Quantix's notices never wake the staff they name. The chat shows the sources as
   links (`messages.sources`, the same shape as a decision's sources).
 - **Looking up the office's work.** `quantix/review/lookup.py` opens any record by its reference or BOQ line: what
   it says and rests on, with Quantix's figures, who made and decided it, the checks while it is undecided, and
-  every other version of the same work with why it was sent back. It also finds records by words and lists the
-  priced BOQ a page at a time. Agents reach it through `open_record`, `find_records` and `priced_boq`.
+  every other version of the same work with why it was sent back. A checklist item whose draft was sent back points
+  to that draft, so whoever redrafts it corrects it rather than starting again. It also finds records by words and
+  lists the priced BOQ a page at a time. Agents reach it through `open_record`, `find_records` and `priced_boq`.
 - **What was opened.** `opened` keeps each page and record a person opened (their tools write it), and the summaries
   they called. It is what their sources are checked against.
 - **The package as the office reads it.** `quantix/review/package.py` gives a spreadsheet's rows a part at a time,

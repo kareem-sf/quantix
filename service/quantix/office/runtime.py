@@ -15,8 +15,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from quantix import settings, tenders
 from quantix.ai import connections, providers
 from quantix.documents import library
-from quantix.office import agents, records
-from quantix.office.models import ENGINEER, TEAM, Message, Staff, TurnRecord
+from quantix.office import agents, packs, records
+from quantix.office.models import ENGINEER, OFFICE, TEAM, Message, Staff, TurnRecord
 from quantix.office.tools import Stopped, Turn
 from quantix.review import records as reviews
 from quantix.review import revisions
@@ -24,7 +24,6 @@ from quantix.tenders import Tender
 
 log = logging.getLogger("quantix.office")
 
-OFFICE = "office"  # the sender of the office's own notices; never used for anything an agent says
 TURN_BUDGET = 40  # turns without hearing from the engineer before the office pauses
 CARRY_ON = "Your last turn was cut short. Carry on from where you stopped, and report what you have."
 RETRIES = 2  # turns cut short by a passing AI failure that are tried again before the office pauses
@@ -249,8 +248,23 @@ class Office:
                 record.input_tokens, record.cached_tokens = trace.usage.input_tokens, trace.usage.cache_read_tokens
                 if trace.ended not in records.UNFINISHED:
                     session.get(Staff, staff_id).now = None
+                if trace.ended == "done" and not member.is_manager:
+                    self._left_tasks(session, tender_id, member, trace.calls)
                 session.commit()
         return True
+
+    @staticmethod
+    def _left_tasks(session: Session, tender_id: str, member: Staff, calls: list[dict]) -> None:
+        """Someone who stopped silently with open tasks, filing nothing and telling no one: say so in the team room,
+        which brings the Tender Manager in to find out why. Nothing else would wake them, so their tasks would wait
+        unseen."""
+        if any(c["tool"] in packs.FILES_OR_SAYS and c["sent_back"] is None for c in calls):
+            return
+        left = records.open_tasks(session, member)
+        if left:
+            count = f"{len(left)} open task" + ("" if len(left) == 1 else "s")
+            notice = f"{member.first_name} stopped with {count}, without filing or saying anything."
+            records.post(session, tender_id, OFFICE, TEAM, notice, "note")
 
     async def _appoint_manager(self, session: Session, model: Model, tender_id: str) -> None:
         tender = tenders.get_tender(session, tender_id)

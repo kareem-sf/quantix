@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from quantix.office.models import ENGINEER, TEAM, Decision, Message, Opened, Staff, Task, TurnRecord
+from quantix.office.models import ENGINEER, OFFICE, TEAM, Decision, Message, Opened, Staff, Task, TurnRecord
 
 MAX_STAFF = 8
 # How a turn ended that leaves the person's work unfinished, so they carry on: cut short, or Quantix itself stopped
@@ -102,7 +102,8 @@ def inbox(session: Session, member: Staff) -> list[Message]:
     """What this person hasn't seen yet and should act on.
 
     The Manager follows the whole team room. Staff act on their tasks, on messages that name them, and on anything
-    the engineer sends them directly. Their own messages never wake them."""
+    the engineer sends them directly. Their own messages never wake them, nor do the office's notices, which are for
+    the Manager to act on."""
     query = select(Message).where(
         Message.tender_id == member.tender_id,
         Message.id > member.last_read,
@@ -113,7 +114,7 @@ def inbox(session: Session, member: Staff) -> list[Message]:
     if member.is_manager:
         return new
     name = member.first_name.lower()
-    return [m for m in new if m.channel == member.id or name in m.text.lower()]
+    return [m for m in new if m.channel == member.id or (m.sender != OFFICE and name in m.text.lower())]
 
 
 def mark_read(session: Session, member: Staff) -> None:

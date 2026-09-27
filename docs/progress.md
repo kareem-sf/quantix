@@ -728,3 +728,35 @@ question. Runs used openai-gpt-5-4-mini, the office AI on the real tender.
 - **Test fixes:** two `test_office.py` tests waited for "idle", which the office shows for a moment between a turn
   cut short and the one carrying it on; they now wait for the message they check.
 - **Checks:** 2 new service tests. 170 service tests pass, and so do Ruff and the format check.
+
+## 28 September 2026: redrafting what the client reads, and no silent stops
+
+Nine drafts approved earlier on the real tender still carried notes to the office: file names, "Source:" and "Basis:"
+lines, instructions to the team. The check for such notes came after their approval, and the audit lists only
+blockers for approved work, so they never showed. The engineer reopened all nine. Redoing them showed where the office
+still lost work or stopped:
+
+- **Redrafts started from nothing.** A checklist item whose draft was sent back read "nothing drafted or attached
+  yet", so staff wrote from scratch and dropped the substance: the insurance limits, the QA/QC obligations, and a
+  guarantee statement that promised the guarantee the price leaves out. The checklist item now names the sent-back
+  draft and why it went back, and `find_records` finds drafts by their own titles, which can differ from their item's.
+- **Silent stops.** Someone who ended a turn with open tasks, having filed nothing and told no one, was never woken
+  again, and no one was told. Quantix now notes it in the team room, which wakes the Manager to find out why. Its
+  notices never wake the staff they name.
+- **A refused update.** Five summaries the office can call (`what_changed`, `price_breakdown`, `what_if`, `coverage`,
+  `list_packages`) couldn't be given as sources, so the Manager's update to the engineer was refused and he stopped.
+  A test now checks every summary a tool records.
+- **Released staff's tasks** stayed in the Manager's list for good. Release now names what is left undone, the list
+  shows only the active team's tasks, and the person panel shows them as "not done".
+- **Duplicate work.** The Manager assigned tasks his own send-backs had already made, so drafts were filed twice and
+  versions he had accepted were replaced. The review tool now says a send-back is the maker's task to redo.
+- **On the real tender**, all nine were redrafted and approved: the programme, five statements, the guarantee
+  position and the two client queries. Each was checked against the annexures' own words: the HSE annexure is (C),
+  not F, which is Delegation; audit findings are addressed in 48 hours and closed within a week; the manpower and
+  material lists are due immediately after signing. The rebuilt package has no notes to the office in any document,
+  every Word, Excel and PowerPoint file opens without repair and with no formula errors, and the audit is clear but
+  for the unread KMZ the Manager accepted.
+- **Seen, not changed:** an answer from the engineer that arrives during the Manager's turn is read on his next one.
+  Once he then accepted a stripped query that the answer had told him to keep whole; the engineer sent it back.
+- **Checks:** 3 new service tests and 1 interface test. 175 service tests and 69 interface tests pass, and so do the
+  typecheck, Ruff and the format check.

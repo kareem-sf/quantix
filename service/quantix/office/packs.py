@@ -98,6 +98,10 @@ WORK: dict[str, Work] = {
         produces=[t.add_requirements, t.draft_document, t.draft_work_schedule, t.set_pricing_columns],
     ),
 }
+# What files or finishes work, or tells someone about it: a turn that called none of these stopped silently
+FILES_OR_SAYS = {tool.__name__ for w in WORK.values() for tool in w.produces} | {
+    tool.__name__ for tool in (t.complete_task, t.withdraw, t.message_engineer, t.post_to_team, t.raise_concern)
+}
 # The Manager's hiring tools, loaded while the team is small and on request after that
 TEAM = Work(
     "Hiring and releasing staff, and looking back through the conversation.",

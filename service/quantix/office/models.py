@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from quantix.core.db import Base, UTCDateTime
 
 ENGINEER = "engineer"  # the sender id the engineer's own messages use
+OFFICE = "office"  # the sender of the office's own notices; never used for anything an agent says
 TEAM = "team"  # the team room channel; a direct chat with the engineer uses the staff member's id as its channel
 
 

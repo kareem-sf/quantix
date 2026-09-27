@@ -64,6 +64,11 @@ SUMMARIES = {
     "takeoff_summary": "The takeoff against the BOQ",
     "list_requirements": "The submission checklist",
     "audit_tender": "The audit of the tender",
+    "what_changed": "What changed in the office",
+    "coverage": "How much of the package the office has read",
+    "list_packages": "The subcontract and supply packages",
+    "price_breakdown": "Where the money is, as Quantix computes it",
+    "what_if": "The price with the changes asked about, as Quantix computes it",
 }
 _PAGE_REF = re.compile(r"^(?P<name>.+?),?\s+page\s+(?P<page>\d+)$", re.IGNORECASE)
 _ID = re.compile(r"[0-9a-f]{4,32}")
@@ -325,7 +330,7 @@ def _boq_line(session: Session, item: BoqItem) -> str:
     return line
 
 
-FINDABLE = ("boq", "fact", "checklist", "measurement", "package", "quote")
+FINDABLE = ("boq", "fact", "checklist", "draft", "measurement", "package", "quote")
 
 
 def search(session: Session, tender_id: str, words: str, kind: str | None = None) -> list[str]:
@@ -354,6 +359,15 @@ def search(session: Session, tender_id: str, words: str, kind: str | None = None
                 f"{r.section} {r.title}",
                 f"checklist {r.id[:8]} · {r.section} · {r.title} · {state(session, 'checklist', r)}",
             )
+    if kind in (None, "draft"):  # each checklist item's draft, by its own title too, which can differ from the item's
+        for r in submission.requirements(session, tender_id):
+            d = submission.current_draft(session, r.id) or returned_draft(session, r)
+            if d is not None:
+                add(
+                    f"{d.title} {r.section} {r.title}",
+                    f"draft {d.id[:8]} · “{d.title}” for checklist {r.id[:8]} ({r.section} · {r.title}) · "
+                    f"{STATES.get(d.status, d.status)}",
+                )
     if kind in (None, "measurement"):
         for m in takeoff.measurements(session, tender_id):
             item = session.get(BoqItem, m.boq_item_id) if m.boq_item_id else None

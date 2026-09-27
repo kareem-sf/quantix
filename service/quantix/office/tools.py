@@ -517,6 +517,12 @@ def release(ctx: RunContext[Turn], staff_name: str, reason: str) -> str:
             raise ValueError("No one on the team has that name.")
         member.status, member.now = "released", None
         records.post(session, ctx.deps.tender_id, me.id, TEAM, f"{member.name} has left the team: {reason}", "task")
+        left = [t.title for t in records.open_tasks(session, member)]
+    if left:
+        return (
+            f"{member.first_name} has been released, leaving these tasks undone: {'; '.join(left)}. Give any that "
+            "still need doing to someone else with assign_task."
+        )
     return f"{member.first_name} has been released."
 
 
@@ -604,9 +610,10 @@ def open_record(ctx: RunContext[Turn], references: list[str]) -> str:
 
 
 def find_records(ctx: RunContext[Turn], words: str = "", kind: str | None = None) -> str:
-    """Find the office's own records by words: BOQ lines (with their rates), facts, checklist items, measurements,
-    packages and quotes. kind narrows it to one of boq, fact, checklist, measurement, package or quote; with a kind
-    and no words it lists them all. Each line starts with the reference to open it with open_record."""
+    """Find the office's own records by words: BOQ lines (with their rates), facts, checklist items and their drafts,
+    measurements, packages and quotes. kind narrows it to one of boq, fact, checklist, draft, measurement, package or
+    quote; with a kind and no words it lists them all. Each line starts with the reference to open it with
+    open_record."""
     with _working(ctx, f"Looking through the office's records for “{words}”") as (session, _):
         found = lookup.search(session, ctx.deps.tender_id, words, kind)
     if not found:
@@ -1228,8 +1235,9 @@ def review(ctx: RunContext[Turn], verdicts: list[reviews.Verdict]) -> str:
     """Decide on records in your review queue, as many as you like at once. Accept only what you would defend to
     the engineer, saying what you checked. You can't accept a record while Quantix finds a blocker in it; accept a
     warning only with warnings_reason saying why it needs no correction. Send back anything wrong, saying exactly
-    what to correct: it goes to whoever made it, in the team room. When work needed correcting and the mistake
-    could happen again, add the lesson: the whole office follows it from then on."""
+    what to correct: it goes to whoever made it, in the team room, as their task to redo it, so don't also assign it
+    to them. When work needed correcting and the mistake could happen again, add the lesson: the whole office
+    follows it from then on."""
     with _working(ctx, "Reviewing the team's work") as (session, me):
         return reviews.review(session, ctx.deps.home, ctx.deps.tender_id, me, verdicts, ctx.deps.autonomous)
 

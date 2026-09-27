@@ -160,6 +160,11 @@ def test_drafts_wait_for_review_and_the_engineer_marks_what_they_provide(client,
         )
         opened = lookup.explain(session, client.app.state.home, tender_id, "checklist", requirement)
         assert f"Sent back: draft {second.id[:8]}, “Method statement”: Add the pour sizes." in opened
+        found = lookup.search(session, tender_id, "method statement", "draft")  # by the draft's own title too
+        assert found == [
+            f"draft {second.id[:8]} · “Method statement” for checklist {method['id'][:8]} "
+            "(Technical · Method statement for concrete works) · sent back"
+        ]
     with client.app.state.sessions() as session:
         third = submission.draft(
             session, session.get(submission.Requirement, method["id"]), layla, "Method statement", "v3"
