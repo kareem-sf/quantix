@@ -112,6 +112,27 @@ def test_quotes_are_levelled_with_our_rates_and_their_exclusions(client, tender)
     assert (najd["rank"], gulf["rank"]) == (1, 2)
 
 
+def test_the_manager_sees_what_a_recommendation_costs_and_leaves_out(client, tender):
+    tender_id, _, omar, _, _ = tender
+    package_id = two_quotes(client, tender)
+
+    def recommend(company):
+        with client.app.state.sessions() as session:
+            package = session.get(subcontract.Package, package_id)
+            subcontract.recommend(session, package, omar, subcontract.find_company(session, company), "Best value.")
+            session.commit()
+        found = client.get(f"/records/recommendation/{package_id}/findings").json()
+        return [(f["severity"], f["message"]) for f in found]
+
+    assert recommend("Gulf Groundworks") == [
+        ("warning", "Gulf Groundworks levels at 60,380.00; Najd Contracting is lower at 57,700.00.")
+    ]
+    assert recommend("Najd Contracting") == [
+        ("warning", "Najd Contracting left out 6.3; our own rate stands in for them.")
+    ]
+    assert client.get(f"/tenders/{tender_id}/review").json()[-1]["kind"] == "recommendation"
+
+
 def test_a_quote_must_be_read_from_its_document(client, tender):
     tender_id, _, omar, gulf, _ = tender
     package_id = two_quotes(client, tender)

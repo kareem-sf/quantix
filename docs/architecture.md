@@ -58,6 +58,11 @@ Each domain module owns its models, its service functions and the agent tools th
   engineer's gate; or `office_approved` in Fully autonomous mode) or sends it back (`rejected`, with the correction
   posted in the team room naming who made it). New proposals wake him. The engineer approves or sends back reviewed
   records, and can reopen approved ones. The statuses and review fields live in `quantix/core/review.py`.
+- **Checks.** `quantix/review/checks.py` computes findings from the records whenever they are asked for; they are
+  never stored. Each finding is a blocker or a warning, with its message and the pages or records it rests on. The
+  Manager can't accept a record with a blocker. A warning needs his reason, kept in `acceptances` under the
+  finding's key, which names the check and the records, so a changed record is checked again. The thresholds are
+  named constants that each message states: plausibility checks, not standards.
 - **Evidence.** A cited location must exist and must have been read in that agent's run.
 
 ## Quantity take-off

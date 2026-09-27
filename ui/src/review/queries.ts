@@ -3,7 +3,18 @@ import { api, must } from "../api/client";
 import type { components } from "../api/schema";
 
 export type Waiting = components["schemas"]["Waiting"];
+export type Finding = components["schemas"]["FindingOut"];
 export type Reopenable = "boq" | "fact" | "scale" | "measurement" | "rate" | "markups" | "draft";
+export type Checked = Exclude<Reopenable, "scale"> | "recommendation";
+
+/** What Quantix's checks find in a record now, with the Manager's reason for each warning he accepted. */
+export function useFindings(kind: Checked, id: string) {
+  return useQuery({
+    queryKey: ["findings", kind, id],
+    queryFn: async () =>
+      must(await api.GET("/records/{kind}/{record_id}/findings", { params: { path: { kind, record_id: id } } })),
+  });
+}
 
 /** What the staff proposed that the Tender Manager hasn't reviewed yet. */
 export function useReviewQueue(tenderId: string) {

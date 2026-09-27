@@ -1,9 +1,11 @@
 """The Tender Manager's review. Everything the staff propose comes to him before it reaches the engineer; he accepts
-it or sends it back to whoever made it. In a fully autonomous office his acceptance approves it."""
+it or sends it back to whoever made it. In a fully autonomous office his acceptance approves it. Quantix checks each
+record first: he can't accept one with a blocker, and accepts a warning only with his reason."""
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -18,6 +20,8 @@ from quantix.estimate import records as estimate
 from quantix.estimate.models import Markups, Rate
 from quantix.office import records as office
 from quantix.office.models import ENGINEER, TEAM, Staff
+from quantix.review import checks
+from quantix.review.models import Acceptance
 from quantix.subcontract import records as subcontract
 from quantix.subcontract.models import Company, Enquiry, Package, Quote
 from quantix.submission import records as submission
@@ -38,6 +42,7 @@ REVIEWED_KINDS: dict[str, Any] = {
 KIND_NAMES = {"boq": "BOQ lines", "fact": "facts", "scale": "scales", "measurement": "measurements", "rate": "rates"}
 KIND_NAMES |= {"markups": "markups", "draft": "drafts", "checklist": "checklist items", "enquiry": "enquiries"}
 KIND_NAMES |= {"recommendation": "quote recommendations"}
+CHECKED = {kind: model for kind, (model, _) in REVIEWED_KINDS.items()} | {"recommendation": Package}
 
 
 @dataclass
@@ -150,6 +155,47 @@ def describe(session: Session, p: Pending, names: dict[str, str]) -> str:
     return f"{p.ref} · by {by} · {line}"
 
 
+def accepted(session: Session, tender_id: str) -> dict[str, Acceptance]:
+    """The warnings the Manager accepted, by their key."""
+    return {a.key: a for a in session.scalars(select(Acceptance).where(Acceptance.tender_id == tender_id))}
+
+
+def findings(session: Session, home: Path, tender_id: str, p: Pending) -> list[checks.Finding]:
+    """What Quantix's checks find in a record in the queue, less the warnings the Manager already accepted."""
+    settled = accepted(session, tender_id)
+    return [f for f in checks.for_record(session, home, p.kind, p.record) if f.key not in settled]
+
+
+def flags(found: list[checks.Finding]) -> str:
+    """The findings in a few words, for the queue."""
+    blockers = sum(f.severity == checks.BLOCKER for f in found)
+    warnings = len(found) - blockers
+    parts = [f"{blockers} blocker{'s' if blockers > 1 else ''}"] if blockers else []
+    parts += [f"{warnings} warning{'s' if warnings > 1 else ''}"] if warnings else []
+    return f" · Quantix found {' and '.join(parts)}" if parts else ""
+
+
+def findings_text(found: list[checks.Finding]) -> str:
+    """The findings, for review_details."""
+    if not found:
+        return ""
+    lines = []
+    for f in found:
+        where = "; ".join(r.label for r in f.refs)
+        lines.append(f"- {f.severity.upper()}: {f.message}" + (f" ({where})" if where else ""))
+    return "\nQuantix's checks:\n" + "\n".join(lines)
+
+
+def record_findings(session: Session, home: Path, kind: str, record_id: str) -> list[tuple[Any, Any]]:
+    """What the checks find in a record now, each with the Manager's acceptance if he accepted it."""
+    model = CHECKED.get(kind)
+    record = session.get(model, record_id) if model else None
+    if record is None:
+        raise LookupError("Not found.")
+    settled = accepted(session, record.tender_id)
+    return [(f, settled.get(f.key)) for f in checks.for_record(session, home, kind, record)]
+
+
 def details(session: Session, p: Pending) -> str:
     """Everything the Manager needs to check the record against its source."""
     r = p.record
@@ -229,32 +275,54 @@ class Verdict(BaseModel):
     record: str = Field(description='The record as review_queue shows it, e.g. "rate 4690fa4c"')
     accept: bool = Field(description="true to accept it, false to send it back to whoever made it")
     note: str = Field(description="Accepting: what you checked. Sending back: exactly what to correct and how")
+    warnings_reason: str | None = Field(
+        default=None,
+        description="Accepting a record Quantix warned about: why each warning doesn't need correcting",
+    )
 
 
-def review(session: Session, tender_id: str, manager: Staff, verdicts: list[Verdict], autonomous: bool) -> str:
+def review(
+    session: Session, home: Path, tender_id: str, manager: Staff, verdicts: list[Verdict], autonomous: bool
+) -> str:
     """Apply the Manager's verdicts. One that can't be applied is reported, the others still count."""
-    accepted, sent_back, problems = 0, 0, []
+    accepted_n, sent_back, problems = 0, 0, []
     for verdict in verdicts:
         try:
             if len(verdict.note.split()) < 3:
                 raise ValueError("say in the note what you checked, or what to correct")
             p = find(session, tender_id, verdict.record)
             if verdict.accept:
-                _accept(session, p, manager, verdict.note.strip(), autonomous)
-                accepted += 1
+                _accept(session, home, tender_id, p, manager, verdict, autonomous)
+                accepted_n += 1
             else:
                 _send_back(session, tender_id, p, manager, verdict.note.strip())
                 sent_back += 1
         except ValueError as error:
             problems.append(f"{verdict.record}: {error}")
     where = "approved by the office" if autonomous else "waiting for the engineer"
-    report = f"Accepted {accepted} ({where}). Sent back {sent_back}."
-    return report + ("\nNot done: " + "; ".join(problems) if problems else "")
+    report = f"Accepted {accepted_n} ({where}). Sent back {sent_back}."
+    return report + ("\nNot done:\n" + "\n".join(problems) if problems else "")
 
 
-def _accept(session: Session, p: Pending, manager: Staff, note: str, autonomous: bool) -> None:
+def _accept(
+    session: Session, home: Path, tender_id: str, p: Pending, manager: Staff, verdict: Verdict, autonomous: bool
+) -> None:
+    found = findings(session, home, tender_id, p)
+    blockers = [f.message for f in found if f.severity == checks.BLOCKER]
+    if blockers:
+        raise ValueError(
+            "Quantix's checks stop it: " + " ".join(blockers) + " Send it back saying exactly what to correct."
+        )
+    reason = (verdict.warnings_reason or "").strip()
+    if found and len(reason.split()) < 3:
+        raise ValueError(
+            "Quantix warns: " + " ".join(f.message for f in found) + " Accept it with warnings_reason saying why "
+            "each is acceptable, or send it back with the correction."
+        )
+    for f in found:
+        session.add(Acceptance(tender_id=tender_id, key=f.key, reason=reason, accepted_by=manager.id))
     r = p.record
-    r.reviewed_by, r.reviewed_at, r.review_note = manager.id, datetime.now(UTC), note
+    r.reviewed_by, r.reviewed_at, r.review_note = manager.id, datetime.now(UTC), verdict.note.strip()
     if p.kind in REVIEWED_KINDS:
         module = REVIEWED_KINDS[p.kind][1]
         if autonomous:

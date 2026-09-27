@@ -126,11 +126,12 @@ def manager_accepts(client, tender_id, autonomous=False) -> str:
         manager = office_records.manager(session, tender_id) or office_records.hire(
             session, tender_id, "Rania Farouk", "Tender Manager", {}, is_manager=True
         )
+        reason = "Checked each warning against the documents."
         verdicts = [
-            reviews.Verdict(record=p.ref, accept=True, note="Checked it against its source.")
+            reviews.Verdict(record=p.ref, accept=True, note="Checked it against its source.", warnings_reason=reason)
             for p in reviews.pending(session, tender_id)
         ]
-        report = reviews.review(session, tender_id, manager, verdicts, autonomous)
+        report = reviews.review(session, client.app.state.home, tender_id, manager, verdicts, autonomous)
         session.commit()
         return report
 

@@ -655,17 +655,23 @@ def list_requirements(ctx: RunContext[Turn]) -> str:
 
 
 def draft_work_schedule(
-    ctx: RunContext[Turn], requirement: str, title: str, activities: list[submission.ActivityIn], sequence: str
+    ctx: RunContext[Turn],
+    requirement: str,
+    title: str,
+    activities: list[submission.ActivityIn],
+    sequence: str,
+    overall_days: int,
 ) -> str:
-    """Draft the work schedule for its checklist requirement. activities: each BOQ line with the output you assume
-    for one crew in a day and the number of crews; Quantix takes the quantity from the BOQ, works out the days and
-    writes them into the draft. sequence: the order of the work, the overlaps you plan and the overall duration of
-    each substation or part, in days, with your assumptions."""
+    """Draft the work schedule for its checklist requirement. activities: every BOQ line with a quantity, with the
+    output you assume for one crew in a day and the number of crews; Quantix takes the quantity from the BOQ, works
+    out the days and writes them into the draft. sequence: the order of the work and the overlaps you plan, with
+    your assumptions. overall_days: the whole programme in working days, from the lines and your overlaps."""
     with _working(ctx, f"Drafting {title}") as (session, me):
         found = submission.find_requirement(session, ctx.deps.tender_id, requirement)
         rows = submission.durations(session, ctx.deps.tender_id, activities)
-        text = submission.schedule_text(rows, sequence)
-        submission.draft(session, found, me.id, title, text)
+        text = submission.schedule_text(rows, sequence, overall_days)
+        schedule = submission.schedule_record(rows, overall_days)
+        submission.draft(session, found, me.id, title, text, schedule=schedule)
     total = sum(r.days for r in rows)
     return f"{text}\n\nIt is with the Tender Manager for review. {total} days if every line ran one after another."
 
@@ -693,13 +699,17 @@ def set_pricing_columns(
 
 
 def review_queue(ctx: RunContext[Turn]) -> str:
-    """Everything your staff proposed that you haven't reviewed yet, oldest first, one line each. Look at the
-    detail with review_details, then decide with review."""
+    """Everything your staff proposed that you haven't reviewed yet, oldest first, one line each, with what
+    Quantix's checks found in it. Look at the detail with review_details, then decide with review."""
+    tender_id = ctx.deps.tender_id
     with _working(ctx, "Going through the review queue") as (session, me):
-        waiting = reviews.pending(session, ctx.deps.tender_id)
+        waiting = reviews.pending(session, tender_id)
         me.reviewed_up_to = datetime.now(UTC)
-        names = {m.id: m.first_name for m in records.team(session, ctx.deps.tender_id, include_released=True)}
-        lines = [reviews.describe(session, p, names) for p in waiting[:60]]
+        names = {m.id: m.first_name for m in records.team(session, tender_id, include_released=True)}
+        lines = [
+            reviews.describe(session, p, names) + reviews.flags(reviews.findings(session, ctx.deps.home, tender_id, p))
+            for p in waiting[:60]
+        ]
     if not lines:
         return "Nothing is waiting for your review."
     more = f"\n… and {len(waiting) - 60} more after these." if len(waiting) > 60 else ""
@@ -708,7 +718,8 @@ def review_queue(ctx: RunContext[Turn]) -> str:
 
 def review_details(ctx: RunContext[Turn], records_to_check: list[str]) -> str:
     """The full detail of up to 10 records in your review queue, e.g. ["rate 4690fa4c", "draft 1cb82413"]: their
-    source, build-up, measurement, text or levelling. Check each against its pages before you decide."""
+    source, build-up, measurement, text or levelling, and what Quantix's checks found. Check each against its pages
+    before you decide."""
     with _working(ctx, "Checking the team's work") as (session, _):
         parts = []
         for ref in records_to_check[:10]:
@@ -717,16 +728,18 @@ def review_details(ctx: RunContext[Turn], records_to_check: list[str]) -> str:
             except ValueError as error:
                 parts.append(f"{ref}: {error}")
                 continue
-            parts.append(f"{found.ref}:\n{reviews.details(session, found)}")
+            checked = reviews.findings(session, ctx.deps.home, ctx.deps.tender_id, found)
+            parts.append(f"{found.ref}:\n{reviews.details(session, found)}{reviews.findings_text(checked)}")
     return "\n\n".join(parts)
 
 
 def review(ctx: RunContext[Turn], verdicts: list[reviews.Verdict]) -> str:
     """Decide on records in your review queue, as many as you like at once. Accept only what you would defend to
-    the engineer, saying what you checked. Send back anything wrong, saying exactly what to correct: it goes to
-    whoever made it, in the team room."""
+    the engineer, saying what you checked. You can't accept a record while Quantix finds a blocker in it; accept a
+    warning only with warnings_reason saying why it needs no correction. Send back anything wrong, saying exactly
+    what to correct: it goes to whoever made it, in the team room."""
     with _working(ctx, "Reviewing the team's work") as (session, me):
-        return reviews.review(session, ctx.deps.tender_id, me, verdicts, ctx.deps.autonomous)
+        return reviews.review(session, ctx.deps.home, ctx.deps.tender_id, me, verdicts, ctx.deps.autonomous)
 
 
 READ: list[Callable] = [

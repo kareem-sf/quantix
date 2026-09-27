@@ -4,7 +4,7 @@ import { Link, useParams, useSearchParams } from "react-router";
 import { money } from "../estimate/queries";
 import { Face } from "../office/Face";
 import { firstName, useOffice, type Staff } from "../office/queries";
-import { Reopen, ReviewNote, WITH_MANAGER } from "../review/Review";
+import { Findings, Reopen, ReviewNote, WITH_MANAGER } from "../review/Review";
 import { dueShort } from "../tenders/due";
 import { useTender } from "../tenders/queries";
 import {
@@ -278,6 +278,7 @@ function RequirementPanel(props: { tenderId: string; requirement: Requirement; p
         </div>
       )}
 
+      {r.draft && <Findings kind="draft" id={r.draft.id} tenderId={tenderId} />}
       {r.draft?.status === "proposed" && <p className="text-ink-2">{WITH_MANAGER}</p>}
       {r.draft && <ReviewNote reviewedBy={r.draft.reviewed_by} note={r.draft.review_note} people={props.people} />}
       {r.draft?.status === "office_approved" && <Reopen kind="draft" id={r.draft.id} />}

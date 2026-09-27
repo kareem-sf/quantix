@@ -2,8 +2,9 @@
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy import ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from quantix.core.db import Base, UTCDateTime
@@ -50,6 +51,8 @@ class Draft(Reviewed, Base):
     requirement_id: Mapped[str] = mapped_column(ForeignKey("requirements.id", ondelete="CASCADE"))
     title: Mapped[str] = mapped_column(String(300))
     body: Mapped[str] = mapped_column(Text)
+    # a work schedule's lines as Quantix worked them out, and its stated overall duration, for the checks
+    schedule: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
 
 class PricingColumns(Base):

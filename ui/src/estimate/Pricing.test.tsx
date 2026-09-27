@@ -113,6 +113,42 @@ describe("Pricing", () => {
     );
   });
 
+  it("shows what Quantix's checks found in a rate, with the Manager's reason and the source", async () => {
+    const findings = {
+      r1: [
+        {
+          severity: "warning",
+          message: "4.2 is the same item at 3,300.00 per t; 4.3 is 3,488.00.",
+          refs: [{ label: "4.2", document_id: null, page: null }],
+          accepted_by: "Rania",
+          reason: "4.2 is mesh, not bar: a different item.",
+        },
+        {
+          severity: "blocker",
+          message: "It still has text to fill in: “[date]”.",
+          refs: [{ label: "Quote.pdf, page 1", document_id: "d2", page: 1 }],
+          accepted_by: null,
+          reason: null,
+        },
+      ],
+    };
+    fakeService({ tenders: [tender], staff: [priya], items: [rebar], priced: [priced], summary, findings });
+    openApp("/tenders/t1/estimate?item=i43");
+
+    const panel = await screen.findByRole("complementary", { name: "Item 4.3" });
+    expect(await within(panel).findByText("Quantix’s checks")).toBeInTheDocument();
+    expect(within(panel).getByText("4.2 is the same item at 3,300.00 per t; 4.3 is 3,488.00.")).toBeInTheDocument();
+    expect(within(panel).getByText("See 4.2")).toBeInTheDocument();
+    expect(within(panel).getByText(/Accepted by Rania/)).toHaveTextContent(
+      "Accepted by Rania: 4.2 is mesh, not bar: a different item.",
+    );
+    expect(within(panel).getByText("Must be fixed:")).toBeInTheDocument();
+    expect(within(panel).getAllByRole("link", { name: "Quote.pdf, page 1" })[1]).toHaveAttribute(
+      "href",
+      "/tenders/t1/documents?doc=d2&page=1",
+    );
+  });
+
   it("summarises the price with markups and VAT", async () => {
     fakeService({
       tenders: [tender],

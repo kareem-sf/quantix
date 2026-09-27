@@ -34,7 +34,9 @@ to do the work, not a tool to operate.
 - **Tender Manager.** One per tender. Leads the work, hires and briefs staff and brings decisions to the
   engineer. He never produces records himself: everything his staff propose comes to his review queue first, and
   he accepts it, saying what he checked, or sends it back, saying what to correct. Only what he accepted reaches
-  the engineer's gates. The engineer can adjust his personality.
+  the engineer's gates. Quantix checks every record before he decides: he can't accept one with a blocker, and he
+  accepts a warning only with his reason, which the engineer sees beside the finding and its source. The engineer
+  can adjust his personality.
 - **Staff.** Hired by the Manager for this tender's actual needs, with a generated name, role, discipline,
   experience, background, temperament, speaking style and professional opinions, and a locally drawn portrait.
   They speak in their own voice, disagree, raise concerns and push back on the Manager or the engineer.

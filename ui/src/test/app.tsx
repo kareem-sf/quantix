@@ -12,6 +12,7 @@ import type { Connection, OfficeSettings } from "../settings/queries";
 import type { Rule } from "../company/queries";
 import type { Company, Package } from "../subcontract/queries";
 import type { Requirement } from "../submission/queries";
+import type { Finding } from "../review/queries";
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -48,6 +49,8 @@ export interface FakeState {
   exports: { spread_markups: boolean }[];
   decided: { id: string; approve: boolean; save_to_library?: boolean }[];
   reopened: { kind: string; id: string; reason: string }[];
+  /** What the checks find, by record id. */
+  findings: Record<string, Finding[]>;
   /** Answer the next POST to this path with this error detail. */
   fail: Record<string, string>;
 }
@@ -85,6 +88,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     exports: [],
     decided: [],
     reopened: [],
+    findings: {},
     fail: {},
     ...initial,
   };
@@ -271,6 +275,8 @@ export function fakeService(initial: Partial<FakeState> = {}) {
       return json({ manager, boq: count(state.items), facts: count(state.facts), takeoff: count(state.measurements), pricing: 0, subcontract: 0, submission: 0 });
     }
     if (path.match(/^\/tenders\/\w+\/review$/)) return json([]);
+    const checked = path.match(/^\/records\/\w+\/(\w+)\/findings$/);
+    if (checked) return json(state.findings[checked[1]] ?? []);
     const reopened = path.match(/^\/records\/(\w+)\/(\w+)\/reopen$/);
     if (reopened) {
       state.reopened.push({ kind: reopened[1], id: reopened[2], reason: body.reason });

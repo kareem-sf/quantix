@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { Face } from "../office/Face";
 import { firstName, useOffice, type Staff } from "../office/queries";
-import { Reopen, ReviewNote, SendBack, WITH_MANAGER } from "../review/Review";
+import { Findings, Reopen, ReviewNote, SendBack, WITH_MANAGER } from "../review/Review";
 import {
   money,
   quantity,
@@ -211,32 +211,35 @@ function Close() {
 function FactLine({ tenderId, fact, people }: { tenderId: string; fact: Fact; people: Map<string, Staff> }) {
   const decide = useDecide(tenderId);
   return (
-    <div className="flex items-center gap-3 rounded-lg bg-rail px-3 py-2">
-      <span className={`size-[7px] shrink-0 rounded-full ${statusDot(fact.status)}`} />
-      <span className="grow" dir="auto">
-        <span className="font-medium">{fact.label}:</span> {fact.value}{" "}
-        <Link
-          to={`/tenders/${tenderId}/documents?doc=${fact.source.document_id}&page=${fact.source.page}`}
-          className="text-ink-3 underline-offset-2 hover:underline"
-        >
-          {fact.source.document_name}, page {fact.source.page}
-        </Link>
-      </span>
-      {fact.status === "reviewed" ? (
-        <span className="flex flex-wrap items-center justify-end gap-2">
-          <ReviewNote reviewedBy={fact.reviewed_by} note={fact.review_note} people={people} />
-          <button onClick={() => decide.mutate({ kind: "fact", id: fact.id, approve: true })} className="font-medium">
-            Approve
-          </button>
-          <SendBack onSend={(reason) => decide.mutate({ kind: "fact", id: fact.id, approve: false, reason })} />
+    <>
+      <div className="flex items-center gap-3 rounded-lg bg-rail px-3 py-2">
+        <span className={`size-[7px] shrink-0 rounded-full ${statusDot(fact.status)}`} />
+        <span className="grow" dir="auto">
+          <span className="font-medium">{fact.label}:</span> {fact.value}{" "}
+          <Link
+            to={`/tenders/${tenderId}/documents?doc=${fact.source.document_id}&page=${fact.source.page}`}
+            className="text-ink-3 underline-offset-2 hover:underline"
+          >
+            {fact.source.document_name}, page {fact.source.page}
+          </Link>
         </span>
-      ) : (
-        <span className="flex items-center gap-2 text-ink-3">
-          {statusLabel(fact.status)}
-          {fact.status === "office_approved" && <Reopen kind="fact" id={fact.id} />}
-        </span>
-      )}
-    </div>
+        {fact.status === "reviewed" ? (
+          <span className="flex flex-wrap items-center justify-end gap-2">
+            <ReviewNote reviewedBy={fact.reviewed_by} note={fact.review_note} people={people} />
+            <button onClick={() => decide.mutate({ kind: "fact", id: fact.id, approve: true })} className="font-medium">
+              Approve
+            </button>
+            <SendBack onSend={(reason) => decide.mutate({ kind: "fact", id: fact.id, approve: false, reason })} />
+          </span>
+        ) : (
+          <span className="flex items-center gap-2 text-ink-3">
+            {statusLabel(fact.status)}
+            {fact.status === "office_approved" && <Reopen kind="fact" id={fact.id} />}
+          </span>
+        )}
+      </div>
+      <Findings kind="fact" id={fact.id} tenderId={tenderId} />
+    </>
   );
 }
 
@@ -370,6 +373,8 @@ function ItemPanel(props: { tenderId: string; item: BoqItem; priced?: Priced; pe
         {enteredBy && <span className="text-ink-3">Entered by {firstName(enteredBy)}</span>}
       </div>
 
+      <Findings kind="boq" id={item.id} tenderId={tenderId} />
+      {rate && <Findings kind="rate" id={rate.id} tenderId={tenderId} />}
       <div className="grow" />
       {(item.status === "proposed" || rate?.status === "proposed") && <p className="text-ink-2">{WITH_MANAGER}</p>}
       {item.status === "reviewed" ? (
@@ -485,6 +490,7 @@ function SummaryPanel(props: {
             </ul>
           )}
           <span className="leading-normal text-[#27272A]">{markups.note}</span>
+          <Findings kind="markups" id={markups.id} tenderId={tenderId} />
           <ReviewNote reviewedBy={markups.reviewed_by} note={markups.review_note} people={props.people} />
           {markups.status === "reviewed" && (
             <span className="flex flex-wrap gap-3">

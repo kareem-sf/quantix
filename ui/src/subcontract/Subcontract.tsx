@@ -3,7 +3,7 @@ import { Link, useParams, useSearchParams } from "react-router";
 import { money, quantity } from "../estimate/queries";
 import { Face } from "../office/Face";
 import { firstName, useOffice, type Staff } from "../office/queries";
-import { ReviewNote, WITH_MANAGER } from "../review/Review";
+import { Findings, ReviewNote, WITH_MANAGER } from "../review/Review";
 import { useChoose, useMarkSent, usePackages, type Package } from "./queries";
 
 /** Where a package stands, in the engineer's terms. */
@@ -213,6 +213,7 @@ function Choice({ tenderId, pkg, people }: { tenderId: string; pkg: Package; peo
           </span>
         </div>
       )}
+      {recommended && !chosen && <Findings kind="recommendation" id={pkg.id} tenderId={tenderId} />}
 
       {pkg.enquiries.length > 0 && (
         <div className="flex flex-col">

@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { Link } from "react-router";
 import { firstName, type Staff } from "../office/queries";
-import { useReopen, type Reopenable } from "./queries";
+import { useFindings, useReopen, type Checked, type Reopenable } from "./queries";
 
 /** Work the staff proposed waits for the Tender Manager's review before it comes to the engineer. */
 export const WITH_MANAGER = "With the Manager for review";
@@ -14,6 +15,47 @@ export function ReviewNote(props: { reviewedBy: string | null; note: string | nu
       Reviewed by {who ? firstName(who) : "the Manager"}
       {props.note && <span className="text-[#27272A]">: {props.note}</span>}
     </span>
+  );
+}
+
+/** What Quantix's checks found, each one click from its source. A warning the Manager accepted shows his reason. */
+export function Findings({ kind, id, tenderId }: { kind: Checked; id: string; tenderId: string }) {
+  const found = useFindings(kind, id).data ?? [];
+  if (!found.length) return null;
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="text-xs font-semibold text-ink-2">Quantix’s checks</span>
+      {found.map((f, n) => (
+        <div key={n} className="flex flex-col gap-0.5 leading-normal">
+          <span>
+            <span className={`font-medium ${f.severity === "blocker" ? "text-attention" : ""}`}>
+              {f.severity === "blocker" ? "Must be fixed" : "Check"}:
+            </span>{" "}
+            <span className="text-[#27272A]">{f.message}</span>
+          </span>
+          {f.refs.map((r) =>
+            r.document_id ? (
+              <Link
+                key={r.label}
+                to={`/tenders/${tenderId}/documents?doc=${r.document_id}&page=${r.page}`}
+                className="text-ink-2 underline underline-offset-4"
+              >
+                {r.label}
+              </Link>
+            ) : (
+              <span key={r.label} className="text-ink-2">
+                See {r.label}
+              </span>
+            ),
+          )}
+          {f.reason && (
+            <span className="text-ink-2">
+              Accepted by {f.accepted_by ?? "the Manager"}: {f.reason}
+            </span>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
 

@@ -4,7 +4,7 @@ import { useParams, useSearchParams } from "react-router";
 import { pageImage, useDocuments } from "../documents/queries";
 import { useBoq, quantity as formatQuantity } from "../estimate/queries";
 import { firstName, useOffice } from "../office/queries";
-import { Reopen, ReviewNote, SendBack, WITH_MANAGER } from "../review/Review";
+import { Findings, Reopen, ReviewNote, SendBack, WITH_MANAGER } from "../review/Review";
 import {
   RESULTS,
   UNITS,
@@ -361,6 +361,7 @@ function SheetPanel({ tenderId, measurements, selected }: { tenderId: string; me
             <span className="text-xs text-ink-3">{by ? `Measured by ${firstName(by)}` : "Measured by you"}</span>
             {m.status === "proposed" && <span className="text-xs text-ink-3">{WITH_MANAGER}</span>}
             <ReviewNote reviewedBy={m.reviewed_by} note={m.review_note} people={people} />
+            {m.id === selected && <Findings kind="measurement" id={m.id} tenderId={tenderId} />}
             <span className="flex flex-wrap gap-3 pt-1">
               {m.status === "reviewed" && (
                 <>

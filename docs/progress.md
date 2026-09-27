@@ -274,3 +274,47 @@ straight to the engineer, and in Fully autonomous mode the person who made a rec
   - The pricing count differed between the Overview and the Estimate.
 - **Checks:** 104 service tests and 52 UI tests. The acceptance test now has the Manager review all 12 records
   before the engineer decides.
+
+## 27 September 2026: Quantix checks the office's work
+
+Each check comes from a mistake in the real run. Findings are computed from the records whenever they are asked
+for, never stored, and each one names the pages or records it rests on.
+
+- **Rates:**
+  - The same item is priced differently elsewhere in the tender.
+  - The rate is more than 30% from the firm's own rates for items like it: the library and past tenders, each
+    listed with its source and date.
+  - Wastage is outside 0–50%.
+  - A library rate is in a different unit from the item (blocker).
+- **Measurements:**
+  - The same area is measured again for the same line on the same sheet (blocker).
+  - Another measurement of the line is within 5% of this one.
+  - The points aren't on the drawing's lines.
+  - The takeoff differs from the BOQ.
+- **Facts:** the value has numbers the quoted clause doesn't give.
+- **Markups:** preliminaries are outside 5–15% of the net cost, or a time-related item doesn't match the work
+  schedule's overall duration.
+- **Drafts:**
+  - Text is still to be filled in (blocker).
+  - BOQ lines are left out of the work schedule.
+  - The overall duration is shorter than the longest line (blocker), or longer than all the lines run one after
+    another.
+  - The work schedule now keeps its lines and its overall duration.
+- **Quote recommendations:** the quote isn't the lowest levelled one, our own rates fill its gaps, or an exclusion
+  has nothing allowed for it.
+- **The Manager's review:**
+  - His queue shows what the checks found, and `review_details` lists each finding with its source.
+  - He can't accept a record with a blocker.
+  - He accepts a warning only with his reason. The reasons are kept in `acceptances` (migration 0012).
+- **On the screens:** "Quantix’s checks" appears on the Estimate item, the facts, the markups, the selected
+  measurement, the submission draft and the subcontract recommendation. Each finding has its source link and the
+  Manager's reason.
+- **On the real tender:**
+  - Migration 0012 is applied, and today's records come up clean.
+  - Replaying the records sent back during the run, the checks would have stopped the site measured three times.
+    They flag the points placed off the drawing, and takeoffs of +218.9% and +2,393% against the BOQ.
+  - They would also have stopped three programme drafts that still said "to be inserted", "to be confirmed" or
+    "[from engine output]".
+- **Known cost:** the first check of a measurement on a dense sheet reads its vector geometry, about 4 seconds on
+  the GLO layouts. The last four sheets stay cached.
+- **Checks:** 110 service tests and 53 UI tests.

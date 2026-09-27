@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from quantix import tenders
 from quantix.api.tenders import DB
 from quantix.office import records as office
+from quantix.office.models import Staff
 from quantix.review import records
 
 router = APIRouter(tags=["review"])
@@ -19,6 +20,20 @@ class Waiting(BaseModel):
 
 class ReopenIn(BaseModel):
     reason: str = Field(min_length=1)
+
+
+class SourceOut(BaseModel):
+    label: str
+    document_id: str | None
+    page: int | None
+
+
+class FindingOut(BaseModel):
+    severity: str  # blocker | warning
+    message: str
+    refs: list[SourceOut]
+    accepted_by: str | None  # the Manager's first name, when he accepted the warning
+    reason: str | None
 
 
 @router.get("/tenders/{tender_id}/review")
@@ -46,3 +61,25 @@ def reopen(kind: str, record_id: str, body: ReopenIn, session: DB, request: Requ
         raise HTTPException(status_code=400, detail=str(error)) from error
     session.commit()
     request.app.state.office.engineer_spoke(record.tender_id)
+
+
+@router.get("/records/{kind}/{record_id}/findings")
+def findings(kind: str, record_id: str, session: DB, request: Request) -> list[FindingOut]:
+    """What Quantix's checks find in a record now, with the Manager's reason for each warning he accepted."""
+    try:
+        found = records.record_findings(session, request.app.state.home, kind, record_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    out = []
+    for finding, acceptance in found:
+        person = session.get(Staff, acceptance.accepted_by) if acceptance else None
+        out.append(
+            FindingOut(
+                severity=finding.severity,
+                message=finding.message,
+                refs=[SourceOut(label=r.label, document_id=r.document_id, page=r.page) for r in finding.refs],
+                accepted_by=person.first_name if person else None,
+                reason=acceptance.reason if acceptance else None,
+            )
+        )
+    return out

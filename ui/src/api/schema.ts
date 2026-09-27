@@ -973,6 +973,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/records/{kind}/{record_id}/findings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Findings
+         * @description What Quantix's checks find in a record now, with the Manager's reason for each warning he accepted.
+         */
+        get: operations["findings_records__kind___record_id__findings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1275,6 +1295,19 @@ export interface components {
             /** Review Note */
             review_note: string | null;
             source: components["schemas"]["Source"];
+        };
+        /** FindingOut */
+        FindingOut: {
+            /** Severity */
+            severity: string;
+            /** Message */
+            message: string;
+            /** Refs */
+            refs: components["schemas"]["SourceOut"][];
+            /** Accepted By */
+            accepted_by: string | null;
+            /** Reason */
+            reason: string | null;
         };
         /** Gates */
         Gates: {
@@ -1860,6 +1893,15 @@ export interface components {
             page: number;
             /** Quote */
             quote: string;
+        };
+        /** SourceOut */
+        SourceOut: {
+            /** Label */
+            label: string;
+            /** Document Id */
+            document_id: string | null;
+            /** Page */
+            page: number | null;
         };
         /** StaffOut */
         StaffOut: {
@@ -4207,6 +4249,40 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    findings_records__kind___record_id__findings_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                kind: string;
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FindingOut"][];
+                };
             };
             /** @description Validation Error */
             422: {

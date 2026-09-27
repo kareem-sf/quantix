@@ -38,6 +38,7 @@ class ActivityIn(BaseModel):
 
 @dataclass
 class Duration:
+    item_id: str
     reference: str
     description: str
     quantity: Decimal
@@ -60,7 +61,16 @@ def durations(session: Session, tender_id: str, activities: list[ActivityIn]) ->
         quantity = item.quantity or Decimal(0)
         days = math.ceil(quantity / (activity.output * activity.crews)) if quantity > 0 else 0
         rows.append(
-            Duration(boq.reference(item), item.description, quantity, item.unit, activity.output, activity.crews, days)
+            Duration(
+                item.id,
+                boq.reference(item),
+                item.description,
+                quantity,
+                item.unit,
+                activity.output,
+                activity.crews,
+                days,
+            )
         )
     if problems:
         raise ValueError("Correct these lines and send the whole schedule again: " + " ".join(problems))
@@ -71,14 +81,25 @@ def _amount(value: Decimal) -> str:
     return f"{value:,.3f}".rstrip("0").rstrip(".")
 
 
-def schedule_text(rows: list[Duration], sequence: str) -> str:
+def schedule_record(rows: list[Duration], overall_days: int) -> dict:
+    """What the checks need from a work schedule: the lines it covers and the overall duration stated for it."""
+    return {
+        "lines": [{"item_id": r.item_id, "reference": r.reference, "days": r.days} for r in rows],
+        "overall_days": overall_days,
+    }
+
+
+def schedule_text(rows: list[Duration], sequence: str, overall_days: int | None = None) -> str:
     """A work schedule: each line's duration as Quantix worked it out, then the planned sequence and overlaps."""
     lines = [
         f"- {r.reference}, {r.description[:80]}: {_amount(r.quantity)} {r.unit} at {_amount(r.output)} {r.unit} a "
         f"day × {r.crews} crew{'s' if r.crews > 1 else ''} = {r.days} day{'s' if r.days != 1 else ''}"
         for r in rows
     ]
-    return "\n".join(["Durations, from the BOQ quantities and the assumed outputs:", *lines, "", sequence.strip()])
+    overall = [f"Overall duration: {overall_days} working days."] if overall_days is not None else []
+    return "\n".join(
+        ["Durations, from the BOQ quantities and the assumed outputs:", *lines, "", sequence.strip(), *overall]
+    )
 
 
 def requirements(session: Session, tender_id: str) -> list[Requirement]:
@@ -137,7 +158,15 @@ def current_draft(session: Session, requirement_id: str) -> Draft | None:
     return session.scalars(query.order_by(Draft.created_at.desc())).first()
 
 
-def draft(session: Session, requirement: Requirement, by: str, title: str, body: str, status=PROPOSED) -> Draft:
+def draft(
+    session: Session,
+    requirement: Requirement,
+    by: str,
+    title: str,
+    body: str,
+    status: str = PROPOSED,
+    schedule: dict | None = None,
+) -> Draft:
     if not body.strip():
         raise ValueError("The draft is empty.")
     current = current_draft(session, requirement.id)
@@ -155,6 +184,7 @@ def draft(session: Session, requirement: Requirement, by: str, title: str, body:
         body=body.strip(),
         proposed_by=by,
         status=status,
+        schedule=schedule,
     )
     session.add(new)
     session.flush()

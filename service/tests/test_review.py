@@ -70,6 +70,7 @@ def test_the_manager_accepts_or_sends_back_each_record(client, office_with_work)
         verdict = reviews.Verdict
         report = reviews.review(
             session,
+            client.app.state.home,
             tender_id,
             rania,
             [
@@ -81,7 +82,7 @@ def test_the_manager_accepts_or_sends_back_each_record(client, office_with_work)
             autonomous=False,
         )
         session.commit()
-    assert report.startswith("Accepted 1 (waiting for the engineer). Sent back 1.\nNot done: ")
+    assert report.startswith("Accepted 1 (waiting for the engineer). Sent back 1.\nNot done:\n")
     assert f"{queue[fact['id']]}: say in the note what you checked, or what to correct" in report
     assert "rate 12345678: nothing with that reference is waiting for your review" in report
 
@@ -117,7 +118,7 @@ def test_in_an_autonomous_office_his_acceptance_approves_and_the_engineer_can_re
     [fact] = client.get(f"/tenders/{tender_id}/boq").json()["facts"]
     with client.app.state.sessions() as session:
         verdicts = [reviews.Verdict(record=refs(client, tender_id)[fact["id"]], accept=True, note="Read it on page 1.")]
-        reviews.review(session, tender_id, session.get(Staff, rania_id), verdicts, autonomous=True)
+        reviews.review(session, client.app.state.home, tender_id, session.get(Staff, rania_id), verdicts, True)
         session.commit()
     [fact] = client.get(f"/tenders/{tender_id}/boq").json()["facts"]
     assert (fact["status"], fact["review_note"]) == ("office_approved", "Read it on page 1.")
