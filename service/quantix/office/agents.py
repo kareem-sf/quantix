@@ -136,8 +136,8 @@ def situation(session: Session, member: Staff, new: list[Message]) -> str:
         if given:
             parts.append("Open tasks in the team:\n" + "\n".join(f"- {names[t.staff_id]}: {t.title}" for t in given))
     decisions = records.decisions(session, member.tender_id)
-    answered = [d for d in decisions if d.status == "answered"][-10:]
-    if answered:  # everyone knows what the engineer decided, not only whoever asked
+    answered = [d for d in decisions if d.status == "answered"]
+    if answered:  # everyone knows everything the engineer decided, not only whoever asked or the latest few
         parts.append("The engineer has decided:\n" + "\n".join(f"- {d.title}: {d.answer}" for d in answered))
     waiting = [d for d in decisions if d.status == "waiting"]
     if waiting:

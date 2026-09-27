@@ -412,9 +412,14 @@ def test_everyone_sees_what_the_engineer_decided(client, office):
         nora = office_records.hire(session, tender_id, "Nora Al-Otaibi", "Commercial QS", {})
         question = office_records.ask(session, tender_id, salem, "Zero-quantity lines", "Price them?", ["Yes", "No"])
         office_records.answer(session, question, "Price them rate-only.")
+        subjects = "retention bond insurance currency validity programme plant labour haulage asphalt fencing lighting"
+        for subject in subjects.split():  # a long tender: the first decision still counts
+            later = office_records.ask(session, tender_id, salem, subject.title(), "Which?", ["A", "B"])
+            office_records.answer(session, later, "A.")
         session.commit()
         brief = agents.situation(session, nora, [])
-    assert "The engineer has decided:\n- Zero-quantity lines: Price them rate-only." in brief
+    assert "The engineer has decided:\n- Zero-quantity lines: Price them rate-only.\n- Retention: A." in brief
+    assert "- Lighting: A." in brief
 
 
 def test_each_turn_shows_where_things_stand_and_the_chat_so_far(client, office):
