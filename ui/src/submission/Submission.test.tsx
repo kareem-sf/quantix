@@ -92,6 +92,17 @@ describe("Submission", () => {
     await waitFor(() => expect(service.state.requirements[0].state).toBe("ready"));
   });
 
+  it("reopens a draft the engineer approved, with the reason", async () => {
+    const approved = { id: "dr2", title: "Programme", body: "Earthworks first.", status: "approved", proposed_by: "s3", reviewed_by: "s1", review_note: "Covers every line." };
+    const service = fakeService({ tenders: [tender], staff: [layla], requirements: [requirement("r4", "Programme", "ready", { draft: approved })] });
+    openApp("/tenders/t1/submission?item=r4");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Reopen" }));
+    await userEvent.type(screen.getByLabelText("Why it needs doing again"), "Add the yard gravel line.");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(service.state.reopened).toEqual([{ kind: "draft", id: "dr2", reason: "Add the yard gravel line." }]));
+  });
+
   it("builds the package on the engineer's computer and reports what is not ready", async () => {
     const blocker = (message: string) => ({ severity: "blocker", message, refs: [], accepted_by: null, reason: null });
     const audit = [blocker("1 checklist item isn’t ready: Bid bond"), blocker("VAT isn't recorded.")];

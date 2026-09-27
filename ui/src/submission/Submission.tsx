@@ -283,7 +283,7 @@ function RequirementPanel(props: { tenderId: string; requirement: Requirement; p
       {r.draft && <Findings kind="draft" id={r.draft.id} tenderId={tenderId} />}
       {r.draft?.status === "proposed" && <p className="text-ink-2">{WITH_MANAGER}</p>}
       {r.draft && <ReviewNote reviewedBy={r.draft.reviewed_by} note={r.draft.review_note} people={props.people} />}
-      {r.draft?.status === "office_approved" && <Reopen kind="draft" id={r.draft.id} />}
+      {r.draft && ["approved", "office_approved"].includes(r.draft.status) && <Reopen kind="draft" id={r.draft.id} />}
       {r.file_name && <p className="text-ink-2">File added: {r.file_name}</p>}
       {r.ready_note !== null && <p className="text-ink-2">Marked ready{r.ready_note && `: ${r.ready_note}`}</p>}
 

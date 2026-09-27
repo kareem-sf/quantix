@@ -246,7 +246,7 @@ function ScaleNote({ tenderId, sheet }: { tenderId: string; sheet: Sheet }) {
           <SendBack onSend={(reason) => decide.mutate({ id: sheet.scale!.id, approve: false, reason })} />
         </>
       )}
-      {sheet.scale.status === "office_approved" && <Reopen kind="scale" id={sheet.scale.id} />}
+      {["approved", "office_approved"].includes(sheet.scale.status) && <Reopen kind="scale" id={sheet.scale.id} />}
     </div>
   );
 }

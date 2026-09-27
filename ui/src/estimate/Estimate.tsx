@@ -234,7 +234,7 @@ function FactLine({ tenderId, fact, people }: { tenderId: string; fact: Fact; pe
         ) : (
           <span className="flex items-center gap-2 text-ink-3">
             {statusLabel(fact.status)}
-            {fact.status === "office_approved" && <Reopen kind="fact" id={fact.id} />}
+            {["approved", "office_approved"].includes(fact.status) && <Reopen kind="fact" id={fact.id} />}
           </span>
         )}
       </div>
@@ -409,6 +409,7 @@ function ItemPanel(props: { tenderId: string; item: BoqItem; priced?: Priced; pe
           <Reopen kind="rate" id={rate.id} />
         </div>
       )}
+      {rate?.status === "approved" && <Reopen kind="rate" id={rate.id} />}
       {(decideItem.isError || decideRate.isError) && (
         <p className="text-attention">{(decideItem.error ?? decideRate.error)?.message}</p>
       )}
@@ -500,7 +501,7 @@ function SummaryPanel(props: {
               <SendBack onSend={(reason) => decide.mutate({ id: markups.id, approve: false, reason })} />
             </span>
           )}
-          {markups.status === "office_approved" && <Reopen kind="markups" id={markups.id} />}
+          {["approved", "office_approved"].includes(markups.status) && <Reopen kind="markups" id={markups.id} />}
         </div>
       ) : (
         <p className="text-ink-2">No markups yet. Ask the office to propose them.</p>

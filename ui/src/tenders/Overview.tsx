@@ -172,12 +172,10 @@ export function Overview() {
 function Audit({ tenderId }: { tenderId: string }) {
   const estimate = useEstimate(tenderId);
   const audit = useAudit(tenderId);
-  const office = useOffice(tenderId);
   if (!estimate.data?.items.length || !audit.data) return null;
   const blockers = audit.data.filter((f) => f.severity === "blocker");
   const warnings = audit.data.filter((f) => f.severity === "warning" && !f.reason);
   const accepted = audit.data.filter((f) => f.reason);
-  const manager = office.data?.staff.find((m) => m.is_manager);
   return (
     <div className="mt-9 flex flex-col">
       <h2 className="pb-2 font-semibold text-ink-2">Before release</h2>
@@ -196,7 +194,7 @@ function Audit({ tenderId }: { tenderId: string }) {
           ]
             .filter(Boolean)
             .join(" and ")}{" "}
-          before the tender can go{manager && `; ${firstName(manager)} is working through them`}.
+          before the tender can go.
         </p>
       )}
       <ul className="flex flex-col">
