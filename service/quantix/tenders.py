@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, date, datetime
 
-from sqlalchemy import Date, String, select
+from sqlalchemy import Boolean, Date, String, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from quantix.core.db import Base, UTCDateTime
@@ -17,6 +17,8 @@ class Tender(Base):
     name: Mapped[str] = mapped_column(String(200))
     due_date: Mapped[date | None] = mapped_column(Date)
     outcome: Mapped[str] = mapped_column(String(20), default="open")  # open | submitted | won | lost
+    # stopped by the engineer or paused by the office, until the engineer writes; kept across a restart
+    office_paused: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=lambda: datetime.now(UTC))
 
 

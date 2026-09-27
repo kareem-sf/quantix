@@ -16,7 +16,7 @@ from quantix import settings, tenders
 from quantix.ai import connections, providers
 from quantix.documents import library
 from quantix.office import agents, records
-from quantix.office.models import ENGINEER, TEAM, Message, Staff
+from quantix.office.models import ENGINEER, TEAM, Message, Staff, TurnRecord
 from quantix.office.tools import Stopped, Turn
 from quantix.review import records as reviews
 from quantix.tenders import Tender
@@ -55,11 +55,10 @@ class Office:
         self._closing = threading.Event()
         self._thread = threading.Thread(target=self._run, name="quantix-office", daemon=True)
         self._stops: dict[str, threading.Event] = {}
-        self._turns: dict[str, int] = {}
-        self._paused: set[str] = set()
         self._working: str | None = None  # the tender being worked on right now
-        self._again: set[str] = set()  # people whose last turn ran out of steps
-        self._carry: dict[str, list] = {}  # their conversation, so the next turn carries on from it
+        # the conversation of a turn that was cut short, so the next turn carries on from it; after a restart the
+        # person carries on from the records instead (their turn record says the work is unfinished)
+        self._carry: dict[str, list] = {}
         self._failures: dict[str, int] = {}  # turns in a row cut short by the AI service, per tender
 
     # The engineer's side -------------------------------------------------------------------------------------
@@ -79,24 +78,36 @@ class Office:
         self._wake.set()
 
     def engineer_spoke(self, tender_id: str) -> None:
-        """A message from the engineer resumes a stopped or paused office."""
+        """A message from the engineer resumes a stopped or paused office, and starts its turn budget again."""
         self._stop_event(tender_id).clear()
-        self._turns[tender_id] = 0
-        self._paused.discard(tender_id)
+        self._set_paused(tender_id, False)
         self.wake()
 
     def stop(self, tender_id: str) -> None:
         self._stop_event(tender_id).set()
-        self._paused.add(tender_id)
+        self._set_paused(tender_id, True)
 
     def status(self, tender_id: str) -> str:
         """working | paused | idle"""
         if self._working == tender_id:
             return "working"
-        return "paused" if tender_id in self._paused else "idle"
+        with self.sessions() as session:
+            tender = session.get(Tender, tender_id)
+            return "paused" if tender and tender.office_paused else "idle"
 
     def _stop_event(self, tender_id: str) -> threading.Event:
         return self._stops.setdefault(tender_id, threading.Event())
+
+    def _set_paused(self, tender_id: str, paused: bool, notice: str | None = None) -> None:
+        """Kept on the tender, so a stopped office stays stopped after a restart."""
+        with self.sessions() as session:
+            tender = session.get(Tender, tender_id)
+            if tender is None:  # deleted while the office worked on it
+                return
+            tender.office_paused = paused
+            if notice:
+                records.post(session, tender_id, OFFICE, TEAM, notice, "note")
+            session.commit()
 
     # The work ---------------------------------------------------------------------------------------------------
 
@@ -110,13 +121,13 @@ class Office:
                 log.exception("The office loop failed")
 
     async def _work(self) -> None:
-        with self.sessions() as session:
-            tender_ids = list(session.scalars(select(Tender.id)))
         busy = True
         while busy and not self._closing.is_set():
             busy = False
+            with self.sessions() as session:
+                tender_ids = list(session.scalars(select(Tender.id).where(Tender.office_paused.is_(False))))
             for tender_id in tender_ids:
-                if tender_id not in self._paused and not self._stop_event(tender_id).is_set():
+                if not self._stop_event(tender_id).is_set():
                     self._working = tender_id
                     try:
                         busy = await self._work_on(tender_id) or busy
@@ -139,7 +150,9 @@ class Office:
             with self.sessions() as session:
                 people = [m.id for m in records.team(session, tender_id)]
             for staff_id in people:
-                if self._turns.get(tender_id, 0) >= TURN_BUDGET:
+                with self.sessions() as session:
+                    spent = records.turns_since_engineer(session, tender_id)
+                if spent >= TURN_BUDGET:
                     self._pause(
                         tender_id, "The office paused after a long stretch of work. Send a message to carry on."
                     )
@@ -167,9 +180,8 @@ class Office:
             new = records.inbox(session, member)
             # the Tender Manager also wakes for work his staff put in his review queue
             to_review = member.is_manager and reviews.has_new(session, tender_id, member.reviewed_up_to)
-            if not new and not to_review and staff_id not in self._again:
+            if not new and not to_review and not records.unfinished(session, staff_id):
                 return False
-            self._again.discard(staff_id)
             history = self._carry.pop(staff_id, None)
             prompt = agents.situation(session, member, new)
             if history is not None:
@@ -177,35 +189,47 @@ class Office:
             records.mark_read(session, member)
             if member.is_manager:  # the briefing showed him his queue
                 member.reviewed_up_to = datetime.now(UTC)
+            record = TurnRecord(tender_id=tender_id, staff_id=staff_id, model=model.model_name[:200])
+            session.add(record)
             session.commit()
             session.expunge(member)
+            record_id = record.id
         autonomous = settings.load(self.home)["office_mode"] == "autonomous"
         turn = Turn(
             self.home, self.sessions, tender_id, staff_id, autonomous, self._stop_event(tender_id), self.sees_images()
         )
-        self._turns[tender_id] = self._turns.get(tender_id, 0) + 1
+        trace = agents.Trace()
         try:
             try:
-                conversation = await agents.run_turn(model, turn, member, prompt, autonomous, history)
+                conversation = await agents.run_turn(model, turn, member, prompt, autonomous, history, trace)
             except agents.CutShort as cut:
+                trace.ended, trace.note = "ai_failed", providers.explain(cut.error)
                 failures = self._failures[tender_id] = self._failures.get(tender_id, 0) + 1
                 if failures > RETRIES:
                     raise cut.error from cut.error.__cause__  # keep the provider's own error as the cause
-                log.info("%s's turn was cut short (%s); trying again", member.name, providers.explain(cut.error))
-                self._again.add(staff_id)
+                log.info("%s's turn was cut short (%s); trying again", member.name, trace.note)
                 self._carry[staff_id] = cut.conversation
                 await asyncio.sleep(RETRY_WAIT * failures)
                 return True
             self._failures.pop(tender_id, None)
-            if conversation is not None:
-                self._again.add(staff_id)
-                if history is None:  # one continuation in a row; after that the next turn starts from the records
-                    self._carry[staff_id] = conversation
+            if conversation is not None and history is None:
+                self._carry[staff_id] = conversation  # one continuation in a row; after that, from the records
+        except Stopped:
+            trace.ended = "interrupted" if self._closing.is_set() else "stopped"
+            raise
+        except Exception as error:
+            if trace.ended != "ai_failed":
+                trace.ended, trace.note = "failed", f"{type(error).__name__}: {str(error)[:500]}"
+            raise
         finally:
             with self.sessions() as session:
-                person = session.get(Staff, staff_id)
-                if staff_id not in self._again:
-                    person.now = None
+                record = session.get(TurnRecord, record_id)
+                record.ended, record.note, record.calls = trace.ended, trace.note, trace.calls
+                record.ended_at = datetime.now(UTC)
+                record.requests, record.output_tokens = trace.usage.requests, trace.usage.output_tokens
+                record.input_tokens, record.cached_tokens = trace.usage.input_tokens, trace.usage.cache_read_tokens
+                if trace.ended not in records.UNFINISHED:
+                    session.get(Staff, staff_id).now = None
                 session.commit()
         return True
 
@@ -225,10 +249,7 @@ class Office:
         session.commit()
 
     def _pause(self, tender_id: str, notice: str) -> None:
-        self._paused.add(tender_id)
-        with self.sessions() as session:
-            records.post(session, tender_id, OFFICE, TEAM, notice, "note")
-            session.commit()
+        self._set_paused(tender_id, True, notice)
 
     @staticmethod
     def _has_manager(session: Session, tender_id: str) -> bool:

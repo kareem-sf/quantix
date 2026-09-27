@@ -1,9 +1,13 @@
 """The office at work, end to end: real runtime, tools and records, with only the model scripted."""
 
 import re
+import threading
 import time
+from contextlib import contextmanager
 
 import pytest
+from conftest import TOKEN
+from fastapi.testclient import TestClient
 from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import (
     ModelResponse,
@@ -17,8 +21,9 @@ from pydantic_ai.models.function import DeltaToolCall, FunctionModel
 from test_documents import PDF, read_all, upload
 
 from quantix import settings
+from quantix.api.app import create_app
 from quantix.office import runtime
-from quantix.office.models import TEAM
+from quantix.office.models import ENGINEER, TEAM, TurnRecord
 
 
 def prompt_of(messages) -> str:
@@ -549,3 +554,108 @@ def test_a_question_already_decided_is_not_asked_again(client, office):
             office_records.ask(session, tender_id, salem, "Confirm combined client query wording", "OK?", ["Yes", "No"])
         office_records.ask(session, tender_id, salem, "Retention percentage", "5% or 10%?", ["5%", "10%"])
         session.commit()
+
+
+def turn_records(client, tender_id) -> list[TurnRecord]:
+    with client.app.state.sessions() as session:
+        query = TurnRecord.__table__.select().where(TurnRecord.tender_id == tender_id).order_by(TurnRecord.id)
+        return list(session.execute(query))
+
+
+@contextmanager
+def restarted(home):
+    """Quantix opened again on the same data folder, as after closing the app."""
+    with TestClient(create_app(home, TOKEN), headers={"Authorization": f"Bearer {TOKEN}"}) as again:
+        yield again
+
+
+def test_each_turn_is_recorded_with_what_quantix_sent_back(client, office):
+    tender_id, use = office
+
+    def stumbles_once(messages, info):
+        if info.output_tools:
+            return office_brain(messages, info)
+        done = [p for m in messages for p in m.parts if isinstance(p, ToolReturnPart | RetryPromptPart)]
+        return [call("read_page", document_id="nope", page=1), call("list_documents"), DONE][len(done)]
+
+    use(stumbles_once)
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Review the package."})
+    wait_for(lambda o: o["staff"] and turn_records(client, tender_id), client, tender_id)
+    [turn] = turn_records(client, tender_id)
+    assert (turn.ended, turn.requests, turn.model) == ("done", 3, "function:stumbles_once:stream")
+    missing = "No document has that id. Use list_documents or search_documents to find its id."
+    assert turn.calls == [{"tool": "read_page", "sent_back": missing}, {"tool": "list_documents", "sent_back": None}]
+    assert turn.input_tokens > 0 and turn.output_tokens > 0 and turn.ended_at >= turn.started_at
+
+
+def test_a_stopped_office_stays_stopped_after_a_restart(client, office, tmp_path, monkeypatch):
+    from quantix.office import records as office_records
+
+    tender_id, _ = office
+    asked = []
+    monkeypatch.setattr(runtime, "office_model", lambda home: scripted(lambda m, i: asked.append(1) or DONE))
+    with client.app.state.sessions() as session:
+        office_records.hire(session, tender_id, "Rania Farouk", "Tender Manager", {}, is_manager=True)
+        session.commit()
+    client.post(f"/tenders/{tender_id}/office/stop")
+    with client.app.state.sessions() as session:  # waiting in the Manager's inbox, as it was when Quantix closed
+        office_records.post(session, tender_id, ENGINEER, TEAM, "Price the asphalt.")
+        session.commit()
+    client.app.state.office.close()
+    with restarted(tmp_path) as again:
+        time.sleep(0.3)
+        assert again.get(f"/tenders/{tender_id}/office").json()["state"] == "paused"
+    assert asked == []
+
+
+def test_work_cut_off_by_closing_quantix_carries_on_after_a_restart(client, office, tmp_path, monkeypatch):
+    tender_id, use = office
+    first = client.app.state.office
+
+    def reads_on(messages, info):
+        if info.output_tools:
+            return office_brain(messages, info)
+        if len(returns(messages)) == 2:  # midway through a long piece of work, Quantix is closed
+            threading.Thread(target=first.close).start()
+            while not first._closing.is_set():
+                time.sleep(0.01)
+        return call("list_documents")
+
+    use(reads_on)
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Review the package."})
+    first._thread.join(timeout=15)
+    [cut_off] = turn_records(client, tender_id)
+    assert cut_off.ended == "interrupted"
+    assert [c["tool"] for c in cut_off.calls][:2] == ["list_documents", "list_documents"]
+
+    woken = []
+
+    def finishes(messages, info):
+        woken.append(info.instructions.split(",")[0])
+        return DONE
+
+    monkeypatch.setattr(runtime, "office_model", lambda home: scripted(finishes))
+    with restarted(tmp_path) as again:  # nothing new has been said: the unfinished turn alone wakes her
+        wait_for(lambda o: len(turn_records(again, tender_id)) == 2, again, tender_id)
+    assert woken == ["You are Rania Farouk"]
+    assert turn_records(client, tender_id)[-1].ended == "done"
+
+
+def test_the_turn_budget_is_kept_across_a_restart(client, office, tmp_path, monkeypatch):
+    from quantix.office import records as office_records
+
+    tender_id, _ = office
+    asked = []
+    monkeypatch.setattr(runtime, "office_model", lambda home: scripted(lambda m, i: asked.append(1) or DONE))
+    client.app.state.office.close()
+    with client.app.state.sessions() as session:
+        rania = office_records.hire(session, tender_id, "Rania Farouk", "Tender Manager", {}, is_manager=True)
+        office_records.post(session, tender_id, ENGINEER, TEAM, "Price the asphalt.")
+        session.flush()
+        for _ in range(runtime.TURN_BUDGET):  # a long stretch of work since the engineer last wrote
+            session.add(TurnRecord(tender_id=tender_id, staff_id=rania.id, model="scripted", ended="done"))
+        session.commit()
+    with restarted(tmp_path) as again:
+        wait_for(lambda o: o["state"] == "paused", again, tender_id)
+    assert team_room(client, tender_id)[-1]["text"].startswith("The office paused after a long stretch of work.")
+    assert asked == []

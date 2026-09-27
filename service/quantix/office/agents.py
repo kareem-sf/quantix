@@ -3,12 +3,15 @@
 import logging
 import time
 from collections import Counter
+from dataclasses import dataclass, field
+from typing import Any
 
 from pydantic_ai import Agent, UsageLimitExceeded, UsageLimits
 from pydantic_ai.exceptions import ModelAPIError, ToolRetryError, UnexpectedModelBehavior
 from pydantic_ai.messages import ModelMessage, RetryPromptPart, ToolCallPart
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
+from pydantic_ai.usage import RunUsage
 from sqlalchemy.orm import Session
 
 from quantix import company, tenders
@@ -192,6 +195,32 @@ def standing(session: Session, tender_id: str) -> str:
     )
 
 
+@dataclass
+class Trace:
+    """What one turn did: filled in while it runs, so it is there however the turn ends."""
+
+    ended: str | None = "done"  # see TurnRecord.ended
+    note: str | None = None
+    calls: list[dict[str, Any]] = field(default_factory=list)
+    usage: RunUsage = field(default_factory=RunUsage)
+
+
+def calls_in(messages: list[ModelMessage]) -> list[dict[str, Any]]:
+    """Each tool call in the turn, with Quantix's reason when it sent the call back."""
+    sent_back = {
+        p.tool_call_id: str(p.content)[:300]
+        for m in messages
+        for p in m.parts
+        if isinstance(p, RetryPromptPart) and p.tool_name
+    }
+    return [
+        {"tool": p.tool_name, "sent_back": sent_back.get(p.tool_call_id)}
+        for m in messages
+        for p in m.parts
+        if isinstance(p, ToolCallPart)
+    ]
+
+
 class CutShort(Exception):
     """The AI service failed in the middle of a turn in a way worth retrying. Carries the turn so far."""
 
@@ -211,10 +240,16 @@ def passing(error: ModelAPIError) -> bool:
 
 
 async def run_turn(
-    model: Model, turn: Turn, member: Staff, prompt: str, autonomous: bool, history: list[ModelMessage] | None = None
+    model: Model,
+    turn: Turn,
+    member: Staff,
+    prompt: str,
+    autonomous: bool,
+    history: list[ModelMessage] | None,
+    trace: Trace,
 ) -> list[ModelMessage] | None:
     """One turn. When the person runs out of steps, returns the turn's conversation so their next turn carries on
-    from it instead of starting over."""
+    from it instead of starting over. What the turn did goes into `trace`."""
     agent = Agent(
         model,
         deps_type=Turn,
@@ -246,6 +281,7 @@ async def run_turn(
                     if not calls and not node.model_response.text:
                         return None  # nothing more to do: don't prompt them to say something anyway
         except UsageLimitExceeded:
+            trace.ended = "out_of_steps"
             return run.all_messages()
         except ModelAPIError as error:
             if not passing(error):
@@ -256,7 +292,10 @@ async def run_turn(
             log.info("%s: turn ended early: %s", member.name, str(error)[:300])
             if "output retries" in str(error):
                 return None  # an empty answer: they had nothing more to do
+            trace.ended, trace.note = "tool_failed", str(error)[:500]
             return run.all_messages()  # a tool call that kept failing: the next turn sees why
+        finally:
+            trace.calls, trace.usage = calls_in(run.new_messages()), run.usage
     return None
 
 

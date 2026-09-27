@@ -387,3 +387,26 @@ What it showed, and what changed:
   task began:
   - a "Redo …" task needs the corrected work filed;
   - any other task needs filed work, or a statement that it only asked for a report.
+
+## 27 September 2026: the office keeps its place, and a record of every turn
+
+From the article "Harness engineering" (the system around the model decides how reliable an agent is): store the
+work's state outside the model and the process, and keep a trace of every run.
+
+- **Every decision the engineer made is in each briefing.** It showed only the last 10 answers. The real tender has
+  14, so the office had stopped seeing the BOQ section convention and that zero-quantity lines are priced
+  rate-only.
+- **Each turn is a row in `turns`**, written as it starts and filled in as it ends:
+  - who took it, on which AI model;
+  - each tool call, with Quantix's reason when it sent the call back;
+  - the requests and tokens used;
+  - how it ended.
+
+  Migration 0014 adds the table.
+- **The office resumes from those rows after a restart.** Before, the office's state lived only in memory:
+  - A stopped office started working again after a restart, if anything was unread. The pause is now kept on the
+    tender (`office_paused`), so it stays stopped until the engineer writes.
+  - Someone cut off mid-work only woke if a new message named them. Now a turn that was cut short, or interrupted
+    by Quantix closing, wakes the person again.
+  - The 40-turn budget started over at every restart. It now counts the turns since the engineer last wrote.
+- **Checks:** 121 service tests. Each new test fails when the behaviour it covers is taken out.

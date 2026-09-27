@@ -69,6 +69,28 @@ class Task(Base):
     done_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
 
+class TurnRecord(Base):
+    """One person's turn, written as it starts and filled in as it ends: what they called, what Quantix sent back,
+    what it used and how it ended. The office resumes from these after a restart; they also explain the work."""
+
+    __tablename__ = "turns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tender_id: Mapped[str] = mapped_column(ForeignKey("tenders.id", ondelete="CASCADE"))
+    staff_id: Mapped[str] = mapped_column(ForeignKey("staff.id", ondelete="CASCADE"))
+    model: Mapped[str] = mapped_column(String(200))
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
+    ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # done | out_of_steps | tool_failed | ai_failed | stopped | failed; none while running, or if Quantix stopped
+    ended: Mapped[str | None] = mapped_column(String(20))
+    note: Mapped[str | None] = mapped_column(Text)  # why it failed, in plain words
+    calls: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)  # {tool, sent_back}: the reason or null
+    requests: Mapped[int] = mapped_column(Integer, default=0)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cached_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class Decision(Base):
     """Something waiting for the engineer: a question with options, or a gate to approve."""
 

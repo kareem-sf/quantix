@@ -4,12 +4,15 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from quantix.office.models import ENGINEER, TEAM, Decision, Message, Staff, Task
+from quantix.office.models import ENGINEER, TEAM, Decision, Message, Staff, Task, TurnRecord
 
 MAX_STAFF = 8
+# How a turn ended that leaves the person's work unfinished, so they carry on: cut short, or Quantix itself stopped
+# (closed, or ended without a word: `ended` still empty)
+UNFINISHED = {None, "interrupted", "out_of_steps", "tool_failed", "ai_failed"}
 
 
 def team(session: Session, tender_id: str, include_released: bool = False) -> list[Staff]:
@@ -188,3 +191,20 @@ def answer(session: Session, decision: Decision, text: str) -> None:
     """Record the engineer's answer and tell whoever asked, in their chat with the engineer."""
     decision.status, decision.answer, decision.decided_at = "answered", text.strip(), datetime.now(UTC)
     post(session, decision.tender_id, ENGINEER, decision.raised_by, f"About “{decision.title}”: {text.strip()}")
+
+
+def unfinished(session: Session, staff_id: str) -> bool:
+    """Whether the person's last turn left their work unfinished, so they carry on without waiting for a message."""
+    query = select(TurnRecord.ended).where(TurnRecord.staff_id == staff_id).order_by(TurnRecord.id.desc()).limit(1)
+    last = session.execute(query).first()
+    return last is not None and last.ended in UNFINISHED
+
+
+def turns_since_engineer(session: Session, tender_id: str) -> int:
+    """The office's turns since the engineer last wrote to it or answered it."""
+    query = select(func.max(Message.created_at)).where(Message.tender_id == tender_id, Message.sender == ENGINEER)
+    spoke = session.scalar(query)
+    turns = select(func.count()).select_from(TurnRecord).where(TurnRecord.tender_id == tender_id)
+    if spoke is not None:
+        turns = turns.where(TurnRecord.started_at > spoke)
+    return session.scalar(turns)

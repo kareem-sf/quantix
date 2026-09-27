@@ -39,8 +39,8 @@ Each domain module owns its models, its service functions and the agent tools th
   browser preview and the desktop window use the same path and the UI never holds the token or a key.
   Release packaging, which embeds the service in the desktop app, comes later.
 - Every record belongs to a tender, and every tender belongs to an owner, so accounts can be added later.
-- Long work runs in a durable job ledger, not as fire-and-forget tasks. After a restart, interrupted work resumes
-  or is shown as stopped.
+- Long work is kept in the database, not only in memory. After a restart, interrupted work resumes or is shown as
+  stopped (see Turns below).
 
 ## The office runtime
 
@@ -50,6 +50,18 @@ Each domain module owns its models, its service functions and the agent tools th
   agent's inbox. A scheduler wakes agents with pending inbox items and runs one turn each: a tool loop with a step
   limit. API connections run several agents at once; a subscription client runs one at a time. Stop cancels
   everything on the tender.
+- **Turns.** Each turn is a row in `turns` (`TurnRecord`), written as it starts and filled in as it ends:
+  - who took it and on which AI model;
+  - each tool call, with Quantix's reason when it sent the call back;
+  - the model requests and tokens used;
+  - how it ended: done, out of steps, a tool that kept failing, an AI failure, stopped, interrupted when Quantix
+    closed, or failed.
+
+  The office resumes from these. Someone whose last turn was cut short or interrupted carries on without a new
+  message, and the turn budget counts the turns since the engineer last wrote. A stopped or paused office is
+  kept on the tender (`office_paused`), so it stays stopped after a restart. The conversation of a turn cut short
+  is kept in memory for the next turn; after a restart the person carries on from the records instead. The rows
+  also explain the work, and let two AI models be compared on it. They are never shown in the work areas.
 - **Real conversation.** Agents talk only through `message`, `post_to_team` and `raise_concern`. The team room is
   exactly those records.
 - **Proposals, review and gates.** Agents never write domain records. Staff propose through each module's tools,
