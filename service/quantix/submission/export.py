@@ -12,12 +12,11 @@ from sqlalchemy.orm import Session
 
 from quantix import tenders
 from quantix.boq import records as boq
-from quantix.boq.models import BoqItem
 from quantix.core.review import APPROVED
 from quantix.documents import library
 from quantix.documents.models import Document
 from quantix.estimate import records as estimate
-from quantix.submission import package, pdf, records, word
+from quantix.submission import package, pdf, records, word, workbooks
 
 
 @dataclass
@@ -75,44 +74,16 @@ def _client_format(home: Path, session: Session, tender_id: str, folder: Path, r
                 covered.add(item.id)
                 if item.id not in rates:
                     continue
-                worksheet[f"{sheet.rate_column}{row}"] = rates[item.id]
+                rate = worksheet[f"{sheet.rate_column}{row}"]
+                rate.value, rate.number_format = rates[item.id], "#,##0.00"
                 amount = worksheet[f"{sheet.amount_column}{row}"]
                 if not (isinstance(amount.value, str) and amount.value.startswith("=")):  # keep the client's formula
                     amount.value = estimate.money(item.quantity * rates[item.id])
+                amount.number_format = "#,##0.00"
         name = f"Priced {document.name}"
         workbook.save(folder / name)
         files.append(name)
     return files, covered
-
-
-def _quantix_format(
-    session: Session, folder: Path, items: list[BoqItem], rates: dict[str, Decimal], currency: str
-) -> str:
-    """The priced BOQ in Quantix's layout, for bills with no rate column to fill. Each line names the client's bill it
-    came from and its row there, bill by bill with a subtotal, so bills that reuse item numbers can't be confused."""
-    workbook = openpyxl.Workbook()
-    sheet = workbook.active
-    sheet.title = "Priced BOQ"
-    rate_label, amount_label = f"Rate {currency}".strip(), f"Amount {currency}".strip()
-    sheet.append(["Bill", "Row", "Item", "Description", "Unit", "Quantity", rate_label, amount_label])
-    bills: dict[str, list[BoqItem]] = {}
-    for item in items:
-        bills.setdefault(item.document_id, []).append(item)
-    total = Decimal(0)
-    for document_id, lines in bills.items():
-        bill = session.get(Document, document_id).name
-        subtotal = Decimal(0)
-        for item in sorted(lines, key=lambda i: (i.page, records.row_of(i.quote) or 0, i.position)):
-            rate = rates.get(item.id)
-            amount = estimate.money(item.quantity * rate) if rate is not None else None
-            subtotal += amount or Decimal(0)
-            row = records.row_of(item.quote)
-            sheet.append([bill, row, item.item or None, item.description, item.unit, item.quantity, rate, amount])
-        sheet.append([bill, None, None, "Subtotal", None, None, None, subtotal])
-        total += subtotal
-    sheet.append([None, None, None, "Total", None, None, None, total])
-    workbook.save(folder / "Priced BOQ.xlsx")
-    return "Priced BOQ.xlsx"
 
 
 def build(home: Path, session: Session, tender_id: str, spread: bool, now: datetime) -> Built:
@@ -135,16 +106,14 @@ def build(home: Path, session: Session, tender_id: str, spread: bool, now: datet
     built.files += client_files
     if any(i.id not in covered for i in items):
         uncovered = [i for i in items if i.id not in covered]
-        built.files.append(_quantix_format(session, folder, uncovered, rates, summary.currency))
+        workbooks.priced(session, uncovered, rates, summary, head, opening, spread, folder / "Priced BOQ.xlsx")
+        built.files.append("Priced BOQ.xlsx")
     priced = package.priced(session, items, rates, summary, opening, spread)
     pdf.write(priced, head, folder / "Priced BOQ.pdf")
     built.files.append("Priced BOQ.pdf")
 
     submitted = [priced]
-    checklist = openpyxl.Workbook()
-    sheet = checklist.active
-    sheet.title = "Checklist"
-    sheet.append(["Section", "Requirement", "Required by", "State", "File"])
+    checklist: list[list[str | None]] = []
     for requirement in records.requirements(session, tender_id):
         state, file = records.state(session, requirement), None
         current = records.current_draft(session, requirement.id)
@@ -171,7 +140,7 @@ def build(home: Path, session: Session, tender_id: str, spread: bool, now: datet
         }[state]
         if current is not None and current.status == "office_approved" and not requirement.file_name:
             label = "Ready · approved by the office after the Tender Manager's review, not reviewed by you"
-        sheet.append(
+        checklist.append(
             [
                 requirement.section,
                 requirement.title,
@@ -180,7 +149,7 @@ def build(home: Path, session: Session, tender_id: str, spread: bool, now: datet
                 file,
             ]
         )
-    checklist.save(folder / "Internal" / "Checklist.xlsx")
+    workbooks.checklist(checklist, head, opening, folder / "Internal" / "Checklist.xlsx")
     built.files.append("Internal/Checklist.xlsx")
 
     combined = f"{_safe(tender.name)} - Submission.pdf"

@@ -208,14 +208,22 @@ def test_without_the_client_columns_each_priced_line_names_its_bill_and_row(clie
         "Internal/Checklist.xlsx",
     ]
     sheet = openpyxl.load_workbook(tmp_path / "exports" / built["folder"] / "Priced BOQ.xlsx").active
-    assert [list(row) for row in sheet.iter_rows(values_only=True)] == [
-        ["Bill", "Row", "Item", "Description", "Unit", "Quantity", "Rate", "Amount"],
-        ["Bill.xlsx", 2, "3.1", "Excavation", "m3", 1240, 18.5, 22940],
-        ["Bill.xlsx", 3, "4.3", "Slab reinforcement", "t", 28.1, 3488, 98012.8],
-        ["Bill.xlsx", 4, "6.3", "Waterproofing", "m2", 980, None, None],
-        ["Bill.xlsx", None, None, "Subtotal", None, None, None, 120952.8],
-        [None, None, None, "Total", None, None, None, 120952.8],
+    rows = [list(row) for row in sheet.iter_rows(values_only=True)]
+    assert rows[:2] == [["Priced BOQ"] + [None] * 6, ["Tender", "Synthetic school"] + [None] * 5]
+    assert rows[5:] == [  # amounts and totals are formulas the client can follow
+        ["Row", "Item", "Description", "Unit", "Quantity", "Rate", "Amount"],
+        ["Bill", None, None, None, None, None, None],
+        [2, "3.1", "Excavation", "m3", 1240, 18.5, "=ROUND(E8*F8,2)"],
+        [3, "4.3", "Slab reinforcement", "t", 28.1, 3488, "=ROUND(E9*F9,2)"],
+        [4, "6.3", "Waterproofing", "m2", 980, None, None],
+        [None, None, "Subtotal, Bill", None, None, None, "=SUM(G8:G10)"],
+        [None] * 7,
+        ["Summary"] + [None] * 6,
+        [None, None, "Bill", None, None, None, "=G11"],
+        [None, None, "Preliminaries, overheads and profit", None, None, None, 12095.28],  # not in these rates
+        [None, None, "Total", None, None, None, "=SUM(G14:G15)"],
     ]
+    assert (sheet.freeze_panes, sheet.print_title_rows, sheet["G8"].number_format) == ("A7", "$6:$6", "#,##0.00")
 
 
 def test_pricing_columns_come_from_the_client_header(client, tender):
@@ -291,7 +299,7 @@ def test_the_package_is_built_in_the_client_format_with_markups_in_the_rates(cli
     ]
     assert [row.cells[0].text for row in statement.tables[0].rows] == ["Tender", "Date"]  # the title block
     rows = list(openpyxl.load_workbook(folder / "Internal" / "Checklist.xlsx").active.values)
-    assert rows[1:] == [
+    assert rows[rows.index(("Section", "Requirement", "Required by", "State", "File")) + 1 :] == [
         ("Commercial", "Bid bond, 1% of the tender price", "ITT.pdf, page 1", "Missing", None),
         (
             "Technical",

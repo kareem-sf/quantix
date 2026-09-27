@@ -111,17 +111,11 @@ def priced(
 ) -> Document:
     """The priced bill of quantities, bill by bill with a subtotal, then the summary with VAT. The total is the sum of
     the amounts shown, and VAT is worked out on it, so the document adds up as the client will check it."""
-    currency = summary.currency or "the tender currency"
-    note = f"Rates and amounts in {currency}"
-    note += ", including preliminaries, overheads and profit." if spread else "."
-    blocks: list = [Paragraph([Run(note)])]
-    bills: dict[str, list[BoqItem]] = {}
-    for item in items:
-        bills.setdefault(item.document_id, []).append(item)
+    blocks: list = [Paragraph([Run(basis(summary, spread))])]
     subtotals: list[tuple[str, Decimal]] = []
-    for lines in bills.values():
-        name, subtotal, rows = bill(session, lines[0]), Decimal(0), []
-        for item in sorted(lines, key=lambda i: (i.page, records.row_of(i.quote) or 0, i.position)):
+    for name, lines in grouped(session, items):
+        subtotal, rows = Decimal(0), []
+        for item in lines:
             rate = rates.get(item.id)
             amount = estimate.money(item.quantity * rate) if rate is not None else None
             subtotal += amount or Decimal(0)
@@ -146,7 +140,27 @@ def priced(
     totals = [["Total before VAT" if summary.vat_rate is not None else "Total", _amount(total)]]
     if summary.vat_rate is not None:
         vat = estimate.money(total * summary.vat_rate)
-        percent = f"{(summary.vat_rate * 100).normalize():f}"
-        totals += [[f"VAT {percent}%", _amount(vat)], ["Total with VAT", _amount(total + vat)]]
+        totals += [[vat_label(summary.vat_rate), _amount(vat)], ["Total with VAT", _amount(total + vat)]]
     blocks += [Heading("Summary"), Table(["", "Amount"], rows, widths=[4, 1.5], totals=totals)]
     return Document("Priced bill of quantities", blocks, opening)
+
+
+def grouped(session: Session, items: list[BoqItem]) -> list[tuple[str, list[BoqItem]]]:
+    """The lines bill by bill, each bill in the client's own row order."""
+    bills: dict[str, list[BoqItem]] = {}
+    for item in items:
+        bills.setdefault(item.document_id, []).append(item)
+    return [
+        (bill(session, lines[0]), sorted(lines, key=lambda i: (i.page, records.row_of(i.quote) or 0, i.position)))
+        for lines in bills.values()
+    ]
+
+
+def basis(summary: estimate.Summary, spread: bool) -> str:
+    """What the prices are in, and what the rates include."""
+    currency = summary.currency or "the tender currency"
+    return f"Rates and amounts in {currency}" + (", including preliminaries, overheads and profit." if spread else ".")
+
+
+def vat_label(rate: Decimal) -> str:
+    return f"VAT {(rate * 100).normalize():f}%"
