@@ -123,6 +123,27 @@ Each domain module owns its models, its service functions and the agent tools th
   the new clause and goes back to the Manager. A scale or measurement on the newer copy replaces the older copy's.
   A fact, or a rate priced from a quote, may replace an approved one that rests on an older copy.
 
+## The submission package
+
+- **One content model.** `submission/content.py` holds a document as blocks: headings, paragraphs of bold and plain
+  runs, bulleted and numbered lists with levels, and tables with totals rows. The office writes drafts in Markdown,
+  which `from_markdown` (markdown-it-py) reads into blocks.
+- **Where the content comes from.** `submission/package.py` builds the documents from Quantix's records:
+  - approved drafts;
+  - the work programme, laid out from its stored durations;
+  - the priced BOQ, grouped by the client's bill.
+- **Renderers.** Word and PDF are drawn from the same blocks, in one house style:
+  - `word.py` (python-docx): styles with no theme fonts or colours, the letterhead in the header, "Page X of Y"
+    fields, numbered lists that restart, and tables with fixed widths and a repeating header row;
+  - `pdf.py` (fpdf2): Noto Sans with Noto Sans Arabic as the fallback font, shaped with HarfBuzz; the combined PDF
+    adds a cover and a contents page with page numbers;
+  - `workbooks.py` (openpyxl): formulas, number formats and print setup;
+  - `deck.py` (python-pptx): the internal tender summary.
+- **Letterhead.** `company.profile(home)` reads the details from `settings.json` and the logo from
+  `~/.quantix/company/logo.png`.
+- **Package layout.** Documents, Correspondence and Internal folders. Names are capped so paths stay under Windows'
+  260 characters.
+
 ## Quantity take-off
 
 Sheets are rendered and their vector paths extracted. Agents detect or set the scale, find elements with vision,

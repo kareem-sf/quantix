@@ -579,3 +579,30 @@ meaning search (after Agent Zero's memory) and live web research, in that order.
 - **Checks:** 3 new service tests (passages, hybrid search in English and Arabic, the library, directory and past
   tenders). 141 service tests and 62 interface tests pass; typecheck, Ruff and the format check pass. CI keeps the
   model in its cache.
+
+## 27 September 2026: submission documents laid out properly
+
+The built package's files were plain text in Word and Excel. The engineer asked for Anthropic's document skills.
+Their license forbids copying them or deriving from them, so Quantix has its own engine on open libraries instead.
+
+- **Company details** in Settings (name, address, CR and VAT numbers, logo) make up every document's letterhead.
+- **Word and PDF** are drawn from one content model. Drafts are read as Markdown, so their headings, numbered and
+  bulleted lists and tables come out as the real thing. Every document has:
+  - a title block;
+  - page numbers;
+  - a header row that repeats on each page of a table;
+  - Arabic set right to left, shaped in the PDFs.
+- **The work programme** is a durations table built from Quantix's own figures, then the sequence and the overall
+  duration.
+- **The priced BOQ:**
+  - it goes bill by bill in the client's row order, with subtotals and a summary that works VAT out on the total;
+  - the workbook's amounts are `ROUND(quantity × rate, 2)` formulas, and Excel's total agrees with Quantix's to the
+    cent (SAR 3,386,201.11 on the real tender);
+  - both workbooks are laid out for printing.
+- **One submission PDF** carries a cover, a contents page and every client document. The client queries sit under
+  Correspondence, and the checklist and the new tender summary deck under Internal.
+- **Drafts are checked** for notes to the office: sources, file names, "Tender Manager", "sent back". The drafting
+  tools now ask for client-ready Markdown.
+- **On the real tender**, the preview showed two approved drafts carrying notes to the office: the insurance
+  statement's "Source:" line and the programme's sequence. The engineer can reopen them to have them redone.
+

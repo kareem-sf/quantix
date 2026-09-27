@@ -92,7 +92,13 @@ choices · Markups and final price · Release.
    exclusions priced back in). Then a recommendation, the engineer's choice, and the chosen rates carried into the
    estimate.
 6. **Submission.** A checklist of what the tender requires, each item with its source clause; drafted documents;
-   the priced BOQ in the client's own format; and a local export package. Nothing is sent to a client.
+   the priced BOQ in the client's own format; and a local export package. Nothing is sent to a client. The package
+   carries the firm's letterhead from Company details:
+   - one submission PDF, with a cover, contents and every document;
+   - the priced BOQ, as a workbook with formulas and as a PDF, bill by bill with subtotals and VAT;
+   - each document, in Word and PDF, with real headings, lists and tables;
+   - the client queries, kept apart to be sent by the engineer's own email;
+   - the checklist and a tender summary deck for the firm's bid review, marked internal.
 
 ## Company knowledge (persists across tenders)
 

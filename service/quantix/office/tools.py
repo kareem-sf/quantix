@@ -804,7 +804,8 @@ def draft_work_schedule(
     """Draft the work schedule for its checklist requirement. activities: every BOQ line with a quantity, with the
     output you assume for one crew in a day and the number of crews; Quantix takes the quantity from the BOQ, works
     out the days and writes them into the draft. sequence: the order of the work and the overlaps you plan, with
-    your assumptions. overall_days: the whole programme in working days, from the lines and your overlaps."""
+    your assumptions, written for the client in Markdown and free of notes to the team. overall_days: the whole
+    programme in working days, from the lines and your overlaps."""
     with _working(ctx, f"Drafting {title}") as (session, me):
         found = submission.find_requirement(session, ctx.deps.tender_id, requirement)
         rows = submission.durations(session, ctx.deps.tender_id, activities)
@@ -817,8 +818,11 @@ def draft_work_schedule(
 
 def draft_document(ctx: RunContext[Turn], requirement: str, title: str, text: str) -> str:
     """Draft a submission document for a checklist requirement, such as a method statement, a covering letter or a
-    schedule. Base it on the tender documents and the approved figures; leave signatures and anything only the
-    engineer can provide as clear blanks. A new draft replaces your earlier one."""
+    clarification query. Base it on the tender documents and the approved figures, and write it as the client will
+    read it, in Markdown: ## headings, numbered or bulleted lists, and | tables | where they help. Name the tender's
+    documents as the client does (Annexure E, clause 7.3), never by file name, and leave out sources, notes to the
+    team and instructions. Leave signature and stamp lines as ruled blanks (Signature: ________). A new draft
+    replaces your earlier one."""
     with _working(ctx, f"Drafting {title}") as (session, me):
         found = submission.find_requirement(session, ctx.deps.tender_id, requirement)
         submission.draft(session, found, me.id, title, text)

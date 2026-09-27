@@ -260,3 +260,25 @@ def test_the_schedule_and_the_markups_are_checked_against_each_other(client, ten
             "Site engineer: 2 month is about 52 working days at 26 a month; the work schedule is 104 working days.",
         ),
     ]
+
+
+def test_a_draft_with_notes_to_the_office_is_flagged(client, tender):
+    tender_id, omar, docs = tender
+    quote = "12.3 The tenderer shall submit a work programme."
+    with client.app.state.sessions() as session:
+        wanted = submission.RequirementIn(
+            section="Technical", title="Insurance", document_id=docs["Conditions.pdf"], page=1, quote=quote
+        )
+        submission.add_requirements(session, tender_id, omar, [wanted])
+        found = submission.find_requirement(session, tender_id, "Insurance")
+        body = "The Engineer holds the originals.\n\nSource: 07. ANNEXURE E- INSURANCE.docx, page 2."
+        draft_id = submission.draft(session, found, omar, "Insurance statement", body).id
+        session.commit()
+    assert findings(client, "draft", draft_id) == [
+        (
+            "warning",
+            "It reads like a note to the office, not to the client: “Source: 07. ANNEXURE E- INSURANCE.docx, page "
+            "2.”. Name the tender's documents as the client does (Annexure E, clause 7.3) and leave notes to the team "
+            "out.",
+        )
+    ]  # "the Engineer" is the contract's own word, so it stays

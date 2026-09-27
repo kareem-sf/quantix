@@ -40,6 +40,12 @@ WORKING_DAYS = {"month": 26, "week": 6}  # to compare time-related preliminaries
 PLACEHOLDER = re.compile(
     r"\[[^\]]*[^\W\d_][^\]]*\]|\bto be (?:inserted|filled|completed|confirmed)\b|\btb[dc]\b", re.IGNORECASE
 )
+# Words that belong to the office, not to a document the client reads: its sources, the files Quantix keeps, its
+# people and its instructions
+INTERNAL = re.compile(
+    r"^\s*sources?\s*:|\S+\.(?:docx|xlsx|xls|pdf)\b|\b(?:tender manager|quantix|sen[dt] back|as instructed|as filed)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -360,6 +366,18 @@ def _draft(session: Session, home: Path, draft: Draft) -> list[Finding]:
                 f"placeholder:{draft.id}",
                 BLOCKER,
                 "It still has text to fill in: " + ", ".join(f"“{p}”" for p in placeholders[:5]) + ".",
+            )
+        )
+    notes = [line.strip() for line in draft.body.splitlines() if INTERNAL.search(line)]
+    if notes:
+        found.append(
+            Finding(
+                f"internal:{draft.id}",
+                WARNING,
+                "It reads like a note to the office, not to the client: "
+                + "; ".join(f"“{line[:90]}”" for line in notes[:3])
+                + ". Name the tender's documents as the client does (Annexure E, clause 7.3) and leave notes to the "
+                "team out.",
             )
         )
     if draft.schedule:
