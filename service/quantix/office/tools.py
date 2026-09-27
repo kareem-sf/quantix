@@ -1151,7 +1151,7 @@ def list_requirements(ctx: RunContext[Turn]) -> str:
     with _working(ctx, "Checking the submission checklist") as (session, _):
         _opened(ctx, session, "summary", "list_requirements")
         rows = [
-            f"- {r.section} · {r.title}: {submission.state(session, r)}"
+            f"- {r.section} · {r.title}: {lookup.state(session, 'checklist', r)}"
             for r in submission.requirements(session, ctx.deps.tender_id)
         ]
     return "\n".join(rows) or "The checklist is empty. Add requirements with add_requirements."

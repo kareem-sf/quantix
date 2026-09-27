@@ -110,8 +110,20 @@ def find(session: Session, tender_id: str, ref: str) -> tuple[str, Any]:
         ) from error
 
 
+def returned_draft(session: Session, requirement: Requirement) -> Draft | None:
+    """The checklist item's newest draft when it was sent back and nothing has replaced it: the text to correct."""
+    if submission.current_draft(session, requirement.id) is not None:
+        return None
+    query = select(Draft).where(Draft.requirement_id == requirement.id).order_by(Draft.created_at.desc())
+    newest = session.scalars(query).first()
+    return newest if newest is not None and newest.status == "rejected" else None
+
+
 def state(session: Session, kind: str, r: Any) -> str:
     if kind == "checklist":
+        returned = returned_draft(session, r)
+        if returned is not None and submission.state(session, r) == "missing":
+            return f"its draft was sent back: open draft {returned.id[:8]} for the text to correct"
         return {
             "ready": "ready",
             "review": "its draft is waiting for the engineer",
@@ -144,7 +156,8 @@ def _made(kind: str, r: Any, names: dict[str, str]) -> list[str]:
         who = names.get(r.reviewed_by, "The Tender Manager")
         who = who[0].upper() + who[1:]
         sent_back = getattr(r, "status", None) == "rejected" and not getattr(r, "decided_at", None)
-        lines.append(f"{who} {'sent it back' if sent_back else 'accepted it'}: {r.review_note}")
+        note = f": {r.review_note}" if r.review_note else "."
+        lines.append(f"{who} {'sent it back' if sent_back else 'accepted it'}{note}")
     decided = getattr(r, "decided_at", None)
     if decided and kind != "package":
         if r.status == "office_approved":
@@ -229,7 +242,15 @@ def _body(session: Session, kind: str, r: Any) -> str:
     if kind == "checklist":
         text = f"{r.section} · {r.title}\n{reviews.details(session, _pending(kind, r))}"
         draft = submission.current_draft(session, r.id)
-        return text + (f"\nCurrent draft: draft {draft.id[:8]}, “{draft.title}”" if draft else "")
+        if draft is not None:
+            return text + f"\nCurrent draft: draft {draft.id[:8]}, “{draft.title}”"
+        returned = returned_draft(session, r)
+        if returned is not None:
+            return text + (
+                f"\nSent back: draft {returned.id[:8]}, “{returned.title}”: {returned.reason}\nOpen it for its text, "
+                "correct it and draft it again for this item."
+            )
+        return text
     if kind == "enquiry":
         package, firm = session.get(Package, r.package_id), session.get(Company, r.company_id)
         return f"To {firm.name} for the {package.name} package.\n{reviews.details(session, _pending(kind, r))}"

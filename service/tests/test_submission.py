@@ -17,6 +17,7 @@ from quantix.documents import library
 from quantix.documents.models import Document
 from quantix.estimate import records as estimate
 from quantix.office import records as office
+from quantix.review import lookup
 from quantix.submission import export
 from quantix.submission import records as submission
 
@@ -152,6 +153,13 @@ def test_drafts_wait_for_review_and_the_engineer_marks_what_they_provide(client,
     client.post(f"/drafts/{second.id}/decision", json={"approve": False, "reason": "Add the pour sizes."})
     team = client.get(f"/tenders/{tender_id}/messages", params={"channel": "team"}).json()
     assert team[-1]["text"] == "Layla, I sent back the draft “Method statement”: Add the pour sizes."
+    with client.app.state.sessions() as session:  # whoever redrafts it finds the text to correct from the checklist
+        requirement = session.get(submission.Requirement, method["id"])
+        assert lookup.state(session, "checklist", requirement) == (
+            f"its draft was sent back: open draft {second.id[:8]} for the text to correct"
+        )
+        opened = lookup.explain(session, client.app.state.home, tender_id, "checklist", requirement)
+        assert f"Sent back: draft {second.id[:8]}, “Method statement”: Add the pour sizes." in opened
     with client.app.state.sessions() as session:
         third = submission.draft(
             session, session.get(submission.Requirement, method["id"]), layla, "Method statement", "v3"
@@ -383,7 +391,7 @@ def test_staff_build_the_checklist_through_their_tools(client, tender, tmp_path)
         "1 requirements added to the checklist.",
         "The draft is with the Tender Manager for review.",
         "Rates will go in column E and amounts in column F.",
-        "- Technical · Method statement for concrete works: manager",
+        "- Technical · Method statement for concrete works: its draft is with the Tender Manager",
     ]
 
 
