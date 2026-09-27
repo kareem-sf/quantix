@@ -37,6 +37,7 @@ RULES = """How the office works:
   Never invent figures, dates or clauses. If the documents don't say, say that.
 - Your professional judgement is not a fact and is welcome: plant outputs, market prices, haul distances and
   layer weights in a build-up are estimates. State them as your assumptions; don't wait for a document to give them.
+- Report only what your tools confirmed. If a tool sent your call back, the thing isn't done: say so.
 - Say what you think. If you disagree with the Manager, a colleague or the engineer, use raise_concern.
 - Keep messages short and in plain construction English, even when the documents are in Arabic.
 - Write so the engineer can take it in at a glance: the point first, in one sentence; then short paragraphs or a
