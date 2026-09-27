@@ -183,8 +183,13 @@ def test_a_work_schedule_takes_its_quantities_from_the_boq(client, tender):
             "- 6.3, Waterproofing: 980 m2 at 500 m2 a day × 1 crew = 2 days\n\n"
             "Excavation first, then waterproofing: 9 days."
         )
-        with pytest.raises(ValueError, match="There is no BOQ item 9.9"):
-            submission.durations(session, tender_id, [activity(boq_item="9.9", output=1, crews=1)])
+        with pytest.raises(ValueError) as wrong:  # every wrong line at once, so one retry fixes them all
+            lines = [activity(boq_item=n, output=1, crews=1) for n in ("9.9", "3.1", "Waterproofing / 6.3")]
+            submission.durations(session, tender_id, lines)
+        assert str(wrong.value) == (
+            "Correct these lines and send the whole schedule again: There is no BOQ item 9.9. Use list_boq to see "
+            "the items. There is no BOQ item Waterproofing / 6.3. That number is “6.3”."
+        )
 
 
 def test_pricing_columns_come_from_the_client_header(client, tender):

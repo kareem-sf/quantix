@@ -48,15 +48,22 @@ class Duration:
 
 
 def durations(session: Session, tender_id: str, activities: list[ActivityIn]) -> list[Duration]:
-    """Days per line of a work schedule, from the BOQ quantity and the assumed output and crews."""
-    rows = []
+    """Days per line of a work schedule, from the BOQ quantity and the assumed output and crews. Every line that
+    can't be found is reported at once, so one correction fixes them all."""
+    rows, problems = [], []
     for activity in activities:
-        item = boq.find_item(session, tender_id, activity.boq_item)
+        try:
+            item = boq.find_item(session, tender_id, activity.boq_item)
+        except ValueError as error:
+            problems.append(str(error))
+            continue
         quantity = item.quantity or Decimal(0)
         days = math.ceil(quantity / (activity.output * activity.crews)) if quantity > 0 else 0
         rows.append(
             Duration(boq.reference(item), item.description, quantity, item.unit, activity.output, activity.crews, days)
         )
+    if problems:
+        raise ValueError("Correct these lines and send the whole schedule again: " + " ".join(problems))
     return rows
 
 
