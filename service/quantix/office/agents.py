@@ -140,6 +140,13 @@ def situation(session: Session, member: Staff, new: list[Message]) -> str:
     return "\n\n".join(parts)
 
 
+def _markups_state(session: Session, tender_id: str) -> str:
+    markups = estimate.current_markups(session, tender_id)
+    if markups is None:
+        return "none proposed yet"
+    return "waiting for the engineer" if markups.status == "proposed" else "approved"
+
+
 def standing(session: Session, tender_id: str) -> str:
     """The work so far in counts, from the records."""
     items = boq.items(session, tender_id)
@@ -151,6 +158,7 @@ def standing(session: Session, tender_id: str) -> str:
         [
             f"- BOQ: {len(items)} lines, {approved} approved.",
             f"- Estimate: {price.priced} of {price.items} lines priced, {price.waiting} waiting for the engineer.",
+            f"- Markups: {_markups_state(session, tender_id)}.",
             f"- Takeoff: {len(takeoff.measurements(session, tender_id))} measurements, "
             f"{takeoff.waiting(session, tender_id)} scales or measurements waiting for the engineer.",
             f"- Subcontract: {len(packages)} packages, {sum(bool(p.selected_quote_id) for p in packages)} chosen.",

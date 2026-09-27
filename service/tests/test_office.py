@@ -410,6 +410,7 @@ def test_each_turn_shows_where_things_stand_and_the_chat_so_far(client, office):
         session.commit()
         brief = agents.situation(session, salem, [])
     assert "Where the tender stands:\n- BOQ: 0 lines, 0 approved." in brief
+    assert "- Markups: none proposed yet." in brief  # so no one reports them as accepted
     assert "Open tasks in the team:\n- Rashid: reset the drawing scales" in brief  # so no one is briefed twice
     assert (
         "Earlier in your chat with the engineer:\n- You: The zero lines are C.21.1 and C.7.1.2.\n"
