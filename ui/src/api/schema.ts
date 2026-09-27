@@ -993,6 +993,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tenders/{tender_id}/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tender Audit
+         * @description What keeps the tender from release, blockers first, with the Manager's reason for each warning he accepted.
+         */
+        get: operations["tender_audit_tenders__tender_id__audit_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -4287,6 +4307,39 @@ export interface operations {
             path: {
                 kind: string;
                 record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FindingOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tender_audit_tenders__tender_id__audit_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                tender_id: string;
             };
             cookie?: never;
         };

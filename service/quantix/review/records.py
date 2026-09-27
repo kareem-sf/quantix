@@ -97,7 +97,7 @@ def escalation(session: Session, record_id: str) -> Decision | None:
     return session.scalars(query).first()
 
 
-def _escalated(session: Session, tender_id: str) -> set[str]:
+def escalated(session: Session, tender_id: str) -> set[str]:
     query = select(Decision.subject_id).where(Decision.tender_id == tender_id, Decision.status == "waiting")
     return {i for i in session.scalars(query) if i}
 
@@ -109,11 +109,11 @@ def has_new(session: Session, tender_id: str, since: datetime | None) -> bool:
 
 def counts(session: Session, tender_id: str) -> str:
     """The queue in a line: who is waiting on the Manager, with what."""
-    names, escalated = _names(session, tender_id), _escalated(session, tender_id)
+    names, with_engineer = _names(session, tender_id), escalated(session, tender_id)
     by_producer: dict[str, dict[str, int]] = {}
     for p in pending(session, tender_id):
-        if p.record.id in escalated:
-            continue  # waiting for the engineer's answer
+        if p.record.id in with_engineer:
+            continue  # escalated: waiting for the engineer's answer
         kinds = by_producer.setdefault(names.get(p.producer, "Someone"), {})
         kinds[p.kind] = kinds.get(p.kind, 0) + 1
     return "; ".join(

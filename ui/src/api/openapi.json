@@ -3598,6 +3598,63 @@
           }
         }
       }
+    },
+    "/tenders/{tender_id}/audit": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "summary": "Tender Audit",
+        "description": "What keeps the tender from release, blockers first, with the Manager's reason for each warning he accepted.",
+        "operationId": "tender_audit_tenders__tender_id__audit_get",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FindingOut"
+                  },
+                  "title": "Response Tender Audit Tenders  Tender Id  Audit Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {

@@ -339,3 +339,30 @@ What the office can't settle now reaches the engineer with its evidence, instead
 - **On the decision page:** "Where it shows" links each page and BOQ line, Quantix's findings on the record
   appear, and the suggestions sit beside "Or answer in your own words".
 - Migration 0013 adds `subject_kind`, `subject_id` and `sources` to decisions.
+
+## 27 September 2026: the tender audit before release
+
+- **What the audit checks** (`quantix/review/audit.py`):
+  - work still with the Tender Manager or at the engineer's gates, and decisions waiting for an answer;
+  - currency or VAT not recorded (blockers), and the method of measurement not recorded (a warning);
+  - no markups, or BOQ lines with a quantity but no rate;
+  - rows of the client's workbook that have a unit and a quantity but aren't in the BOQ. The quantity and unit
+    columns are the ones the entered rows use.
+  - documents still being read (a blocker), or that couldn't be read (a warning);
+  - an empty or unready checklist;
+  - every finding on work the Manager has already reviewed. The engineer's own approval settles a warning, never a
+    blocker.
+- **The Manager** runs `audit_tender` before he tells the engineer the tender is ready. He accepts warnings by their
+  short name, with his reason.
+- **The engineer** sees "Before release" on the Overview, including the warnings the Manager accepted and his reasons.
+  The build button counts the audit's blockers, and the built package lists them as not ready.
+- **Fixed on the way:** a draft without a work schedule stores JSON null, which SQL doesn't treat as NULL, so the
+  markups check crashed on it. The schedule is now looked for in Python.
+- **Not added:** a separate priced-total check. The build card already compares the priced BOQ with the summary
+  total, and the missing-rows check covers the real risk of rows going back unpriced.
+- **On the real tender:** the audit takes 0.6 seconds. It finds:
+  - one unanswered decision, "Programme line reference correction";
+  - the site's .kmz file, which Quantix can't read.
+
+  All 26 workbook rows with quantities are in the BOQ: columns G (Rev.01 quantity) and E (unit) were found from
+  the entered rows.

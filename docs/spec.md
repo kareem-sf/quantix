@@ -38,8 +38,18 @@ to do the work, not a tool to operate.
   accepts a warning only with his reason, which the engineer sees beside the finding and its source. What the
   office can't settle, such as work sent back twice without a fix, he escalates to the engineer. An escalation
   shows the problem, where it shows (document pages and BOQ lines), what Quantix found and his suggested
-  corrections. The engineer chooses one or answers in their own words, and the Manager applies the answer. The
-  engineer can adjust his personality.
+  corrections. The engineer chooses one or answers in their own words, and the Manager applies the answer. Before
+  he tells the engineer the tender is ready, he runs Quantix's audit of the whole tender and clears it. The engineer
+  can adjust his personality.
+- **Audit before release.** Quantix audits the whole tender:
+  - work still waiting for the Manager or the engineer, and open decisions;
+  - missing tender facts or markups, and BOQ lines with a quantity but no rate;
+  - rows of the client's BOQ workbook that have a quantity but aren't in the BOQ;
+  - documents it couldn't read, and a checklist that isn't ready;
+  - every open finding on the office's work.
+
+  The Overview shows the audit under "Before release", the build button counts its blockers, and the built package
+  lists them as not ready.
 - **Staff.** Hired by the Manager for this tender's actual needs, with a generated name, role, discipline,
   experience, background, temperament, speaking style and professional opinions, and a locally drawn portrait.
   They speak in their own voice, disagree, raise concerns and push back on the Manager or the engineer.

@@ -8,6 +8,7 @@ import { Face } from "../office/Face";
 import { Prose, tidy } from "../office/Prose";
 import { TEAM, firstName, useDecisions, useMessages, useOffice, useSend } from "../office/queries";
 import { Opening } from "../app/Opening";
+import { useAudit } from "../review/queries";
 import { dueSentence } from "./due";
 import { usePackages } from "../subcontract/queries";
 import { useSubmission } from "../submission/queries";
@@ -158,10 +159,74 @@ export function Overview() {
           <Progress tenderId={tenderId} />
         </div>
       )}
+      {current.length > 0 && <Audit tenderId={tenderId} />}
       <DeleteTender tenderId={tenderId} name={tender.data.name} />
 
       <div className="grow" />
       <AskOffice tenderId={tenderId} to={manager?.id ?? TEAM} name={manager ? firstName(manager) : undefined} />
+    </div>
+  );
+}
+
+/** Quantix's audit of the whole tender, once pricing has started: what keeps it from release. */
+function Audit({ tenderId }: { tenderId: string }) {
+  const estimate = useEstimate(tenderId);
+  const audit = useAudit(tenderId);
+  const office = useOffice(tenderId);
+  if (!estimate.data?.items.length || !audit.data) return null;
+  const blockers = audit.data.filter((f) => f.severity === "blocker");
+  const warnings = audit.data.filter((f) => f.severity === "warning" && !f.reason);
+  const accepted = audit.data.filter((f) => f.reason);
+  const manager = office.data?.staff.find((m) => m.is_manager);
+  return (
+    <div className="mt-9 flex flex-col">
+      <h2 className="pb-2 font-semibold text-ink-2">Before release</h2>
+      {blockers.length + warnings.length === 0 ? (
+        <p className="px-1 text-ink-2">
+          Quantix’s audit is clear: nothing keeps the tender from release.{" "}
+          <Link to={`/tenders/${tenderId}/submission`} className="font-medium text-ink underline underline-offset-4">
+            Build the package
+          </Link>
+        </p>
+      ) : (
+        <p className="px-1 pb-2 text-ink-2">
+          {[
+            blockers.length && `${blockers.length} ${blockers.length === 1 ? "thing" : "things"} must be fixed`,
+            warnings.length && `${warnings.length} ${warnings.length === 1 ? "needs" : "need"} checking`,
+          ]
+            .filter(Boolean)
+            .join(" and ")}{" "}
+          before the tender can go{manager && `; ${firstName(manager)} is working through them`}.
+        </p>
+      )}
+      <ul className="flex flex-col">
+        {[...blockers, ...warnings, ...accepted].map((f, n) => (
+          <li key={n} className="flex gap-3 border-t border-line px-1 py-2.5 leading-normal">
+            <span
+              className={`mt-[7px] size-[7px] shrink-0 rounded-full ${f.severity === "blocker" ? "bg-attention" : f.reason ? "bg-approved" : "bg-ink-4"}`}
+            />
+            <span className="flex min-w-0 flex-col gap-0.5">
+              <span className={f.reason ? "text-ink-2" : ""}>{f.message}</span>
+              {f.refs.map((r) =>
+                r.document_id ? (
+                  <Link
+                    key={r.label}
+                    to={`/tenders/${tenderId}/documents?doc=${r.document_id}&page=${r.page}`}
+                    className="self-start text-ink-3 underline underline-offset-4"
+                  >
+                    {r.label}
+                  </Link>
+                ) : null,
+              )}
+              {f.reason && (
+                <span className="text-ink-3">
+                  Accepted by {f.accepted_by ?? "the Manager"}: {f.reason}
+                </span>
+              )}
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

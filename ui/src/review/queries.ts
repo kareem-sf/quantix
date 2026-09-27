@@ -18,6 +18,14 @@ export function useFindings(kind: Checked, id: string) {
   });
 }
 
+/** Quantix's audit of the whole tender: what keeps it from release, and the warnings the Manager accepted. */
+export function useAudit(tenderId: string) {
+  return useQuery({
+    queryKey: ["audit", tenderId],
+    queryFn: async () => must(await api.GET("/tenders/{tender_id}/audit", { params: { path: { tender_id: tenderId } } })),
+  });
+}
+
 /** What the staff proposed that the Tender Manager hasn't reviewed yet. */
 export function useReviewQueue(tenderId: string) {
   return useQuery({

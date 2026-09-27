@@ -93,7 +93,9 @@ describe("Submission", () => {
   });
 
   it("builds the package on the engineer's computer and reports what is not ready", async () => {
-    const service = fakeService({ tenders: [tender], staff: [layla], requirements: checklist() });
+    const blocker = (message: string) => ({ severity: "blocker", message, refs: [], accepted_by: null, reason: null });
+    const audit = [blocker("1 checklist item isn’t ready: Bid bond"), blocker("VAT isn't recorded.")];
+    const service = fakeService({ tenders: [tender], staff: [layla], requirements: checklist(), audit });
     openApp("/tenders/t1/submission");
 
     await userEvent.click(await screen.findByRole("checkbox", { name: "Markups in the rates" }));

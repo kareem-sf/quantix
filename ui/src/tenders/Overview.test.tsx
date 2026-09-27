@@ -37,6 +37,32 @@ describe("Overview", () => {
     expect(screen.getByText("1 of 2 priced · SAR 100.00")).toBeInTheDocument();
   });
 
+  it("shows what keeps the tender from release, with the Manager's reason for what he accepted", async () => {
+    const finding = (severity: string, message: string, reason: string | null = null) => ({
+      severity,
+      message,
+      refs: severity === "blocker" ? [{ label: "Bill.xlsx, page 1", document_id: "d1", page: 1 }] : [],
+      accepted_by: reason ? "Rania" : null,
+      reason,
+    });
+    fakeService({
+      tenders: [tender],
+      documents: [doc],
+      priced: [priced("3.1", "approved", "100.00")],
+      audit: [
+        finding("blocker", "A row of the client's BOQ has a quantity but isn't in the BOQ."),
+        finding("warning", "Quantix couldn't read 1 document: Site.kmz", "It only shows where the site is."),
+      ],
+    });
+    openApp("/tenders/t1");
+
+    expect(await screen.findByRole("heading", { name: "Before release" })).toBeInTheDocument();
+    expect(screen.getByText(/1 thing must be fixed before the tender can go/)).toBeInTheDocument();
+    expect(screen.getByText("A row of the client's BOQ has a quantity but isn't in the BOQ.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Bill.xlsx, page 1" })).toHaveAttribute("href", "/tenders/t1/documents?doc=d1&page=1");
+    expect(screen.getByText("Accepted by Rania: It only shows where the site is.")).toBeInTheDocument();
+  });
+
   it("says what is with the Tender Manager before it comes to the engineer", async () => {
     const rania = {
       id: "s1",

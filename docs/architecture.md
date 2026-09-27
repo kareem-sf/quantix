@@ -69,6 +69,12 @@ Each domain module owns its models, its service functions and the agent tools th
   open, he can't decide the record. Once the same work has been sent back twice, he can't send it back again
   until the engineer has answered an escalation about it. The answer reaches his chat through the usual
   decision answer.
+- **Audit.** `quantix/review/audit.py` runs the tender-level checks and the record checks on work past the
+  Manager's review. The engineer's approval settles a warning but not a blocker. For approved work it asks only for
+  blockers, so the drawing's geometry isn't read. The client-row check finds the quantity and unit columns from
+  the rows already entered. The Manager accepts audit warnings by a short name (a hash of the key) through
+  `audit_tender`. `GET /tenders/{id}/audit` serves the Overview. The build endpoint fills the package's not-ready list
+  from the audit's blockers.
 - **Evidence.** A cited location must exist and must have been read in that agent's run.
 
 ## Quantity take-off

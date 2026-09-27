@@ -13,6 +13,8 @@ from quantix import tenders
 from quantix.api.tenders import DB
 from quantix.core.review import UNDECIDED
 from quantix.documents.models import Document
+from quantix.review import audit
+from quantix.review.checks import BLOCKER
 from quantix.submission import export, records
 from quantix.submission.models import Draft, Requirement
 
@@ -190,7 +192,9 @@ async def attach_file(requirement_id: str, file: UploadFile, session: DB, reques
 def build_package(tender_id: str, body: ExportIn, session: DB, request: Request) -> ExportOut:
     """The engineer's release: the package is built in the Quantix exports folder on this computer."""
     _tender(session, tender_id)
-    built = export.build(request.app.state.home, session, tender_id, body.spread_markups, datetime.now())
+    home = request.app.state.home
+    built = export.build(home, session, tender_id, body.spread_markups, datetime.now())
+    built.not_ready = [f.message for f in audit.open_findings(session, home, tender_id) if f.severity == BLOCKER]
     return ExportOut(**vars(built))
 
 

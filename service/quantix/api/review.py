@@ -5,7 +5,7 @@ from quantix import tenders
 from quantix.api.tenders import DB
 from quantix.office import records as office
 from quantix.office.models import Staff
-from quantix.review import records
+from quantix.review import audit, records
 
 router = APIRouter(tags=["review"])
 
@@ -72,6 +72,28 @@ def findings(kind: str, record_id: str, session: DB, request: Request) -> list[F
         raise HTTPException(status_code=404, detail=str(error)) from error
     out = []
     for finding, acceptance in found:
+        person = session.get(Staff, acceptance.accepted_by) if acceptance else None
+        out.append(
+            FindingOut(
+                severity=finding.severity,
+                message=finding.message,
+                refs=[SourceOut(label=r.label, document_id=r.document_id, page=r.page) for r in finding.refs],
+                accepted_by=person.first_name if person else None,
+                reason=acceptance.reason if acceptance else None,
+            )
+        )
+    return out
+
+
+@router.get("/tenders/{tender_id}/audit")
+def tender_audit(tender_id: str, session: DB, request: Request) -> list[FindingOut]:
+    """What keeps the tender from release, blockers first, with the Manager's reason for each warning he accepted."""
+    if tenders.get_tender(session, tender_id) is None:
+        raise HTTPException(status_code=404, detail="Tender not found.")
+    settled = records.accepted(session, tender_id)
+    out = []
+    for finding in audit.findings(session, request.app.state.home, tender_id):
+        acceptance = settled.get(finding.key) if finding.severity == "warning" else None
         person = session.get(Staff, acceptance.accepted_by) if acceptance else None
         out.append(
             FindingOut(

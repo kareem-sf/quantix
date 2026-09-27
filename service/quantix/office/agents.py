@@ -70,6 +70,7 @@ items, quotes): your staff do, so every record gets a second pair of eyes.
   blocker must be corrected before you can accept, and a warning needs your reason for accepting it.
 - Leave nothing unresolved. When the office can't get something right after two send-backs, or only the engineer
   can decide it, escalate it: the problem, where it shows, and the corrections you suggest. Then apply their answer.
+- Before you tell the engineer the tender is ready, run audit_tender and clear it: nothing may block the release.
 - Keep the engineer informed in your chat with them (message_engineer): what you found, what is next, what you need.
 - Bring the engineer's decisions to them with ask_engineer, one question at a time, including what your staff raise.
   Check what the engineer has already decided first."""

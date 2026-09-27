@@ -58,18 +58,22 @@ class Finding:
     refs: list[Ref] = field(default_factory=list)
 
 
-def for_record(session: Session, home: Path, kind: str, record: Any) -> list[Finding]:
-    """What the checks find in one record the office proposed."""
-    check = {
-        "boq": _item,
-        "fact": _fact,
-        "measurement": _measurement,
-        "rate": _rate,
-        "markups": _markups,
-        "draft": _draft,
-        "recommendation": _recommendation,
-    }.get(kind)
-    return check(session, home, record) if check else []
+def for_record(session: Session, home: Path, kind: str, record: Any, blockers_only: bool = False) -> list[Finding]:
+    """What the checks find in one record the office proposed. Blockers only skips reading the drawing, which only
+    ever warns."""
+    if kind == "measurement":
+        found = _measurement(session, home, record, read_drawing=not blockers_only)
+    else:
+        check = {
+            "boq": _item,
+            "fact": _fact,
+            "rate": _rate,
+            "markups": _markups,
+            "draft": _draft,
+            "recommendation": _recommendation,
+        }.get(kind)
+        found = check(session, home, record) if check else []
+    return [f for f in found if f.severity == BLOCKER] if blockers_only else found
 
 
 def _money(value: Decimal) -> str:
@@ -148,7 +152,7 @@ def _near(point: list[float], vertices: tuple[tuple[float, float], ...]) -> bool
     return any(abs(vx - x) <= ON_THE_DRAWING and abs(vy - y) <= ON_THE_DRAWING for vx, vy in vertices)
 
 
-def _measurement(session: Session, home: Path, m: Measurement) -> list[Finding]:
+def _measurement(session: Session, home: Path, m: Measurement, read_drawing: bool = True) -> list[Finding]:
     found: list[Finding] = []
     item = session.get(BoqItem, m.boq_item_id) if m.boq_item_id else None
     where = _page_ref(session, m.document_id, m.page)
@@ -187,7 +191,7 @@ def _measurement(session: Session, home: Path, m: Measurement) -> list[Finding]:
                     where + [r for o in alike for r in _page_ref(session, o.document_id, o.page) if r not in where],
                 )
             )
-    if m.kind != "count":
+    if m.kind != "count" and read_drawing:
         document = session.get(Document, m.document_id)
         vertices = readers.vector_points(library.stored_file(home, document), m.page)
         if vertices:
@@ -291,9 +295,10 @@ def _rate(session: Session, home: Path, rate: Rate) -> list[Finding]:
 
 
 def _schedule(session: Session, tender_id: str) -> Draft | None:
-    """The newest work schedule the office drafted and hasn't had sent back."""
-    query = select(Draft).where(Draft.tender_id == tender_id, Draft.schedule.is_not(None), Draft.status.in_(LIVE))
-    return session.scalars(query.order_by(Draft.created_at.desc())).first()
+    """The newest work schedule the office drafted and hasn't had sent back. A draft without one holds JSON null,
+    which SQL doesn't see as NULL, so the schedule is looked for here."""
+    query = select(Draft).where(Draft.tender_id == tender_id, Draft.status.in_(LIVE))
+    return next((d for d in session.scalars(query.order_by(Draft.created_at.desc())) if d.schedule), None)
 
 
 def _markups(session: Session, home: Path, markups: Markups) -> list[Finding]:

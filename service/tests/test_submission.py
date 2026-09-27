@@ -238,7 +238,13 @@ def test_the_package_is_built_in_the_client_format_with_markups_in_the_rates(cli
         "133048.08",
     )
     assert built["files"] == ["Priced Bill.xlsx", "Method statement.docx", "Checklist.xlsx"]
-    assert built["not_ready"] == ["BOQ item 6.3 is not priced", "Bid bond, 1% of the tender price"]
+    assert built["not_ready"] == [  # the tender audit's blockers
+        "2 pieces of work wait for the Tender Manager's review.",  # the checklist items the office added
+        "Currency isn't recorded from the tender documents.",
+        "VAT isn't recorded from the tender documents.",
+        "1 BOQ line with a quantity has no rate: 6.3",
+        "1 checklist item isn’t ready: Bid bond, 1% of the tender price",
+    ]
 
     folder = tmp_path / "exports" / built["folder"]
     assert built["folder"].startswith("Synthetic school ")

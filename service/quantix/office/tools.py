@@ -21,6 +21,7 @@ from quantix.documents.models import Document
 from quantix.estimate import records as estimate
 from quantix.office import records
 from quantix.office.models import TEAM, Staff
+from quantix.review import audit
 from quantix.review import records as reviews
 from quantix.subcontract import records as subcontract
 from quantix.submission import records as submission
@@ -742,6 +743,17 @@ def review(ctx: RunContext[Turn], verdicts: list[reviews.Verdict]) -> str:
         return reviews.review(session, ctx.deps.home, ctx.deps.tender_id, me, verdicts, ctx.deps.autonomous)
 
 
+def audit_tender(ctx: RunContext[Turn], accept_warnings: list[audit.Accepted] | None = None) -> str:
+    """Audit the whole tender before you tell the engineer it is ready: work still waiting, missing facts, markups
+    or rates, client BOQ rows left out, unread documents, the checklist, and what Quantix's checks find in the
+    office's work. accept_warnings: warnings you accept, each by its short name with your reason. Clear every
+    blocker, then run it again until nothing blocks the release."""
+    with _working(ctx, "Auditing the tender") as (session, me):
+        problems = audit.accept(session, ctx.deps.home, ctx.deps.tender_id, me, accept_warnings or [])
+        text = audit.report(audit.open_findings(session, ctx.deps.home, ctx.deps.tender_id))
+    return text + ("\nNot accepted: " + "; ".join(problems) if problems else "")
+
+
 def escalate(
     ctx: RunContext[Turn], record: str, problem: str, sources: list[reviews.Source], suggestions: list[str]
 ) -> str:
@@ -804,4 +816,5 @@ MANAGER: list[Callable] = [
     review_details,
     review,
     escalate,
+    audit_tender,
 ]

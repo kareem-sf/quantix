@@ -51,6 +51,8 @@ export interface FakeState {
   reopened: { kind: string; id: string; reason: string }[];
   /** What the checks find, by record id. */
   findings: Record<string, Finding[]>;
+  /** The tender audit. */
+  audit: Finding[];
   /** Answer the next POST to this path with this error detail. */
   fail: Record<string, string>;
 }
@@ -89,6 +91,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     decided: [],
     reopened: [],
     findings: {},
+    audit: [],
     fail: {},
     ...initial,
   };
@@ -275,6 +278,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
       return json({ manager, boq: count(state.items), facts: count(state.facts), takeoff: count(state.measurements), pricing: 0, subcontract: 0, submission: 0 });
     }
     if (path.match(/^\/tenders\/\w+\/review$/)) return json([]);
+    if (path.match(/^\/tenders\/\w+\/audit$/)) return json(state.audit);
     const checked = path.match(/^\/records\/\w+\/(\w+)\/findings$/);
     if (checked) return json(state.findings[checked[1]] ?? []);
     const reopened = path.match(/^\/records\/(\w+)\/(\w+)\/reopen$/);

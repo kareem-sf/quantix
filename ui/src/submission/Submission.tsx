@@ -5,6 +5,7 @@ import { money } from "../estimate/queries";
 import { Face } from "../office/Face";
 import { firstName, useOffice, type Staff } from "../office/queries";
 import { Findings, Reopen, ReviewNote, WITH_MANAGER } from "../review/Review";
+import { useAudit } from "../review/queries";
 import { dueShort } from "../tenders/due";
 import { useTender } from "../tenders/queries";
 import {
@@ -114,7 +115,7 @@ export function Submission() {
           ))}
           <AddRequirement tenderId={tenderId} />
         </div>
-        <BuildBar tenderId={tenderId} notReady={rows.length - ready} columns={submission.data?.columns ?? []} />
+        <BuildBar tenderId={tenderId} columns={submission.data?.columns ?? []} />
       </section>
       {selected && <RequirementPanel tenderId={tenderId} requirement={selected} people={people} />}
     </div>
@@ -156,8 +157,9 @@ function AddRequirement({ tenderId }: { tenderId: string }) {
   );
 }
 
-function BuildBar(props: { tenderId: string; notReady: number; columns: { document_name: string; sheet: number; rate_column: string; amount_column: string }[] }) {
+function BuildBar(props: { tenderId: string; columns: { document_name: string; sheet: number; rate_column: string; amount_column: string }[] }) {
   const build = useBuild(props.tenderId);
+  const blockers = (useAudit(props.tenderId).data ?? []).filter((f) => f.severity === "blocker").length;
   const [spread, setSpread] = useState(true);
   return (
     <div className="flex flex-col gap-3 border-t border-line py-4">
@@ -184,7 +186,7 @@ function BuildBar(props: { tenderId: string; notReady: number; columns: { docume
             disabled={build.isPending}
             className="h-[38px] rounded-lg bg-ink px-4 text-sm whitespace-nowrap text-white disabled:bg-line-strong"
           >
-            Build package{props.notReady > 0 && ` · ${props.notReady} not ready`}
+            Build package{blockers > 0 && ` · ${blockers} not ready`}
           </button>
         </span>
       </div>
