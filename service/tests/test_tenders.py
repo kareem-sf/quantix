@@ -66,3 +66,38 @@ def test_deleting_a_tender_removes_everything_quantix_keeps_for_it(client, tmp_p
         for table in ("documents", "pages", "messages"):
             assert session.execute(text(f"select count(*) from {table}")).scalar() == 0
     assert client.delete(f"/tenders/{tender_id}").status_code == 404
+
+
+def test_the_newest_migration_keeps_every_tender_and_its_records(tmp_path):
+    """The engineer's database already holds tenders when Quantix upgrades it, with foreign keys enforced."""
+    from alembic import command
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    from sqlalchemy import create_engine, event, text
+
+    from quantix.core import db
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'quantix.sqlite'}")
+    event.listen(engine, "connect", db._sqlite_pragmas)
+    config = Config()
+    config.set_main_option("script_location", str(db.MIGRATIONS))
+    with engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, ScriptDirectory.from_config(config).get_revision("head").down_revision)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO tenders (id, owner_id, name, outcome, created_at) "
+                "VALUES ('t1', 'local', 'Substation', 'open', '2026-09-27 10:00:00')"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO messages (tender_id, sender, channel, kind, text, created_at) "
+                "VALUES ('t1', 'engineer', 'team', 'message', 'Go.', '2026-09-27 10:00:00')"
+            )
+        )
+    db._upgrade(engine)
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT name FROM tenders")).all() == [("Substation",)]
+        assert connection.execute(text("SELECT text FROM messages")).all() == [("Go.",)]

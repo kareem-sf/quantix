@@ -31,12 +31,11 @@ def upgrade() -> None:
         sa.Column("output_tokens", sa.Integer(), nullable=False),
     )
     op.create_index("turns_staff", "turns", ["tender_id", "staff_id", "id"])
-    with op.batch_alter_table("tenders") as table:
-        table.add_column(sa.Column("office_paused", sa.Boolean(), nullable=False, server_default=sa.false()))
+    # Not batch_alter_table: rebuilding tenders drops it, and with foreign keys on that deletes every tender's records
+    op.add_column("tenders", sa.Column("office_paused", sa.Boolean(), nullable=False, server_default=sa.false()))
 
 
 def downgrade() -> None:
-    with op.batch_alter_table("tenders") as table:
-        table.drop_column("office_paused")
+    op.drop_column("tenders", "office_paused")
     op.drop_index("turns_staff", "turns")
     op.drop_table("turns")
