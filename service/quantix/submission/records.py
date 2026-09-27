@@ -30,8 +30,16 @@ def requirements(session: Session, tender_id: str) -> list[Requirement]:
 
 
 def find_requirement(session: Session, tender_id: str, title: str) -> Requirement:
+    """By its title, or as list_requirements shows it: "<section> · <title>"."""
     wanted = title.strip().lower()
-    found = next((r for r in requirements(session, tender_id) if r.title.lower() == wanted), None)
+    found = next(
+        (
+            r
+            for r in requirements(session, tender_id)
+            if wanted in (r.title.lower(), f"{r.section} · {r.title}".lower())
+        ),
+        None,
+    )
     if found is None:
         raise ValueError(
             f"There is no requirement called {title}. Use list_requirements to see them. For a letter to the client, "

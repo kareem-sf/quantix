@@ -119,6 +119,10 @@ def test_drafts_wait_for_review_and_the_engineer_marks_what_they_provide(client,
     checklist(client, tender)
     with client.app.state.sessions() as session:
         method = submission.find_requirement(session, tender_id, "method statement for concrete works")
+        # as list_requirements shows it, with its section
+        assert (
+            submission.find_requirement(session, tender_id, "Technical · Method statement for concrete works") == method
+        )
         submission.draft(session, method, layla, "Method statement", "First try.")
         second = submission.draft(session, method, layla, "Method statement", "Pour sequence.\n\nCuring for 7 days.")
         session.commit()
