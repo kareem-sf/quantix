@@ -215,6 +215,9 @@ def test_the_schedule_and_the_markups_are_checked_against_each_other(client, ten
                 activity(boq_item="C.2", output=400, crews=1),
             ],
         )  # 5 days and 2 days; the 8486 excavation is left out
+        with pytest.raises(ValueError, match="The same number in another bill is “8486 · Earthwork / C.1”"):
+            twice = [activity(boq_item="8485 · Earthwork / C.1", output=100, crews=2)] * 2
+            submission.durations(session, tender_id, twice)  # a line counted twice, meant for the other bill
 
         def programme(text, overall):
             record = submission.schedule_record(rows, overall)

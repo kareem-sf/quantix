@@ -189,11 +189,11 @@ def test_a_work_schedule_takes_its_quantities_from_the_boq(client, tender):
             "Excavation first, then waterproofing: 9 days."
         )
         with pytest.raises(ValueError) as wrong:  # every wrong line at once, so one retry fixes them all
-            lines = [activity(boq_item=n, output=1, crews=1) for n in ("9.9", "3.1", "Waterproofing / 6.3")]
+            lines = [activity(boq_item=n, output=1, crews=1) for n in ("9.9", "3.1", "Waterproofing / 6.3", "3.1")]
             submission.durations(session, tender_id, lines)
         assert str(wrong.value) == (
             "Correct these lines and send the whole schedule again: There is no BOQ item 9.9. Use list_boq to see "
-            "the items. There is no BOQ item Waterproofing / 6.3. That number is “6.3”."
+            "the items. There is no BOQ item Waterproofing / 6.3. That number is “6.3”. 3.1 is listed twice."
         )
 
 

@@ -50,13 +50,23 @@ class Duration:
 
 def durations(session: Session, tender_id: str, activities: list[ActivityIn]) -> list[Duration]:
     """Days per line of a work schedule, from the BOQ quantity and the assumed output and crews. Every line that
-    can't be found is reported at once, so one correction fixes them all."""
+    can't be found, or comes twice, is reported at once, so one correction fixes them all."""
     rows, problems = [], []
     for activity in activities:
         try:
             item = boq.find_item(session, tender_id, activity.boq_item)
         except ValueError as error:
             problems.append(str(error))
+            continue
+        if any(r.item_id == item.id for r in rows):
+            others = [
+                boq.reference(i) for i in boq.items(session, tender_id) if i.item == item.item and i.id != item.id
+            ]
+            elsewhere = " or ".join(f"“{o}”" for o in others)
+            problems.append(
+                f"{boq.reference(item)} is listed twice."
+                + (f" The same number in another bill is {elsewhere}." if others else "")
+            )
             continue
         quantity = item.quantity or Decimal(0)
         days = math.ceil(quantity / (activity.output * activity.crews)) if quantity > 0 else 0
