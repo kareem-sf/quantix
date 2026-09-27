@@ -138,17 +138,17 @@ def test_the_manager_accepts_a_warning_with_his_reason_and_the_engineer_sees_it(
                 audit.Accepted(finding=audit.short(kmz.key), reason="ok"),
             ],
         )
-        assert refused == [
-            "abc123: no open warning has that name",
-            f"{audit.short(kmz.key)}: say why it needs no correction",
-        ]
-        assert (
+        assert refused[0].startswith(  # the refusal names the warnings he can accept
+            f"abc123: no open warning has that name. The open warnings are: {audit.short(kmz.key)} (Quantix couldn't"
+        )
+        assert refused[1] == f"{audit.short(kmz.key)}: say why it needs no correction"
+        assert (  # named as the model tends to: the report's label, or the file it is about
             audit.accept(
                 session,
                 client.app.state.home,
                 tender_id,
                 rania,
-                [audit.Accepted(finding=audit.short(kmz.key), reason=reason)],
+                [audit.Accepted(finding=f"WARNING, short name {audit.short(kmz.key)}", reason=reason)],
             )
             == []
         )
@@ -180,4 +180,7 @@ def test_the_manager_audits_through_his_tool(client, tender, tmp_path):
     client.app.state.office.engineer_spoke(tender_id)
     wait_for(lambda o: returned, client, tender_id)
     assert returned[0].startswith("The audit found 2 blockers and 2 warnings:\n- BLOCKER: A row of the client's BOQ")
-    assert returned[0].endswith("Accept a warning only with your reason.")
+    assert returned[0].endswith(
+        'Accept a warning only with your reason, as accept_warnings=[{"finding": "<short name>", "reason": "why it '
+        'needs no correction"}].'
+    )

@@ -264,11 +264,12 @@ class Accepted(BaseModel):
 def accept(session: Session, home: Path, tender_id: str, manager: Staff, accepted: list[Accepted]) -> list[str]:
     """Keep the Manager's reasons for the warnings he accepts. Returns what couldn't be accepted."""
     warnings = {short(f.key): f for f in open_findings(session, home, tender_id) if f.severity == WARNING}
+    listed = "; ".join(f"{name} ({f.message[:70]})" for name, f in warnings.items()) or "none"
     problems = []
     for a in accepted:
-        finding = warnings.get(a.finding.strip().lower())
+        finding = _named(a.finding, warnings)
         if finding is None:
-            problems.append(f"{a.finding}: no open warning has that name")
+            problems.append(f"{a.finding}: no open warning has that name. The open warnings are: {listed}")
         elif len(a.reason.split()) < 3:
             problems.append(f"{a.finding}: say why it needs no correction")
         else:
@@ -279,6 +280,16 @@ def accept(session: Session, home: Path, tender_id: str, manager: Staff, accepte
     return problems
 
 
+def _named(text: str, warnings: dict[str, Finding]) -> Finding | None:
+    """The warning a name points at: its short name anywhere in the text, or words only one warning contains."""
+    token = re.search(r"\b[0-9a-f]{6}\b", text.lower())
+    if token and token.group(0) in warnings:
+        return warnings[token.group(0)]
+    words = text.strip().lower()
+    matches = [f for f in warnings.values() if words and words in f.message.lower()]
+    return matches[0] if len(matches) == 1 else None
+
+
 def report(found: list[Finding]) -> str:
     """The audit for the Manager."""
     if not found:
@@ -287,11 +298,12 @@ def report(found: list[Finding]) -> str:
     lines = []
     for f in found:
         where = "; ".join(r.label for r in f.refs)
-        name = "BLOCKER" if f.severity == BLOCKER else f"WARNING {short(f.key)}"
+        name = "BLOCKER" if f.severity == BLOCKER else f"WARNING, short name {short(f.key)}"
         lines.append(f"- {name}: {f.message}" + (f" ({where})" if where else ""))
     return (
         f"The audit found {_plural(blockers, 'blocker', 'blockers')} and "
         f"{_plural(len(found) - blockers, 'warning', 'warnings')}:\n"
         + "\n".join(lines)
-        + "\nClear every blocker: send work back, assign it or escalate it. Accept a warning only with your reason."
+        + "\nClear every blocker: send work back, assign it or escalate it. Accept a warning only with your reason, "
+        'as accept_warnings=[{"finding": "<short name>", "reason": "why it needs no correction"}].'
     )
