@@ -409,4 +409,16 @@ work's state outside the model and the process, and keep a trace of every run.
   - Someone cut off mid-work only woke if a new message named them. Now a turn that was cut short, or interrupted
     by Quantix closing, wakes the person again.
   - The 40-turn budget started over at every restart. It now counts the turns since the engineer last wrote.
-- **Checks:** 121 service tests. Each new test fails when the behaviour it covers is taken out.
+- **Migration 0014 first failed on the real database.** It added `office_paused` with `batch_alter_table`. That
+  rebuilds tenders: it copies the table, drops the old one and renames the copy. With foreign keys on, dropping
+  tenders deletes every tender's records through the cascades.
+  - SQLite refused on the real database ("database table is locked"), so nothing was lost. The service couldn't
+    start until the two empty tables the failed run left behind were dropped.
+  - On a test database, the same migration deleted the tender's messages.
+  - 0014 now adds the column in place (`op.add_column`). A new test runs the newest migration over a database that
+    already holds a tender and its records.
+  - Rehearsed on a copy of the real database: the upgrade to 0014 kept every tender, message, BOQ line, decision,
+    document and task.
+  - 0009 rebuilt tenders the same way when it added `outcome`. It is applied already, and new migrations are
+    covered by the test.
+- **Checks:** 122 service tests. Each new test fails when the behaviour it covers is taken out.
