@@ -108,8 +108,14 @@ def test_a_web_price_rests_on_the_page_quantix_saved(client, tender, monkeypatch
             "url": URL,
         }
         other = office.hire(session, tender_id, "Omar Haddad", "Buyer", {})
+        session.commit()
         with pytest.raises(ValueError, match="You haven't read"):
             lookup.cited(session, tender_id, other.id, URL)
+    omar = fake_turn(client, tender_id, other.id)
+    with pytest.raises(ModelRetry, match="You haven't read that web page"):  # nor price from it
+        tools.propose_rate(
+            omar, "6.3", "web", note, unit_rate=Decimal("230"), web_page_id=page_id, quote="C35/20 OPC | 230.00 SAR"
+        )
 
     tools.add_company(turn, "Green Concrete Readymix", "supplier", "ready-mixed concrete", website=URL)
     assert tools.search_directory(turn, "ready-mixed").endswith(f"· {URL}")

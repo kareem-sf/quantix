@@ -795,6 +795,8 @@ def propose_rate(
     Quantix computes the rate and the amount."""
     with _working(ctx, f"Pricing item {boq_item}") as (session, me):
         _read_first(ctx, session, {(document_id, page)})
+        if basis == "web" and web_page_id and not records.has_opened(session, me.id, "web", web_page_id):
+            raise ValueError("You haven't read that web page: read it with read_web_page first, then price from it.")
         rate = estimate.propose_rate(
             session,
             ctx.deps.tender_id,
