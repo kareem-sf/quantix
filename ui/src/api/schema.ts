@@ -1448,6 +1448,36 @@ export interface components {
             /** Review Note */
             review_note: string | null;
         };
+        /**
+         * DueSource
+         * @description Where the due date comes from, shown with it.
+         */
+        DueSource: {
+            /**
+             * Basis
+             * @description The engineer's own date, or a tender document's
+             * @enum {string}
+             */
+            basis: "engineer" | "document";
+            /**
+             * Set By
+             * @description Who entered it, when not the engineer: the staff member's first name
+             */
+            set_by: string | null;
+            /**
+             * Set At
+             * @description When it was entered; unknown for dates entered before this was kept
+             */
+            set_at: string | null;
+            /** Document Id */
+            document_id?: string | null;
+            /** Document Name */
+            document_name?: string | null;
+            /** Page */
+            page?: number | null;
+            /** Quote */
+            quote?: string | null;
+        };
         /** EnquiryOut */
         EnquiryOut: {
             /** Id */
@@ -2332,6 +2362,7 @@ export interface components {
              * @description Submission deadline, when known
              */
             due_date: string | null;
+            due_date_source?: components["schemas"]["DueSource"] | null;
             /**
              * Outcome
              * @enum {string}

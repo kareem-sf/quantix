@@ -18,6 +18,7 @@ from quantix import company, tenders
 from quantix.boq import records as boq
 from quantix.core.review import APPROVED, PROPOSED, REVIEWED
 from quantix.documents import library
+from quantix.documents.models import Document
 from quantix.estimate import records as estimate
 from quantix.office import packs, records, tools
 from quantix.office.models import ENGINEER, OFFICE, TEAM, Message, Staff
@@ -77,6 +78,8 @@ work. You don't produce records yourself (BOQ lines, facts, scales, measurements
 items, quotes): your staff do, so every record gets a second pair of eyes.
 - Start by telling the engineer your plan in a few lines (message_engineer). Look over the document list and the
   key pages yourself, but don't read the package page by page: that is your team's work.
+- Find the submission deadline in the tender documents (the invitation or instructions to tenderers) and set it
+  with set_due_date, quoting the page. If no document states it, tell the engineer so they can set it.
 - Hire the people this particular tender needs, when it needs them, with hire, giving each the kinds of work
   they will do. There is no standard team: choose roles from the actual work. Keep the team small: give work to
   the people you have before hiring anyone new, and release people whose work is done.
@@ -124,6 +127,18 @@ def instructions(member: Staff, autonomous: bool) -> str:
     return f"{who}\n\n{MANAGER_DUTIES if member.is_manager else STAFF_DUTIES}\n\n{RULES}{mode}"
 
 
+def _due(session: Session, tender: tenders.Tender) -> str:
+    """The due date with where it comes from, so the office never passes the engineer's date off as the tender's."""
+    if tender.due_date is None:
+        return "not known yet"
+    when = f"{tender.due_date.day} {tender.due_date:%B %Y}"
+    if tender.due_date_basis == tenders.DOCUMENT_DATE and tender.due_date_document_id:
+        document = session.get(Document, tender.due_date_document_id)
+        name = document.name if document else "a tender document"
+        return f"{when}, from {name}, page {tender.due_date_page}: “{tender.due_date_quote}”"
+    return f"{when}, the engineer's date, not from the tender documents"
+
+
 def situation(session: Session, member: Staff, new: list[Message]) -> str:
     """What this person needs to know now. Rebuilt every turn from the records, never from memory."""
     tender = tenders.get_tender(session, member.tender_id)
@@ -138,7 +153,7 @@ def situation(session: Session, member: Staff, new: list[Message]) -> str:
         return f"- {names.get(m.sender, 'Someone')}{tag}, {where}: {m.text}"
 
     parts = [
-        f"Tender: {tender.name}. Due: {tender.due_date or 'not known yet'}.",
+        f"Tender: {tender.name}. Due: {_due(session, tender)}.",
         f"Documents: {len(documents)} files, {sum(d.status == 'read' for d in documents)} read.",
         "Team:\n" + "\n".join(f"- {m.name}, {m.role}" + (f" (now: {m.now})" if m.now else "") for m in team),
     ]

@@ -1,4 +1,4 @@
-import { IconArrowUp, IconChevronRight } from "@tabler/icons-react";
+import { IconArrowUp, IconChevronRight, IconInfoCircle } from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { AddDocuments } from "../documents/AddDocuments";
@@ -9,7 +9,7 @@ import { Prose, tidy } from "../office/Prose";
 import { TEAM, firstName, useDecisions, useMessages, useOffice, useSend } from "../office/queries";
 import { Opening } from "../app/Opening";
 import { useAudit, useDecideLesson, useLessons } from "../review/queries";
-import { dueSentence } from "./due";
+import { dueSentence, dueSource, type DueSource as DueSourceOut } from "./due";
 import { usePackages } from "../subcontract/queries";
 import { useSubmission } from "../submission/queries";
 import { useDeleteTender, useSetDueDate, useSetOutcome, useTender } from "./queries";
@@ -81,7 +81,7 @@ export function Overview() {
           : `${waiting.length} ${waiting.length === 1 ? "decision needs" : "decisions need"} you`}
       </h1>
       <p className="flex flex-wrap items-center gap-x-2 text-sm text-ink-2">
-        <DueDate tenderId={tenderId} due={tender.data.due_date} />
+        <DueDate tenderId={tenderId} due={tender.data.due_date} source={tender.data.due_date_source} />
         {state && <span>{state.trim()}</span>}
         <Outcome tenderId={tenderId} outcome={tender.data.outcome} />
       </p>
@@ -373,13 +373,14 @@ function DeleteTender({ tenderId, name }: { tenderId: string; name: string }) {
 }
 
 /** How the tender went. Later tenders use won and lost rates as benchmarks. */
-function DueDate({ tenderId, due }: { tenderId: string; due: string | null }) {
+function DueDate({ tenderId, due, source }: { tenderId: string; due: string | null; source?: DueSourceOut | null }) {
   const set = useSetDueDate(tenderId);
   const [value, setValue] = useState<string | null>(null); // the date being entered, while changing it
   if (value === null)
     return (
-      <span>
-        {dueSentence(due, new Date())}{" "}
+      <span className="inline-flex items-center gap-1">
+        {dueSentence(due, new Date())}
+        {due && <DueSourceNote tenderId={tenderId} source={source} />}{" "}
         <button type="button" onClick={() => setValue(due ?? "")} className="text-ink-3 hover:text-ink">
           {due ? "Change" : "Set the due date"}
         </button>
@@ -405,6 +406,43 @@ function DueDate({ tenderId, due }: { tenderId: string; due: string | null }) {
         Cancel
       </button>
     </form>
+  );
+}
+
+/** Where the due date comes from, on hover or focus: the engineer's own date, or the page that states it. */
+function DueSourceNote({ tenderId, source }: { tenderId: string; source?: DueSourceOut | null }) {
+  const said = dueSource(source);
+  if (!said || !source) return null;
+  return (
+    <span className="group relative inline-flex">
+      <button
+        type="button"
+        aria-label={`Where the due date comes from: ${said.title}`}
+        className="inline-flex text-ink-3 hover:text-ink"
+      >
+        <IconInfoCircle size={15} stroke={1.75} />
+      </button>
+      <span
+        role="note"
+        className="invisible absolute top-full left-1/2 z-20 mt-1.5 w-72 -translate-x-1/2 rounded-lg border border-subtle bg-white p-3 text-[13px] leading-snug text-ink-2 shadow-md group-focus-within:visible group-hover:visible"
+      >
+        <span className="mb-1 block font-medium text-ink">{said.title}</span>
+        {source.basis === "document" && source.document_id ? (
+          <>
+            “{source.quote}”{" "}
+            <Link
+              to={`/tenders/${tenderId}/documents?doc=${source.document_id}&page=${source.page}`}
+              className="text-ink underline underline-offset-4"
+            >
+              {source.document_name}, page {source.page}
+            </Link>
+            {source.set_by && <span className="mt-1 block text-ink-3">Entered by {source.set_by}.</span>}
+          </>
+        ) : (
+          said.text
+        )}
+      </span>
+    </span>
   );
 }
 

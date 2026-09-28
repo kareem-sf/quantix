@@ -13,12 +13,12 @@ from pydantic_ai import BinaryContent, ModelRetry, RunContext, ToolReturn
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from quantix import company
+from quantix import company, tenders
 from quantix.boq import records as boq
 from quantix.boq.models import FACT_KINDS, BoqItem
 from quantix.core import calculate as calculate_
 from quantix.core.review import APPROVED, PROPOSED
-from quantix.documents import library, readers, web
+from quantix.documents import evidence, library, readers, web
 from quantix.documents.models import Document
 from quantix.estimate import analysis
 from quantix.estimate import records as estimate
@@ -510,17 +510,34 @@ def assign_task(ctx: RunContext[Turn], staff_name: str, title: str, brief: str) 
     return f"Task {task.id} is with {member.first_name}."
 
 
-def set_due_date(ctx: RunContext[Turn], due_date: date, source: str) -> str:
-    """Set the tender's submission deadline, shown on the Overview. source: "engineer" when the engineer told you
-    the date, or the page of the tender documents that states it ("<document name>, page <n>"), read first. Quantix
-    notes the change in the team room."""
+def set_due_date(ctx: RunContext[Turn], due_date: date, source: str, quote: str | None = None) -> str:
+    """Set the tender's submission deadline, shown on the Overview with where it comes from. source: "engineer" when
+    the engineer told you the date; or the page of the tender documents that states it ("<document name>, page
+    <n>"), read first, with quote: the words on that page that give the deadline, exactly as read_page shows them.
+    A date the engineer gave stands: if the documents give another, tell the engineer, citing the page. Quantix notes
+    the change in the team room."""
     with _working(ctx) as (session, me):
+        tender = session.get(Tender, ctx.deps.tender_id)
         if source.strip().lower() in ("engineer", "the engineer"):
+            tenders.set_due_date(tender, due_date, me.id)
             said = "as the engineer asked"
         else:
-            said = f"from {lookup.cited(session, ctx.deps.tender_id, me.id, source)['label']}"
-        tender = session.get(Tender, ctx.deps.tender_id)
-        tender.due_date = due_date
+            if tender.due_date_basis == tenders.ENGINEER_DATE:
+                given = f"{tender.due_date.day} {tender.due_date:%B %Y}"
+                raise ValueError(
+                    f"The engineer set the due date to {given}, and it stands. If the documents give another date, "
+                    "tell the engineer, citing the page."
+                )
+            cited = lookup.cited(session, ctx.deps.tender_id, me.id, source)
+            if not cited.get("document_id"):
+                raise ValueError('Give the page of the tender documents that states the deadline, or "engineer".')
+            if not quote or not quote.strip():
+                raise ValueError("Quote the words on that page that give the deadline, as read_page shows them.")
+            evidence.check_quote(session, ctx.deps.tender_id, cited["document_id"], cited["page"], quote)
+            tenders.set_due_date(
+                tender, due_date, me.id, tenders.DOCUMENT_DATE, cited["document_id"], cited["page"], quote.strip()
+            )
+            said = f"from {cited['label']}"
         when = f"{due_date.day} {due_date:%B %Y}"
         records.post(session, ctx.deps.tender_id, me.id, TEAM, f"{me.first_name} set the due date to {when}, {said}.")
     return f"The tender is due {when}."

@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { Priced } from "../estimate/queries";
@@ -107,6 +107,33 @@ describe("Overview", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(service.state.tenders[0].due_date).toBe("2026-09-30"));
     expect(await screen.findByRole("button", { name: "Change" })).toBeInTheDocument();
+    // and says it is the engineer's own date, not the tender documents'
+    await userEvent.hover(screen.getByRole("button", { name: /^Where the due date comes from/ }));
+    expect(screen.getByRole("note")).toHaveTextContent(
+      "Set by you, not from the tender documentsYou set this date on 28 September 2026. It wasn't taken from the tender documents.",
+    );
+  });
+
+  it("quotes the page a due date was taken from, one click from it", async () => {
+    const source = {
+      basis: "document" as const,
+      set_by: "Salem",
+      set_at: "2026-09-28T07:40:00Z",
+      document_id: "d1",
+      document_name: "ITT.pdf",
+      page: 4,
+      quote: "Tenders are due by 14 October 2026.",
+    };
+    fakeService({ tenders: [{ ...tender, due_date: "2026-10-14", due_date_source: source }], documents: [doc] });
+    openApp("/tenders/t1");
+
+    const note = await screen.findByRole("note");
+    expect(note).toHaveTextContent("From the tender documents“Tenders are due by 14 October 2026.”");
+    expect(within(note).getByRole("link", { name: "ITT.pdf, page 4" })).toHaveAttribute(
+      "href",
+      "/tenders/t1/documents?doc=d1&page=4",
+    );
+    expect(note).toHaveTextContent("Entered by Salem.");
   });
 
   it("deletes a tender only after asking", async () => {

@@ -33,11 +33,16 @@ def test_create_list_and_get(client):
 
 def test_the_due_date_changes_on_its_own(client):
     tender = client.post("/tenders", json={"name": "Al Noor School"}).json()
+    assert tender["due_date_source"] is None
     changed = client.patch(f"/tenders/{tender['id']}", json={"due_date": "2026-09-30"}).json()
     assert (changed["due_date"], changed["outcome"]) == ("2026-09-30", "open")
+    source = changed["due_date_source"]  # the engineer's own date, not from the tender documents
+    assert (source["basis"], source["set_by"], source["document_id"]) == ("engineer", None, None)
+    assert source["set_at"] is not None
     kept = client.patch(f"/tenders/{tender['id']}", json={"outcome": "submitted"}).json()
     assert (kept["due_date"], kept["outcome"]) == ("2026-09-30", "submitted")  # a change to the outcome keeps the date
-    assert client.patch(f"/tenders/{tender['id']}", json={"due_date": None}).json()["due_date"] is None
+    cleared = client.patch(f"/tenders/{tender['id']}", json={"due_date": None}).json()
+    assert (cleared["due_date"], cleared["due_date_source"]) == (None, None)
 
 
 def test_rejects_a_blank_name(client):

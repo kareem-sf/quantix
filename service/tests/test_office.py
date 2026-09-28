@@ -19,7 +19,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models.function import DeltaToolCall, FunctionModel
-from test_documents import PDF, read_all, upload
+from test_documents import PDF, make_pdf, read_all, upload
 
 from quantix import settings
 from quantix.api.app import create_app
@@ -606,7 +606,8 @@ def test_released_staff_leave_their_open_tasks_to_be_given_out_again(client, off
 
 
 def test_the_manager_sets_the_due_date_the_engineer_gives_or_a_page_he_read_states(client, office):
-    """He said he had set it when nothing could: now he can, and the team room shows it."""
+    """He said he had set it when nothing could: now he can, the team room shows it, and the date always shows
+    where it comes from. A date from the documents quotes its page; the engineer's own date stands over it."""
     from datetime import date
 
     from pydantic_ai import ModelRetry
@@ -615,21 +616,61 @@ def test_the_manager_sets_the_due_date_the_engineer_gives_or_a_page_he_read_stat
     from quantix.office import tools
 
     tender_id, _ = office
+    upload(
+        client, tender_id, {"ITT.pdf": make_pdf([["Instructions to Tenderers", "Tenders are due by 14 October 2026."]])}
+    )
+    read_all(client, tender_id)
     with client.app.state.sessions() as session:
         salem = office_records.hire(session, tender_id, "Salem Al Suwaidi", "Tender Manager", {}, is_manager=True)
         session.commit()
         salem_id = salem.id
     state = client.app.state
     ctx = SimpleNamespace(deps=tools.Turn(state.home, state.sessions, tender_id, salem_id, False, threading.Event()))
-    with pytest.raises(ModelRetry, match="You haven't read Conditions.pdf, page 1"):
-        tools.set_due_date(ctx, date(2026, 10, 1), "Conditions.pdf, page 1")
+    october = date(2026, 10, 14)
+    with pytest.raises(ModelRetry, match="You haven't read ITT.pdf, page 1"):
+        tools.set_due_date(ctx, october, "ITT.pdf, page 1", "Tenders are due by 14 October 2026.")
+    with client.app.state.sessions() as session:
+        office_records.note_opened(session, tender_id, salem_id, "page", f"{itt_id(client, tender_id)}:1")
+        session.commit()
+    with pytest.raises(ModelRetry, match="Quote the words on that page"):
+        tools.set_due_date(ctx, october, "ITT.pdf, page 1")
+    with pytest.raises(ModelRetry, match="is not on ITT.pdf, page 1"):
+        tools.set_due_date(ctx, october, "ITT.pdf, page 1", "Tenders close on 14 October 2026.")
+    assert (
+        tools.set_due_date(ctx, october, "ITT.pdf, page 1", "due by 14 October 2026")
+        == "The tender is due 14 October 2026."
+    )
+    tender = client.get(f"/tenders/{tender_id}").json()
+    assert tender["due_date"] == "2026-10-14"
+    source = {k: v for k, v in tender["due_date_source"].items() if k != "set_at"}
+    assert source == {
+        "basis": "document",
+        "set_by": "Salem",
+        "document_id": itt_id(client, tender_id),
+        "document_name": "ITT.pdf",
+        "page": 1,
+        "quote": "due by 14 October 2026",
+    }
+
     assert tools.set_due_date(ctx, date(2026, 9, 30), "engineer") == "The tender is due 30 September 2026."
-    assert client.get(f"/tenders/{tender_id}").json()["due_date"] == "2026-09-30"
+    source = client.get(f"/tenders/{tender_id}").json()["due_date_source"]
+    assert (source["basis"], source["set_by"], source["document_id"], source["quote"]) == (
+        "engineer",
+        "Salem",
+        None,
+        None,
+    )
     said = team_room(client, tender_id)[-1]
     assert (said["sender"], said["text"]) == (
         salem_id,
         "Salem set the due date to 30 September 2026, as the engineer asked.",
     )
+    with pytest.raises(ModelRetry, match="The engineer set the due date to 30 September 2026, and it stands"):
+        tools.set_due_date(ctx, october, "ITT.pdf, page 1", "due by 14 October 2026")
+
+
+def itt_id(client, tender_id) -> str:
+    return next(d["id"] for d in client.get(f"/tenders/{tender_id}/documents").json() if d["name"] == "ITT.pdf")
 
 
 def test_only_the_manager_brings_decisions_to_the_engineer():

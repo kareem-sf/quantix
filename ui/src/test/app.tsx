@@ -357,7 +357,13 @@ export function fakeService(initial: Partial<FakeState> = {}) {
       return json(tender, 201);
     }
     const tender = state.tenders.find((t) => path === `/tenders/${t.id}`);
-    if (tender && method === "PATCH") Object.assign(tender, body);
+    if (tender && method === "PATCH") {
+      Object.assign(tender, body);
+      if ("due_date" in body) {  // the engineer's own date, as the service records it
+        const set_at = "2026-09-28T07:40:00Z";
+        tender.due_date_source = body.due_date ? { basis: "engineer", set_by: null, set_at, document_id: null, document_name: null, page: null, quote: null } : null;
+      }
+    }
     if (tender && method === "DELETE") {
       state.tenders = state.tenders.filter((t) => t !== tender);
       return new Response(null, { status: 204 });

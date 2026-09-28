@@ -5107,6 +5107,96 @@
         ],
         "title": "DraftOut"
       },
+      "DueSource": {
+        "properties": {
+          "basis": {
+            "type": "string",
+            "enum": [
+              "engineer",
+              "document"
+            ],
+            "title": "Basis",
+            "description": "The engineer's own date, or a tender document's"
+          },
+          "set_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Set By",
+            "description": "Who entered it, when not the engineer: the staff member's first name"
+          },
+          "set_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Set At",
+            "description": "When it was entered; unknown for dates entered before this was kept"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "document_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Name"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote"
+          }
+        },
+        "type": "object",
+        "required": [
+          "basis",
+          "set_by",
+          "set_at"
+        ],
+        "title": "DueSource",
+        "description": "Where the due date comes from, shown with it."
+      },
       "EnquiryOut": {
         "properties": {
           "id": {
@@ -7970,6 +8060,16 @@
             ],
             "title": "Due Date",
             "description": "Submission deadline, when known"
+          },
+          "due_date_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DueSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "outcome": {
             "type": "string",

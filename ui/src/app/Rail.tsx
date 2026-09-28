@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, useLocation, useParams } from "react-router";
 import { Face } from "../office/Face";
 import { firstName, useOffice } from "../office/queries";
-import { dueShort } from "../tenders/due";
+import { dueShort, dueSource } from "../tenders/due";
 import { useTenders } from "../tenders/queries";
 
 const STAGES = [
@@ -58,7 +58,9 @@ export function Rail() {
               className={`flex flex-col gap-px rounded-md px-2 py-[7px] ${tender.id === tenderId ? "bg-selected" : "hover:bg-selected/60"}`}
             >
               <span className={tender.id === tenderId ? "font-medium" : ""}>{tender.name}</span>
-              <span className="text-xs text-ink-3">{dueShort(tender.due_date)}</span>
+              <span className="text-xs text-ink-3" title={dueSource(tender.due_date_source)?.title}>
+                {dueShort(tender.due_date)}
+              </span>
             </Link>
             {tender.id === tenderId &&
               STAGES.map(([label, path]) => (

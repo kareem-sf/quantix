@@ -119,9 +119,8 @@ def returned_draft(session: Session, requirement: Requirement) -> Draft | None:
     """The checklist item's newest draft when it was sent back and nothing has replaced it: the text to correct."""
     if submission.current_draft(session, requirement.id) is not None:
         return None
-    query = select(Draft).where(Draft.requirement_id == requirement.id).order_by(Draft.created_at.desc())
-    newest = session.scalars(query).first()
-    return newest if newest is not None and newest.status == "rejected" else None
+    query = select(Draft).where(Draft.requirement_id == requirement.id, Draft.status == "rejected")
+    return session.scalars(query.order_by(Draft.created_at.desc())).first()
 
 
 def state(session: Session, kind: str, r: Any) -> str:

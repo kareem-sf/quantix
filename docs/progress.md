@@ -773,3 +773,11 @@ the claim.
   Quantix notes the change in the team room.
 - **The rules** now say that when no tool can do what is asked, the office says so plainly, never that it is done.
 - **Checks:** 2 new service tests and 1 interface test.
+- **Where the date comes from** is kept with it (migration 0022, columns added in place): the engineer's own date,
+  entered by them or by the Manager on their word, or a tender document's, with the page and the words that state
+  it, checked to be on that page. The Overview shows it on hover or focus of the mark beside the date: "Set by you,
+  not from the tender documents", or the quote with a link to its page; the sidebar date has the same title. The
+  Manager's duties are to find the deadline in the documents and set it quoting the page, or to tell the engineer
+  none states it. A date the engineer gave stands: a document date can't replace it, and the Manager tells the
+  engineer instead. His briefing says which kind of date it is, so the office never passes the engineer's date off
+  as the tender's. Dates entered before this are recorded as the engineer's, with no time.
