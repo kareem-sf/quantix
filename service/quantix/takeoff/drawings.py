@@ -340,9 +340,10 @@ def _find_rooms(d: cad.Drawing, page: int, known: Meanings, metres: float | None
             if area >= min_area and perimeter and 2 * area / perimeter >= min_width:
                 rings.append((ring, "walls"))
     label_layers = known.layers_for("room_label")
-    texts = [
-        (i, t) for i, t in d.words(page) if not label_layers or meaning_of(known.layers, d.layer_of(i)) == "room_label"
-    ]
+    if label_layers:
+        texts = [(i, t) for i, t in d.words(page) if meaning_of(known.layers, d.layer_of(i)) == "room_label"]
+    else:  # no layer is mapped as room names: take words, not levels, numbers or tags
+        texts = [(i, t) for i, t in d.words(page) if len(re.findall(r"[^\W\d_]", t.text)) >= 3]
     anchors = np.array([[t.x, t.y] for _, t in texts]) if texts else np.zeros((0, 2))
     order = sorted(range(len(rings)), key=lambda k: cad.ring_area(rings[k][0]))
     taken: set[int] = set()
@@ -375,7 +376,9 @@ def _enclosing_segments(d: cad.Drawing, page: int, known: Meanings) -> list[tupl
         for insert in d.select(page, cad.Rule(blocks=blocks)):
             chosen |= _inside_insert(d, int(insert))
     derived = np.flatnonzero((d.index[:, 0] == page) & ((d.index[:, 6] & cad.DERIVED) != 0))
-    chosen |= {int(i) for i in derived if meaning_of(known.layers, d.layer_of(int(i))) in ("walls", "fire_rated", "columns")}
+    chosen |= {
+        int(i) for i in derived if meaning_of(known.layers, d.layer_of(int(i))) in ("walls", "fire_rated", "columns")
+    }
     doors: set[int] = set()
     door_layers = known.layers_for("doors")
     if door_layers:
@@ -660,7 +663,7 @@ def _unmeasured(session: Session, home: Path, document: Document, d: cad.Drawing
             placed = d.placed.get(i)
             meaning = meaning_of(known.blocks, placed.block) if placed else None
             name = placed.block if meaning else None
-            if not meaning and not (d.flags(i) & cad.IN_BLOCK):
+            if not meaning and not _in_mapped_block(d, i, known):
                 meaning, name = meaning_of(known.layers, d.layer_of(i)), d.layer_of(i)
             if meaning in PRICED:
                 by_meaning[(meaning, name)].append(i)
@@ -680,6 +683,17 @@ def _unmeasured(session: Session, home: Path, document: Document, d: cad.Drawing
                 )
             )
     return found
+
+
+def _in_mapped_block(d: cad.Drawing, i: int, known: Meanings) -> bool:
+    """Whether an object sits inside a block the layer map names: that block stands for it."""
+    parent = d.parent(i)
+    while parent is not None:
+        placed = d.placed.get(parent)
+        if placed is not None and meaning_of(known.blocks, placed.block):
+            return True
+        parent = d.parent(parent)
+    return False
 
 
 def _room_names(session: Session, home: Path, document: Document, d: cad.Drawing, tag: str) -> list[Problem]:

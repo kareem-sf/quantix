@@ -510,7 +510,8 @@ function UnitsNote(props: { tenderId: string; documentId: string; scale: Sheet["
   const decide = useDecideScale(props.tenderId);
   const office = useOffice(props.tenderId);
   const people = new Map((office.data?.staff ?? []).map((m) => [m.id, m]));
-  const [units, setChoice] = useState(props.header ?? "millimetres");
+  const [choice, setChoice] = useState<string | null>(null);
+  const units = choice ?? props.header ?? "millimetres"; // what the drawing says, until the engineer picks
   const scale = props.scale;
   if (!scale)
     return (

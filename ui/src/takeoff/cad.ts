@@ -105,7 +105,7 @@ function useRefresh(tenderId: string) {
   const client = useQueryClient();
   return () =>
     Promise.all(
-      [["takeoff", tenderId], ["drawing"], ["gates", tenderId], ["queries", tenderId], ["layer-maps", tenderId]].map(
+      [["takeoff", tenderId], ["sheet"], ["drawing"], ["gates", tenderId], ["queries", tenderId], ["layer-maps", tenderId]].map(
         (queryKey) => client.invalidateQueries({ queryKey }),
       ),
     );

@@ -21,7 +21,11 @@ You need Python 3.12, Node 24 or later, and the [Tauri prerequisites](https://v2
 py -3.12 -m venv service/.venv
 service/.venv/Scripts/python -m pip install -e "./service[dev]"
 npm ci
+npm run cad
 ```
+
+`npm run cad` builds `qx-dwg`, the reader for DWG and DXF drawings (the `cad/` crate), which the service runs to read
+them. Build it again after changing `cad/`.
 
 On macOS or Linux, create the environment with `python3.12 -m venv service/.venv` and install with
 `service/.venv/bin/python -m pip install -e "./service[dev]"`.
@@ -35,6 +39,7 @@ the desktop window. Set `QUANTIX_HOME` to use another data folder, for example a
 | `npm run test:service` | Service tests |
 | `npm run test:ui` | Interface tests |
 | `npm run check` | Typecheck, Ruff and Clippy |
+| `npm run cad` | Build the drawing reader, `qx-dwg` |
 | `npm run verify` | `check`, then both test suites |
 | `npm run build` | Typecheck and production build of the interface into `dist/` |
 | `npm run bindings` | Regenerate the interface's API types from the service |

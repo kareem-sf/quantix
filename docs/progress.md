@@ -823,3 +823,41 @@ it: the audit hid it, nothing woke him for it, and approved work was not his to 
   escalated the markups unprompted, in one turn: reduce the site staff to the 72-day programme (recommended), extend
   the programme to 104 days, or keep them. A "keep" of his own would have reopened the work to be kept, so Quantix
   refuses one and adds its own; the decision page marks an escalation's first option "Recommended".
+
+## 28 September 2026: CAD drawings, takeoff from their objects, checks and tender queries
+
+The engineer asked for DWG reading to come into the plan, using OpenCADStudio's libraries and ideas without the
+application itself (GPL-3.0), so staff can read drawings, take off from them, verify the BOQ, answer questions, and
+find missing items and conflicts.
+
+- **The reader** (`cad/`, `qx-dwg`) on opencadcodec and opencadkernel (MPL-2.0), run as its own process. On the 19
+  as-built drawings of the GAC showroom (AutoCAD 2010, 31,000 to 187,000 objects each) every file read, in 0.2 to
+  1.2 s, into folders of 0.1 to 36 MB. The first probe's room names ("CLINIC ROOM 1") came from block definitions
+  no plan uses: placing only what is drawn is what makes counts right. A file the failsafe reader returns empty is
+  unreadable ("This drawing can't be opened").
+- **Pages, units and takeoff.** Model space and each layout are pages of their words. Units are a scale on page 1
+  the engineer approves; the office may only set the units the header states. Measurements are rules resolved to
+  object keys when filed, computed from exact lengths and areas each time they are read. A rule that finds nothing
+  for a BOQ line gives "Not on the drawings", the result the spec promised.
+- **Layer map, rooms, checks, queries.** A layer map from a closed list of meanings; rooms from outlines, or from
+  walls with each door's closing radius; drawing, BOQ and grid checks; tender queries with checked sources;
+  contract type and order of precedence as facts. On the real ground floor plan, with a map of its plaster,
+  column, glazing and door layers, Quantix found the washroom (3.83 m²) and the car elevator (18.31 m²), and no
+  room where the showroom front is open. The checks there found 578 plaster lines drawn twice over others, 200 3D
+  solids and 424 undecoded records not read, 5 clipped blocks, and drawn floor finishes, columns, sanitary fittings
+  and glazing that nothing measured yet. On the 140,000-object ceiling plan they ran in about 2 s.
+- **Office tools** in a `drawings` pack: `drawing_overview`, `query_drawing`, `view_drawing`, `find_problems`,
+  `set_drawing_units`, `measure_drawing`, `propose_layer_map`, `raise_query`. Only `view_drawing` needs an AI that
+  reads images, so an office AI that can't still takes off from CAD drawings.
+- **Screens.** The Takeoff screen draws a CAD drawing with WebGL: the engineer sets its units, clicks objects to
+  choose them, sees Quantix's count, length and area, and saves the measurement; layers can be hidden. A new
+  Queries screen lists tender queries and layer maps for approval, and what the checks find. Checked in the browser
+  on the real flooring plan in a scratch data folder: the units approved, a column picked and measured. That run
+  found the units not refreshing on the screen after they were set, now fixed.
+- **Migration 0023** adds `measurements.entities` and `rule` in place, and the `layer_maps` and `tender_queries`
+  tables.
+- **Left for later:** volumes of 3D solids, drawings a drawing refers to (xrefs), clipped blocks (placed whole, and
+  flagged), and symbols drawn as loose lines instead of blocks.
+- **Checks:** 13 new service tests with synthetic drawings written by `qx-dwg sample` (a two-room flat with a door,
+  windows, a hatch with an island, a hand-written dimension and a pipe through a fire-rated wall), 4 Rust tests and
+  6 new interface tests.

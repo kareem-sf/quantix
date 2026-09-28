@@ -185,6 +185,71 @@ Sheets are rendered and their vector paths extracted. Agents detect or set the s
 and place geometry in page coordinates, snapped to vectors where they exist. Quantix computes the length, area or
 count from the geometry and scale. Measurements link to BOQ items, and Quantix computes the comparison.
 
+## CAD drawings (DWG and DXF)
+
+- **The reader.** `cad/` is a Rust crate that builds `qx-dwg` on two MPL-2.0 libraries, opencadcodec (reading) and
+  opencadkernel (exact lengths, areas and closed regions), pinned to the revisions OpenCADStudio ships. OpenCADStudio
+  itself is GPL: its ideas are used, never its code. The service runs `qx-dwg` as a separate process with a time
+  limit (`documents/cad.py`), so a drawing the young library can't cope with only stops that process.
+  `QUANTIX_CAD` points at another build; otherwise the service uses `cad/target/release` or `debug`.
+- **What it writes.** `qx-dwg read` walks model space, then each paper layout that holds anything, placing every
+  block reference's contents with its full transform (nested blocks, MINSERT arrays, base points, object normals).
+  Layer "0" inside a block takes the reference's layer, as CAD shows it; an anonymous copy of a dynamic block is
+  counted under its definition. It never counts from the library's `entities()`, which includes block definitions.
+  Each placed object gets a key (the block references it sits in, then its handle, e.g. `1F3/2A`), its layer, block,
+  flags (closed, annotation, inside a block), extent, and exact length and area in drawing units. The folder,
+  `tenders/<id>/drawings/<sha256>/` beside the stored file, holds `drawing.json` (units, spaces, layers, blocks,
+  xrefs, what couldn't be read), `objects.json` (keys, texts, block references with attributes, dimensions with
+  their written text, tables, hatches, viewports) and three little-endian arrays. A drawing is read once; a newer
+  reader format reads it again. A file the failsafe reader returns empty is unreadable.
+- **Pages.** Each space is a page: model space first, then the layouts. A page's text is the words printed there,
+  top to bottom, then tables as `A1=… | B1=…` and dimensions whose text was written by hand, so search, quotes and
+  citations work unchanged. The page's width and height are its extent in drawing units.
+- **Units.** A drawing's units are a `Scale` on page 1, in metres per drawing unit, proposed by staff and approved
+  by the engineer. The office may only set what the drawing's header states; the engineer may set anything.
+  `units_evidence` gives the header, the extent in metres and notes that name units.
+- **Measurements by rule.** `measure_drawing` takes a `cad.Rule` (layers, blocks, types, words, block attributes,
+  closed outlines, hatch pattern, region, rooms, or keys). Quantix resolves it to the keys of the objects it takes
+  when it is filed (`Measurement.entities`, with `rule` kept; `points` stays empty), so the Manager reviews exactly
+  what was counted. `quantity()` computes from those objects' lengths, areas or copies and the drawing's units each
+  time it is read. A rule that takes nothing, linked to a BOQ line, records that the work isn't on the drawing:
+  `compare()` gives `not_on_drawings`.
+- **The layer map** (`LayerMap`, `takeoff/layers.py`) says what layers and blocks are, from a closed list
+  (`drawings.MEANINGS`). It is worked out on one drawing and applies by name to every drawing; a newer map overrides
+  an older one name by name, an approved map before one still being decided. Its checks refuse names no drawing has
+  and warn where the drawing contradicts a meaning (walls with no parallel faces a wall's thickness apart, doors
+  with no swing or block, room outlines that aren't closed).
+- **Rooms** (`drawings.rooms`): closed outlines on room-outline layers, or else the regions the walls, fire-rated
+  walls, columns and windows close off, found by opencadkernel's `bounded_faces` (`qx-dwg faces`). A door's leaf and
+  swing are left out and its opening closed by the swing's radius that isn't the leaf. Regions under 1 m² or thinner
+  than 0.5 m are dropped. Each room takes the names printed inside it (the room-name layers, or else any word).
+- **Checks** (`drawings.drawing_problems`, `boq_problems`, `grid_problems`), computed and never stored: what
+  couldn't be read (3D solids, images, proxies, undecoded records, unloaded xrefs, clipped blocks), layers that
+  don't print but hold objects, lines drawn twice, written dimensions that disagree with the drawn length, drawn
+  work the map calls work that no measurement takes, room names in no closed room, services crossing fire-rated
+  walls, grids that differ between drawings, and the BOQ's own lines billed twice, provisional and prime cost sums,
+  measured lines without a quantity, odd units and lines not on the drawings. Drawing measurements get their own
+  record checks: objects no longer in the drawing (blocker), the same object measured twice for a BOQ line
+  (blocker), the same sheet measured in another format, and objects on layers that don't print. The audit warns on
+  what couldn't be read in drawings the takeoff rests on.
+- **Newer copies.** A drawing measurement moves onto a newer copy only when its rule takes exactly the same keys
+  there, each with the same extent, length and area; an object added that the rule takes keeps it on the older copy.
+  Units move when the header's units are the same.
+- **Tender queries** (`TenderQuery`, `review/queries.py`): missing items, conflicts, BOQ errors and clarifications,
+  each with sources (a page with its quoted words, or a drawing's objects), an optional BOQ line and measurements,
+  which document governs, and the wording for the client. Quantix checks every source when it is raised, and warns
+  on figures no source or takeoff gives, a query already raised, a BOQ line that may cover a missing item, a
+  conflict that doesn't say which document governs, and a takeoff that matches the BOQ. The contract type and the
+  order of precedence are tender facts, audited once there are queries.
+- **Office tools** (the `drawings` pack): `drawing_overview`, `query_drawing`, `view_drawing` (the only one that
+  needs an AI that reads images) and `find_problems` read; `set_drawing_units`, `measure_drawing`,
+  `propose_layer_map` and `raise_query` produce.
+- **Screens.** `GET /documents/{id}/pages/{n}/screen` sends a page packed as `QXD1` (segments in 32-bit floats about
+  the page's centre, each segment's object, each object's layer, type, flags and extent, and the texts). The
+  Takeoff screen draws it with WebGL, with texts and highlights on a canvas over it; clicking picks the nearest
+  object, and `choose` gives Quantix's count, length and area of what is chosen. The Queries screen lists tender
+  queries and layer maps for the engineer's decision, and what the checks find.
+
 ## Testing
 
 Service tests use pytest. Agent behaviour is tested with a scripted model at the provider boundary (Pydantic AI

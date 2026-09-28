@@ -975,7 +975,7 @@ def query_drawing(
                 row += " · " + ", ".join(f"{k}={v}" for k, v in list(placed.attributes.items())[:4])
         text = d.text_of(i)
         if text and i not in d.placed:
-            row += f" · “{text[:60]}”"
+            row += f" · “{' '.join(text.split())[:60]}”"
         if d.length(i):
             row += f" · length {d.length(i):,.1f}"
         if d.area(i):

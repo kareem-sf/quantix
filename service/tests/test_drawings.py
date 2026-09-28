@@ -51,7 +51,13 @@ def flat(client):
         qs = office.hire(session, tender_id, "Omar Haddad", "Quantity Surveyor", {})
         rows = [
             ("8.1", "Aluminium windows", "nr", "3", "A1=8.1 | B1=Aluminium windows | C1=nr | D1=3"),
-            ("8.2", "Porcelain floor tiles to bedroom", "m2", "30", "A2=8.2 | B2=Porcelain floor tiles to bedroom | C2=m2 | D2=30"),
+            (
+                "8.2",
+                "Porcelain floor tiles to bedroom",
+                "m2",
+                "30",
+                "A2=8.2 | B2=Porcelain floor tiles to bedroom | C2=m2 | D2=30",
+            ),
             ("8.3", "Skirting", "m", "50", "A3=8.3 | B3=Skirting | C3=m | D3=50"),
             ("8.4", "Blockwork walls", "m", "70.2", "A4=8.4 | B4=Blockwork walls | C4=m | D4=70.2"),
         ]
@@ -131,14 +137,20 @@ def test_quantities_come_from_the_objects_once_the_units_are_approved(client, fl
     skirting = measure(
         client, tender_id, drawing, {"layers": ["A-SKRT*"]}, kind="length", label="Skirting", unit="m", boq_item="8.3"
     )
-    assert w1.json()["quantity"] == "2"
-    assert walls.json()["quantity"] == "70.200"  # the island in the hatch comes off: 36.10 - 1.00 below
+    assert w1.json()["quantity"] == "2" and skirting.json()["quantity"] == "0.000"  # nothing drawn on A-SKRT
+    assert walls.json()["quantity"] == "70.200"
     takeoff_view = client.get(f"/tenders/{tender_id}/takeoff").json()
     by_label = {m["label"]: m for m in takeoff_view["measurements"]}
     assert by_label["Tiles"]["quantity"] == "35.100" and by_label["Tiles"]["object_count"] == 1
     assert by_label["Windows"]["objects"] and by_label["Skirting"]["object_count"] == 0
     results = {c["item"]: c["result"] for c in takeoff_view["comparison"]}
-    assert results == {"8.1": "differs", "8.2": "differs", "8.3": "not_on_drawings", "8.4": "matches", None: "not_in_boq"}
+    assert results == {
+        "8.1": "differs",
+        "8.2": "differs",
+        "8.3": "not_on_drawings",
+        "8.4": "matches",
+        None: "not_in_boq",
+    }
     sheet = next(s for s in takeoff_view["sheets"] if s["document_id"] == drawing)
     assert (sheet["kind"], sheet["units"]) == ("cad", "millimetres")
 
@@ -211,7 +223,6 @@ def test_a_newer_copy_keeps_only_what_is_unchanged(client, flat):
     moved = {m["label"]: m for m in client.get(f"/tenders/{tender_id}/takeoff").json()["measurements"]}
     assert moved["Tiles"]["document_id"] == newer  # the hatch is the same in the newer copy
     assert moved["W1"]["document_id"] == drawing  # the rule takes a window more there: do it again
-    assert moved["Units" if "Units" in moved else "Tiles"]
     with client.app.state.sessions() as session:
         stale = takeoff.measurements(session, tender_id)
         w1_record = next(m for m in stale if m.label == "W1")
@@ -282,7 +293,10 @@ def test_staff_take_off_a_drawing_through_their_tools(client, flat, tmp_path):
         steps = [
             ToolCallPart("drawing_overview", {"document_id": drawing}),
             ToolCallPart("set_drawing_units", {"document_id": drawing, "units": "mm"}),
-            ToolCallPart("query_drawing", {"document_id": drawing, "rule": {"blocks": ["WIN-1200"]}, "group_by": "attribute:TYPE"}),
+            ToolCallPart(
+                "query_drawing",
+                {"document_id": drawing, "rule": {"blocks": ["WIN-1200"]}, "group_by": "attribute:TYPE"},
+            ),
             ToolCallPart(
                 "measure_drawing",
                 {
@@ -309,7 +323,11 @@ def test_staff_take_off_a_drawing_through_their_tools(client, flat, tmp_path):
         office.post(session, tender_id, ENGINEER, qs_id, "Omar, count the windows on A-101.")
         session.commit()
     client.app.state.office.engineer_spoke(tender_id)
-    wait_for(lambda o: [w["kind"] for w in client.get(f"/tenders/{tender_id}/review").json()].count("measurement") == 1, client, tender_id)
+    wait_for(
+        lambda o: [w["kind"] for w in client.get(f"/tenders/{tender_id}/review").json()].count("measurement") == 1,
+        client,
+        tender_id,
+    )
     assert seen[0].startswith("A-101.dwg, page 1: model space.")
     assert "- A-WALL: 6 Line, 1 Polyline" in seen[0] and "WIN-1200 ×3" in seen[0]
     assert seen[1] == "Units set as millimetres, for the Tender Manager's review and the engineer's approval."
@@ -345,7 +363,9 @@ def test_the_screen_copy_and_choosing_objects(client, flat):
         f"/documents/{drawing}/pages/1/choose", json={"stamp": header["stamp"], "rule": {"layers": ["A-FLOR"]}}
     ).json()
     assert chosen["count"] == 1 and chosen["area_m2"] == pytest.approx(35.1)
-    again = client.post(f"/documents/{drawing}/pages/1/choose", json={"stamp": header["stamp"], "objects": chosen["objects"]})
+    again = client.post(
+        f"/documents/{drawing}/pages/1/choose", json={"stamp": header["stamp"], "objects": chosen["objects"]}
+    )
     assert again.json()["keys"] == chosen["keys"]
     stale = client.post(f"/documents/{drawing}/pages/1/choose", json={"stamp": "old", "objects": [1]})
     assert stale.status_code == 409
