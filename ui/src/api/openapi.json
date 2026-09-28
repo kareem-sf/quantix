@@ -7888,21 +7888,38 @@
       "TenderChange": {
         "properties": {
           "outcome": {
-            "type": "string",
-            "enum": [
-              "open",
-              "submitted",
-              "won",
-              "lost"
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "open",
+                  "submitted",
+                  "won",
+                  "lost"
+                ]
+              },
+              {
+                "type": "null"
+              }
             ],
             "title": "Outcome"
+          },
+          "due_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due Date"
           }
         },
         "type": "object",
-        "required": [
-          "outcome"
-        ],
-        "title": "TenderChange"
+        "title": "TenderChange",
+        "description": "Only the fields sent change; a due date sent as null clears it."
       },
       "TenderCreate": {
         "properties": {

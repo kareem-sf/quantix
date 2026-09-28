@@ -137,6 +137,7 @@ MANAGER: list[Callable] = [
     t.escalate,
     t.assign_task,
     t.ask_engineer,
+    t.set_due_date,
     t.audit_tender,
 ]
 SEEING = {t.view_page, t.find_on_page, t.set_scale, t.measure}  # left out for an AI that can't read images

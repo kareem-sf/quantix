@@ -36,7 +36,10 @@ class TenderOut(BaseModel):
 
 
 class TenderChange(BaseModel):
-    outcome: Literal["open", "submitted", "won", "lost"]
+    """Only the fields sent change; a due date sent as null clears it."""
+
+    outcome: Literal["open", "submitted", "won", "lost"] | None = None
+    due_date: date | None = None
 
 
 @router.get("")
@@ -62,7 +65,10 @@ def change_tender(tender_id: str, body: TenderChange, session: DB) -> TenderOut:
     tender = service.get_tender(session, tender_id)
     if tender is None:
         raise HTTPException(status_code=404, detail="Tender not found.")
-    tender.outcome = body.outcome
+    if body.outcome is not None:
+        tender.outcome = body.outcome
+    if "due_date" in body.model_fields_set:
+        tender.due_date = body.due_date
     session.commit()
     return TenderOut.model_validate(tender)
 

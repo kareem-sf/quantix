@@ -29,6 +29,15 @@ export function useSetOutcome(id: string) {
   });
 }
 
+export function useSetDueDate(id: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (due_date: string | null) =>
+      must(await api.PATCH("/tenders/{tender_id}", { params: { path: { tender_id: id } }, body: { due_date } })),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["tenders"] }),
+  });
+}
+
 export function useDeleteTender(id: string) {
   const client = useQueryClient();
   return useMutation({

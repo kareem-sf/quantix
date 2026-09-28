@@ -97,6 +97,18 @@ describe("Overview", () => {
     expect(screen.getByRole("heading", { name: "Nothing needs you right now" })).toBeInTheDocument();
   });
 
+  it("sets the due date where it is shown", async () => {
+    const service = fakeService({ tenders: [tender], documents: [doc] });
+    openApp("/tenders/t1");
+
+    expect(await screen.findByText(/No due date yet\./)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Set the due date" }));
+    await userEvent.type(screen.getByLabelText("Due date"), "2026-09-30");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(service.state.tenders[0].due_date).toBe("2026-09-30"));
+    expect(await screen.findByRole("button", { name: "Change" })).toBeInTheDocument();
+  });
+
   it("deletes a tender only after asking", async () => {
     const service = fakeService({ tenders: [tender], documents: [doc] });
     const router = openApp("/tenders/t1");

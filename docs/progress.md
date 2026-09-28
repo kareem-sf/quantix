@@ -760,3 +760,16 @@ still lost work or stopped:
   Once he then accepted a stripped query that the answer had told him to keep whole; the engineer sent it back.
 - **Checks:** 3 new service tests and 1 interface test. 175 service tests and 69 interface tests pass, and so do the
   typecheck, Ruff and the format check.
+
+## 28 September 2026: the due date
+
+The engineer asked Salem to set the tender's due date. He replied that it was set, but nothing in Quantix could
+change a due date after the tender was created: no control on the Overview, no API, no office tool. His reply got
+past the answer check by citing an unrelated draft, since Quantix checks that a source was opened, not that it backs
+the claim.
+
+- **The engineer** sets or changes the due date where it is shown, on the Overview.
+- **The Tender Manager** can set it with `set_due_date`, as the engineer tells him or as a page he read states it.
+  Quantix notes the change in the team room.
+- **The rules** now say that when no tool can do what is asked, the office says so plainly, never that it is done.
+- **Checks:** 2 new service tests and 1 interface test.

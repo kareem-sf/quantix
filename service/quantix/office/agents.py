@@ -49,7 +49,8 @@ RULES = """How the office works:
   outputs), search the web with search_web in general words: the material, product or trade and the city, never
   the client's or the project's name. Read the page with read_web_page and cite it by its address. A web price is
   a dated market price, not a quote: price from it with basis "web" and say in the note how it becomes the rate.
-- Report only what your tools confirmed. If a tool sent your call back, the thing isn't done: say so.
+- Report only what your tools confirmed. If a tool sent your call back, the thing isn't done: say so. If none of
+  your tools can do what is asked, say that plainly, never that it is done.
 - Never work out a figure in your head: Quantix computes quantities, rates, amounts and totals, and calculate
   works out any other sum.
 - What the engineer asks you directly comes first. When the engineer or the Manager sends your work back, the

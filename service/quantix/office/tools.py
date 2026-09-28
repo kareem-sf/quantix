@@ -4,7 +4,7 @@ import re
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -29,6 +29,7 @@ from quantix.review import records as reviews
 from quantix.subcontract import records as subcontract
 from quantix.submission import records as submission
 from quantix.takeoff import records as takeoff
+from quantix.tenders import Tender
 
 TEAM_LIMIT = 5  # staff under the Manager; a tender's work is shared among a few, not spread across many
 FOLLOW_UP = "Follow up: "  # a task someone set themselves when they told the engineer what they would do next
@@ -507,6 +508,22 @@ def assign_task(ctx: RunContext[Turn], staff_name: str, title: str, brief: str) 
         task = records.assign(session, ctx.deps.tender_id, me, member, title, brief)
         me.now = f"Briefing {member.first_name}"
     return f"Task {task.id} is with {member.first_name}."
+
+
+def set_due_date(ctx: RunContext[Turn], due_date: date, source: str) -> str:
+    """Set the tender's submission deadline, shown on the Overview. source: "engineer" when the engineer told you
+    the date, or the page of the tender documents that states it ("<document name>, page <n>"), read first. Quantix
+    notes the change in the team room."""
+    with _working(ctx) as (session, me):
+        if source.strip().lower() in ("engineer", "the engineer"):
+            said = "as the engineer asked"
+        else:
+            said = f"from {lookup.cited(session, ctx.deps.tender_id, me.id, source)['label']}"
+        tender = session.get(Tender, ctx.deps.tender_id)
+        tender.due_date = due_date
+        when = f"{due_date.day} {due_date:%B %Y}"
+        records.post(session, ctx.deps.tender_id, me.id, TEAM, f"{me.first_name} set the due date to {when}, {said}.")
+    return f"The tender is due {when}."
 
 
 def release(ctx: RunContext[Turn], staff_name: str, reason: str) -> str:

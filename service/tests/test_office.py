@@ -605,6 +605,33 @@ def test_released_staff_leave_their_open_tasks_to_be_given_out_again(client, off
     assert "Open tasks in the team" not in briefing and "- Nora: audit the insurance annexure" not in briefing
 
 
+def test_the_manager_sets_the_due_date_the_engineer_gives_or_a_page_he_read_states(client, office):
+    """He said he had set it when nothing could: now he can, and the team room shows it."""
+    from datetime import date
+
+    from pydantic_ai import ModelRetry
+
+    from quantix.office import records as office_records
+    from quantix.office import tools
+
+    tender_id, _ = office
+    with client.app.state.sessions() as session:
+        salem = office_records.hire(session, tender_id, "Salem Al Suwaidi", "Tender Manager", {}, is_manager=True)
+        session.commit()
+        salem_id = salem.id
+    state = client.app.state
+    ctx = SimpleNamespace(deps=tools.Turn(state.home, state.sessions, tender_id, salem_id, False, threading.Event()))
+    with pytest.raises(ModelRetry, match="You haven't read Conditions.pdf, page 1"):
+        tools.set_due_date(ctx, date(2026, 10, 1), "Conditions.pdf, page 1")
+    assert tools.set_due_date(ctx, date(2026, 9, 30), "engineer") == "The tender is due 30 September 2026."
+    assert client.get(f"/tenders/{tender_id}").json()["due_date"] == "2026-09-30"
+    said = team_room(client, tender_id)[-1]
+    assert (said["sender"], said["text"]) == (
+        salem_id,
+        "Salem set the due date to 30 September 2026, as the engineer asked.",
+    )
+
+
 def test_only_the_manager_brings_decisions_to_the_engineer():
     from test_review import reach
 

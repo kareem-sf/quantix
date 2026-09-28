@@ -2304,13 +2304,15 @@ export interface components {
             /** Result */
             result: string | null;
         };
-        /** TenderChange */
+        /**
+         * TenderChange
+         * @description Only the fields sent change; a due date sent as null clears it.
+         */
         TenderChange: {
-            /**
-             * Outcome
-             * @enum {string}
-             */
-            outcome: "open" | "submitted" | "won" | "lost";
+            /** Outcome */
+            outcome?: ("open" | "submitted" | "won" | "lost") | null;
+            /** Due Date */
+            due_date?: string | null;
         };
         /** TenderCreate */
         TenderCreate: {

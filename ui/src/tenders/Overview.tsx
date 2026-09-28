@@ -12,7 +12,7 @@ import { useAudit, useDecideLesson, useLessons } from "../review/queries";
 import { dueSentence } from "./due";
 import { usePackages } from "../subcontract/queries";
 import { useSubmission } from "../submission/queries";
-import { useDeleteTender, useSetOutcome, useTender } from "./queries";
+import { useDeleteTender, useSetDueDate, useSetOutcome, useTender } from "./queries";
 
 export function Overview() {
   const { tenderId = "" } = useParams();
@@ -81,10 +81,8 @@ export function Overview() {
           : `${waiting.length} ${waiting.length === 1 ? "decision needs" : "decisions need"} you`}
       </h1>
       <p className="flex flex-wrap items-center gap-x-2 text-sm text-ink-2">
-        <span>
-          {dueSentence(tender.data.due_date, new Date())}
-          {state}
-        </span>
+        <DueDate tenderId={tenderId} due={tender.data.due_date} />
+        {state && <span>{state.trim()}</span>}
         <Outcome tenderId={tenderId} outcome={tender.data.outcome} />
       </p>
       {manager && gates.data?.manager ? (
@@ -375,6 +373,41 @@ function DeleteTender({ tenderId, name }: { tenderId: string; name: string }) {
 }
 
 /** How the tender went. Later tenders use won and lost rates as benchmarks. */
+function DueDate({ tenderId, due }: { tenderId: string; due: string | null }) {
+  const set = useSetDueDate(tenderId);
+  const [value, setValue] = useState<string | null>(null); // the date being entered, while changing it
+  if (value === null)
+    return (
+      <span>
+        {dueSentence(due, new Date())}{" "}
+        <button type="button" onClick={() => setValue(due ?? "")} className="text-ink-3 hover:text-ink">
+          {due ? "Change" : "Set the due date"}
+        </button>
+      </span>
+    );
+  const save = (e: FormEvent) => {
+    e.preventDefault();
+    set.mutate(value || null, { onSuccess: () => setValue(null) });
+  };
+  return (
+    <form onSubmit={save} className="flex items-center gap-2">
+      <input
+        type="date"
+        aria-label="Due date"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        className="rounded-md border border-subtle px-2 py-0.5 text-ink"
+      />
+      <button type="submit" disabled={set.isPending} className="font-medium text-ink">
+        Save
+      </button>
+      <button type="button" onClick={() => setValue(null)} className="text-ink-3 hover:text-ink">
+        Cancel
+      </button>
+    </form>
+  );
+}
+
 function Outcome({ tenderId, outcome }: { tenderId: string; outcome: "open" | "submitted" | "won" | "lost" }) {
   const set = useSetOutcome(tenderId);
   return (
