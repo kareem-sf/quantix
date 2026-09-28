@@ -102,6 +102,8 @@ class TurnRecord(Base):
     ended: Mapped[str | None] = mapped_column(String(20))
     note: Mapped[str | None] = mapped_column(Text)  # why it failed, in plain words
     calls: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)  # {tool, sent_back}: the reason or null
+    # the turn as it happened, saved while it runs: thinking, notes and each tool call with what Quantix answered
+    steps: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
     requests: Mapped[int] = mapped_column(Integer, default=0)
     input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     cached_tokens: Mapped[int] = mapped_column(Integer, default=0)

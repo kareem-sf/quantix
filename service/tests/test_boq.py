@@ -263,7 +263,8 @@ def test_staff_withdraw_their_own_undecided_lines(client, package, qs):
     def turn_of(staff_id):
         state = client.app.state
         return SimpleNamespace(
-            deps=tools.Turn(state.home, state.sessions, tender_id, staff_id, False, threading.Event())
+            deps=tools.Turn(state.home, state.sessions, tender_id, staff_id, False, threading.Event()),
+            tool_call_id="call",
         )
 
     tender_id, bill, _ = package

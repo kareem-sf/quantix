@@ -3,7 +3,7 @@
 import re
 import threading
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -90,6 +90,7 @@ class Turn:
     autonomous: bool
     stop: threading.Event
     sees_images: bool = True  # False when the office's AI failed the image check
+    doing: dict[str, str] = field(default_factory=dict)  # what each tool call was doing, in words, by its call id
 
 
 BLIND = (  # in the instructions of a turn whose AI can't see; its image tools are left out
@@ -107,13 +108,17 @@ def _working(ctx: RunContext[Turn], doing: str | None = None):
         raise Stopped()
     with ctx.deps.sessions() as session:
         me = session.get(Staff, ctx.deps.staff_id)
+        before = me.now
         if doing:
             me.now = doing[:300]
+            ctx.deps.doing[ctx.tool_call_id] = me.now  # kept for the turn's steps, even if the call is sent back
         try:
             yield session, me
         except ValueError as error:
             session.rollback()
             raise ModelRetry(str(error)) from error
+        if me.now and me.now != before:  # the tool said what it did once it knew, such as the page it read
+            ctx.deps.doing[ctx.tool_call_id] = me.now
         session.commit()
 
 

@@ -98,6 +98,31 @@ def messages(session: Session, tender_id: str, channel: str, limit: int = 200) -
     return list(reversed(session.scalars(query).all()))
 
 
+def pause_notice(session: Session, tender_id: str) -> str | None:
+    """Why the office paused, when it paused itself since the engineer last wrote; None when the engineer stopped it."""
+    spoke = select(func.max(Message.id)).where(Message.tender_id == tender_id, Message.sender == ENGINEER)
+    query = (
+        select(Message.text)
+        .where(
+            Message.tender_id == tender_id,
+            Message.sender == OFFICE,
+            Message.text.startswith("The office "),
+            Message.id > func.coalesce(spoke.scalar_subquery(), 0),
+        )
+        .order_by(Message.id.desc())
+        .limit(1)
+    )
+    return session.scalars(query).first()
+
+
+def turns(session: Session, tender_id: str, staff_id: str | None = None, limit: int = 200) -> list[TurnRecord]:
+    """The latest turns, oldest first: everyone's, or one person's."""
+    query = select(TurnRecord).where(TurnRecord.tender_id == tender_id)
+    if staff_id:
+        query = query.where(TurnRecord.staff_id == staff_id)
+    return list(reversed(session.scalars(query.order_by(TurnRecord.id.desc()).limit(limit)).all()))
+
+
 def inbox(session: Session, member: Staff) -> list[Message]:
     """What this person hasn't seen yet and should act on.
 

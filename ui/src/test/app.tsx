@@ -6,7 +6,7 @@ import type { Tender } from "../api/client";
 import { routes } from "../app/router";
 import type { SearchHit, TenderDocument } from "../documents/queries";
 import type { BoqItem, Fact, LibraryEntry, Markups, Priced, Summary } from "../estimate/queries";
-import type { Decision, Message, Staff, Task } from "../office/queries";
+import type { Decision, Message, Staff, Task, Turn, TurnStep } from "../office/queries";
 import type { Comparison, Measurement, Sheet } from "../takeoff/queries";
 import type { DrawingInfo, LayerMap, Problem, TenderQuery } from "../takeoff/cad";
 import type { Connection, OfficeSettings, Usage, WebKeys } from "../settings/queries";
@@ -34,6 +34,10 @@ export interface FakeState {
   decisions: Decision[];
   tasks: Task[];
   officeState: "working" | "paused" | "idle";
+  /** Why the office paused itself. */
+  notice: string | null;
+  /** Each turn with its steps. */
+  turns: (Turn & { log: TurnStep[] })[];
   items: BoqItem[];
   facts: Fact[];
   sheets: Sheet[];
@@ -92,6 +96,8 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     decisions: [],
     tasks: [],
     officeState: "idle",
+    notice: null,
+    turns: [],
     items: [],
     facts: [],
     sheets: [],
@@ -174,8 +180,15 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     if (office?.[2] === "office") {
       const waiting = state.decisions.filter((d) => d.status === "waiting").length;
       const ai_ready = state.settings.office_ai !== null;
-      return json({ state: state.officeState, ai_ready, staff: state.staff, waiting });
+      const notice = state.officeState === "paused" ? state.notice : null;
+      return json({ state: state.officeState, notice, ai_ready, staff: state.staff, waiting });
     }
+    if (path.match(/^\/tenders\/\w+\/turns$/)) {
+      const person = new URL(request.url).searchParams.get("staff_id");
+      return json(state.turns.filter((t) => !person || t.staff_id === person).map(({ log, ...turn }) => ({ ...turn, steps: log.length })));
+    }
+    const turn = path.match(/^\/turns\/(\d+)$/);
+    if (turn) return json(state.turns.find((t) => t.id === Number(turn[1])));
     if (office?.[2] === "messages" && method === "POST") {
       const message: Message = {
         id: state.messages.length + 1,

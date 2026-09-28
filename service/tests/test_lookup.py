@@ -251,7 +251,7 @@ def fake_turn(client, tender_id, staff_id) -> SimpleNamespace:
     """What a tool sees of the turn it is called in."""
     state = client.app.state
     turn = tools.Turn(state.home, state.sessions, tender_id, staff_id, False, threading.Event())
-    return SimpleNamespace(deps=turn)
+    return SimpleNamespace(deps=turn, tool_call_id="call")
 
 
 def test_lines_past_forty_are_named_so_they_get_entered(client, tender):

@@ -206,6 +206,92 @@ describe("Office", () => {
     );
   });
 
+  it("folds each turn to a line that opens on the thinking and steps, with the tools on request", async () => {
+    const turn = {
+      id: 7,
+      staff_id: "s1",
+      started_at: "2026-09-23T10:43:00Z",
+      ended_at: "2026-09-23T10:43:32Z",
+      running: false,
+      ended: "done",
+      note: null,
+      doing: "Opening the markups",
+      steps: 5,
+      log: [
+        { kind: "brief" as const, text: "Tender: Synthetic school.\n\nNew for you:\n- Engineer: Is the markup a percentage?" },
+        { kind: "thinking" as const, text: "The engineer wants to know how markups are entered." },
+        { kind: "note" as const, text: "I'll open the markups record first." },
+        {
+          kind: "tool" as const,
+          tool: "open_record",
+          args: '{"kind":"markups"}',
+          doing: "Opening the markups",
+          result: "Markups: none proposed yet.",
+          sent_back: null,
+        },
+        { kind: "tool" as const, tool: "read_page", args: '{"page":1}', doing: null, result: null, sent_back: "No document has that id." },
+      ],
+    };
+    fakeService({
+      tenders: [tender],
+      settings: ready,
+      staff: [rania, omar],
+      messages: [said(1, "engineer", "s1", "Is the markup a percentage?")],
+      turns: [turn],
+    });
+    openApp("/tenders/t1/office?with=s1");
+
+    const room = await screen.findByRole("region", { name: "Conversation" });
+    const line = await within(room).findByRole("button", { name: /Rania worked for 32 s/ });
+    expect(line).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(line);
+
+    expect(await within(room).findByText("The engineer wants to know how markups are entered.")).toBeInTheDocument();
+    expect(within(room).getByText("I'll open the markups record first.")).toBeInTheDocument();
+    expect(within(room).getByText("Opening the markups")).toBeInTheDocument();
+    expect(within(room).getByText("Read page")).toBeInTheDocument();
+    expect(within(room).getByText("Quantix sent this back: No document has that id.")).toBeInTheDocument();
+    expect(within(room).queryByText("open_record")).not.toBeInTheDocument();
+    expect(within(room).queryByText(/What Rania was told/)).not.toBeInTheDocument();
+
+    await userEvent.click(within(room).getByRole("switch", { name: "Technical details" }));
+    expect(within(room).getByText("open_record")).toBeInTheDocument();
+    expect(within(room).getByText("Markups: none proposed yet.")).toBeInTheDocument();
+    expect(within(room).getByText(/"kind": "markups"/)).toBeInTheDocument();
+    expect(within(room).getByText("What Rania was told at the start")).toBeInTheDocument();
+  });
+
+  it("says in the chat why a turn stopped, and above the message box why the office is stopped", async () => {
+    const failed = {
+      id: 8,
+      staff_id: "s1",
+      started_at: "2026-09-23T10:43:00Z",
+      ended_at: "2026-09-23T10:49:40Z",
+      running: false,
+      ended: "ai_failed",
+      note: "Couldn't reach the service. Check the internet connection and the address.",
+      doing: null,
+      steps: 0,
+      log: [],
+    };
+    fakeService({
+      tenders: [tender],
+      settings: ready,
+      staff: [{ ...rania, now: null }, omar],
+      messages: [said(1, "engineer", "s1", "Is the markup a percentage?")],
+      turns: [failed],
+      officeState: "paused",
+      notice: "The office stopped: Couldn't reach the service. Send a message to try again.",
+    });
+    openApp("/tenders/t1/office?with=s1");
+
+    const room = await screen.findByRole("region", { name: "Conversation" });
+    expect(
+      await within(room).findByText("Rania stopped after 6 min 40 s: Couldn't reach the service. Check the internet connection and the address."),
+    ).toBeInTheDocument();
+    expect(within(room).getByText("The office stopped: Couldn't reach the service. Send a message to try again.")).toBeInTheDocument();
+  });
+
   it("messages a person directly and can stop the office", async () => {
     const service = fakeService({ tenders: [tender], settings: ready, staff: [rania, omar], officeState: "working" });
     openApp("/tenders/t1/office");

@@ -884,3 +884,30 @@ The engineer asked for the whole of the DWG work in one go, so what the first ro
   UNP100 channels, plates), and the flooring plan's 200 plaster regions now have areas.
 - **Checks:** 4 new service tests, 3 new Rust tests and 1 new interface test; 202 service tests, 79 interface
   tests, typecheck, ruff and clippy pass.
+
+## 28 September 2026: an unanswered question after an AI outage, and each turn's thinking in the chat
+
+The engineer asked Salem "is the markup a % or static number or both or what?" and got no answer, while the rail
+kept saying he was "Checking the estimate". His turn ran for six and a half minutes, then the AI service stopped
+answering ("Couldn't reach the service"). The office tried twice more within 15 seconds and paused. The pause notice
+went to the team room, not to the chat the engineer was reading. His "now" line was never cleared, and his question
+was already marked as read, so it would not have come back as new.
+
+- **Retries.** A passing AI failure is now retried four times, waiting 5, 15, 45 and 135 seconds (over three minutes
+  in all). The wait ends at once if the engineer presses Stop or Quantix closes.
+- **The question comes back.** If the office gives up, what was new for the people whose turns failed is unread
+  again. The engineer's question is then answered when the office carries on.
+- **Why the office stopped.** `GET /office` gives the pause notice, and the chat shows it above the message box. When
+  the office isn't working, nobody's "now" line is shown.
+- **Each turn in the chat.** Every turn keeps its steps (migration 0024, `turns.steps`), saved while it runs. That is
+  what the person was told, their thinking when the AI service returns it, their working notes, and each tool call
+  with what it sent, what Quantix answered or why it sent it back. The chat folds each turn to one line, such as
+  "Salem worked for 32 s", "Salem is working · Reading Conditions.pdf, page 3", or in orange "Salem stopped after
+  6 min 40 s: Couldn't reach the service…". Opened, the line shows the thinking, notes and steps in words. The
+  "Technical details" switch adds the tool names, the arguments, Quantix's answers and the start-of-turn briefing.
+  No model, provider or token figures are shown. A direct chat shows that person's turns; the team room shows
+  everyone's.
+- **Working notes.** Some services keep a model's reasoning private (Runware's gpt-5-4-mini returns none). So the
+  rules now ask each person to write a line or two before their tool calls: what they are about to do and why.
+- **Checks:** 3 new service tests and 2 new interface tests; 205 service tests, 81 interface tests, typecheck and ruff
+  pass. Migration 0024 was rehearsed on a copy of the real database: every table kept its rows.

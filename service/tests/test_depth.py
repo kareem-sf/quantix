@@ -25,7 +25,9 @@ LINES = [estimate.LineIn(**line) for line in test_estimate.BUILD_UP]
 
 def turn(client, tender_id, staff_id) -> SimpleNamespace:
     state = client.app.state
-    return SimpleNamespace(deps=tools.Turn(state.home, state.sessions, tender_id, staff_id, False, threading.Event()))
+    return SimpleNamespace(
+        deps=tools.Turn(state.home, state.sessions, tender_id, staff_id, False, threading.Event()), tool_call_id="call"
+    )
 
 
 @pytest.fixture

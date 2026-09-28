@@ -1233,6 +1233,130 @@
         }
       }
     },
+    "/tenders/{tender_id}/turns": {
+      "get": {
+        "tags": [
+          "office"
+        ],
+        "summary": "List Turns",
+        "operationId": "list_turns_tenders__tender_id__turns_get",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "staff_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Staff Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TurnOut"
+                  },
+                  "title": "Response List Turns Tenders  Tender Id  Turns Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/turns/{turn_id}": {
+      "get": {
+        "tags": [
+          "office"
+        ],
+        "summary": "Turn Detail",
+        "operationId": "turn_detail_turns__turn_id__get",
+        "parameters": [
+          {
+            "name": "turn_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Turn Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/tenders/{tender_id}/messages": {
       "get": {
         "tags": [
@@ -7443,6 +7567,17 @@
             ],
             "title": "State"
           },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notice"
+          },
           "ai_ready": {
             "type": "boolean",
             "title": "Ai Ready"
@@ -7462,6 +7597,7 @@
         "type": "object",
         "required": [
           "state",
+          "notice",
           "ai_ready",
           "staff",
           "waiting"
@@ -9492,6 +9628,267 @@
           "tokens"
         ],
         "title": "TenderUsage"
+      },
+      "TurnDetail": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "staff_id": {
+            "type": "string",
+            "title": "Staff Id"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "running": {
+            "type": "boolean",
+            "title": "Running"
+          },
+          "ended": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "steps": {
+            "type": "integer",
+            "title": "Steps"
+          },
+          "doing": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doing"
+          },
+          "log": {
+            "items": {
+              "$ref": "#/components/schemas/TurnStep"
+            },
+            "type": "array",
+            "title": "Log"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "staff_id",
+          "started_at",
+          "ended_at",
+          "running",
+          "ended",
+          "note",
+          "steps",
+          "doing",
+          "log"
+        ],
+        "title": "TurnDetail",
+        "description": "The turn opened: what the person was told, their thinking and notes, and each tool call with its answer."
+      },
+      "TurnOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "staff_id": {
+            "type": "string",
+            "title": "Staff Id"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "running": {
+            "type": "boolean",
+            "title": "Running"
+          },
+          "ended": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "steps": {
+            "type": "integer",
+            "title": "Steps"
+          },
+          "doing": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doing"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "staff_id",
+          "started_at",
+          "ended_at",
+          "running",
+          "ended",
+          "note",
+          "steps",
+          "doing"
+        ],
+        "title": "TurnOut",
+        "description": "One person's turn at work, as the chat shows it folded."
+      },
+      "TurnStep": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "brief",
+              "thinking",
+              "note",
+              "tool"
+            ],
+            "title": "Kind"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "tool": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool"
+          },
+          "args": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Args"
+          },
+          "doing": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doing"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "sent_back": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sent Back"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "TurnStep"
       },
       "UnitsIn": {
         "properties": {

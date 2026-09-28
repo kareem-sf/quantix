@@ -12,10 +12,13 @@ import {
   useSend,
   useStop,
   useTasks,
+  useTurns,
   type Message,
   type Staff,
+  type Turn,
 } from "./queries";
 import { Sources } from "./Sources";
+import { TurnLog } from "./TurnLog";
 
 export function Office() {
   const { tenderId = "" } = useParams();
@@ -51,6 +54,11 @@ export function Office() {
           staff={staff}
           title={channel === TEAM ? "Team room" : (staff.find((m) => m.id === channel)?.name ?? "")}
           working={office.data?.state === "working"}
+          notice={
+            office.data?.state === "paused"
+              ? (office.data.notice ?? "The office is stopped. Send a message to carry on.")
+              : null
+          }
           onPerson={(id) => setParams({ ...(channel === TEAM ? {} : { with: channel }), person: id })}
         />
       </section>
@@ -91,14 +99,22 @@ export function Conversation(props: {
   staff: Staff[];
   title: string;
   working: boolean;
+  notice?: string | null; // why the office is stopped, shown above the message box
   onPerson: (id: string) => void;
 }) {
   const messages = useMessages(props.tenderId, props.channel);
+  // the team room shows everyone's turns; a direct chat shows that person's
+  const turns = useTurns(props.tenderId, props.channel === TEAM ? undefined : props.channel);
   const send = useSend(props.tenderId);
   const stop = useStop(props.tenderId);
   const [draft, setDraft] = useState("");
+  const [technical, setTechnical] = useState(false);
   const end = useRef<HTMLDivElement>(null);
-  const count = messages.data?.length ?? 0;
+  const timeline: ({ at: string; message: Message } | { at: string; turn: Turn })[] = [
+    ...(messages.data ?? []).map((message) => ({ at: message.created_at, message })),
+    ...(turns.data ?? []).map((turn) => ({ at: turn.started_at, turn })),
+  ].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  const count = timeline.length;
   useEffect(() => {
     end.current?.scrollIntoView?.({ block: "end" });
   }, [count]);
@@ -129,10 +145,23 @@ export function Conversation(props: {
       </div>
       <div className="flex min-h-0 grow flex-col gap-[18px] overflow-y-auto px-8 py-5">
         {count === 0 && <p className="text-ink-3">No messages yet.</p>}
-        {messages.data?.map((m) => <Line key={m.id} message={m} author={people.get(m.sender)} onPerson={props.onPerson} />)}
+        {timeline.map((item) =>
+          "message" in item ? (
+            <Line key={`m${item.message.id}`} message={item.message} author={people.get(item.message.sender)} onPerson={props.onPerson} />
+          ) : (
+            <TurnLog
+              key={`t${item.turn.id}`}
+              turn={item.turn}
+              name={people.get(item.turn.staff_id)?.name.split(" ")[0] ?? "Someone"}
+              technical={technical}
+              onTechnical={setTechnical}
+            />
+          ),
+        )}
         <div ref={end} />
       </div>
       <form onSubmit={submit} className="px-8 pt-3.5 pb-6">
+        {props.notice && <p className="pb-2.5 text-[13px] text-attention">{props.notice}</p>}
         <div className="flex items-center gap-2 rounded-xl border border-line-strong py-1.5 pr-1.5 pl-3.5 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
           <input
             aria-label="Message"

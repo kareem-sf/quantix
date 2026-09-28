@@ -309,6 +309,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tenders/{tender_id}/turns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Turns */
+        get: operations["list_turns_tenders__tender_id__turns_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/turns/{turn_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Turn Detail */
+        get: operations["turn_detail_turns__turn_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tenders/{tender_id}/messages": {
         parameters: {
             query?: never;
@@ -2199,6 +2233,8 @@ export interface components {
              * @enum {string}
              */
             state: "working" | "paused" | "idle";
+            /** Notice */
+            notice: string | null;
             /** Ai Ready */
             ai_ready: boolean;
             /** Staff */
@@ -2826,6 +2862,82 @@ export interface components {
             name: string;
             /** Tokens */
             tokens: number;
+        };
+        /**
+         * TurnDetail
+         * @description The turn opened: what the person was told, their thinking and notes, and each tool call with its answer.
+         */
+        TurnDetail: {
+            /** Id */
+            id: number;
+            /** Staff Id */
+            staff_id: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Ended At */
+            ended_at: string | null;
+            /** Running */
+            running: boolean;
+            /** Ended */
+            ended: string | null;
+            /** Note */
+            note: string | null;
+            /** Steps */
+            steps: number;
+            /** Doing */
+            doing: string | null;
+            /** Log */
+            log: components["schemas"]["TurnStep"][];
+        };
+        /**
+         * TurnOut
+         * @description One person's turn at work, as the chat shows it folded.
+         */
+        TurnOut: {
+            /** Id */
+            id: number;
+            /** Staff Id */
+            staff_id: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Ended At */
+            ended_at: string | null;
+            /** Running */
+            running: boolean;
+            /** Ended */
+            ended: string | null;
+            /** Note */
+            note: string | null;
+            /** Steps */
+            steps: number;
+            /** Doing */
+            doing: string | null;
+        };
+        /** TurnStep */
+        TurnStep: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "brief" | "thinking" | "note" | "tool";
+            /** Text */
+            text?: string | null;
+            /** Tool */
+            tool?: string | null;
+            /** Args */
+            args?: string | null;
+            /** Doing */
+            doing?: string | null;
+            /** Result */
+            result?: string | null;
+            /** Sent Back */
+            sent_back?: string | null;
         };
         /** UnitsIn */
         UnitsIn: {
@@ -3753,6 +3865,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OfficeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_turns_tenders__tender_id__turns_get: {
+        parameters: {
+            query?: {
+                staff_id?: string | null;
+            };
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TurnOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    turn_detail_turns__turn_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                turn_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TurnDetail"];
                 };
             };
             /** @description Validation Error */

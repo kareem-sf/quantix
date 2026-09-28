@@ -26,8 +26,8 @@ log = logging.getLogger("quantix.office")
 
 TURN_BUDGET = 40  # turns without hearing from the engineer before the office pauses
 CARRY_ON = "Your last turn was cut short. Carry on from where you stopped, and report what you have."
-RETRIES = 2  # turns cut short by a passing AI failure that are tried again before the office pauses
-RETRY_WAIT = 5.0  # seconds before the first retry; each further one waits longer
+RETRIES = 4  # turns cut short by a passing AI failure that are tried again before the office pauses
+RETRY_WAIT = 5.0  # seconds before the first retry; each further one waits three times longer, over 3 minutes in all
 ALLOWANCE_USED = (
     "The office paused: this tender has used the AI allowance set in Settings. Raise it there, then send a message "
     "to carry on."
@@ -64,6 +64,9 @@ class Office:
         # person carries on from the records instead (their turn record says the work is unfinished)
         self._carry: dict[str, list] = {}
         self._failures: dict[str, int] = {}  # turns in a row cut short by the AI service, per tender
+        # what the person had read before a run of failed turns: if the office gives up, what was new for them is
+        # new again, so the engineer's question is answered when the office carries on rather than left as read
+        self._read_before: dict[str, tuple[str, int]] = {}  # staff id: (tender id, last message read)
 
     # The engineer's side -------------------------------------------------------------------------------------
 
@@ -209,6 +212,7 @@ class Office:
                 records.note_opened(session, tender_id, staff_id, "finding", finding.key[:80])
             if history is not None:
                 prompt = f"{CARRY_ON}\n\n{prompt}"
+            self._read_before.setdefault(staff_id, (tender_id, member.last_read))
             records.mark_read(session, member)
             if member.is_manager:  # the briefing showed him his queue
                 member.reviewed_up_to = datetime.now(UTC)
@@ -221,7 +225,8 @@ class Office:
         turn = Turn(
             self.home, self.sessions, tender_id, staff_id, autonomous, self._stop_event(tender_id), self.sees_images()
         )
-        trace = agents.Trace()
+        trace = agents.Trace(save=lambda steps: self._save_steps(record_id, steps))
+        gave_up = False
         try:
             try:
                 conversation = await agents.run_turn(model, turn, member, prompt, autonomous, history, trace)
@@ -232,23 +237,29 @@ class Office:
                     raise cut.error from cut.error.__cause__  # keep the provider's own error as the cause
                 log.info("%s's turn was cut short (%s); trying again", member.name, trace.note)
                 self._carry[staff_id] = cut.conversation
-                await asyncio.sleep(RETRY_WAIT * failures)
+                await asyncio.to_thread(self._stop_event(tender_id).wait, RETRY_WAIT * 3 ** (failures - 1))
                 return True
             self._failures.pop(tender_id, None)
+            self._read_before.pop(staff_id, None)
             if conversation is not None and history is None:
                 self._carry[staff_id] = conversation  # one continuation in a row; after that, from the records
         except Stopped:
             trace.ended = "interrupted" if self._closing.is_set() else "stopped"
+            self._read_before.pop(staff_id, None)
             raise
         except Exception as error:
             if trace.ended != "ai_failed":
                 trace.ended, trace.note = "failed", f"{type(error).__name__}: {str(error)[:500]}"
+            gave_up = True
             raise
         finally:
             with self.sessions() as session:
                 record = session.get(TurnRecord, record_id)
                 record.ended, record.note, record.calls = trace.ended, trace.note, trace.calls
+                record.steps = trace.steps
                 record.ended_at = datetime.now(UTC)
+                if gave_up:
+                    self._unread_again(session, tender_id)
                 record.requests, record.output_tokens = trace.usage.requests, trace.usage.output_tokens
                 record.input_tokens, record.cached_tokens = trace.usage.input_tokens, trace.usage.cache_read_tokens
                 if trace.ended not in records.UNFINISHED:
@@ -257,6 +268,20 @@ class Office:
                     self._left_tasks(session, tender_id, member, trace.calls)
                 session.commit()
         return True
+
+    def _save_steps(self, record_id: int, steps: list[dict]) -> None:
+        with self.sessions() as session:
+            session.get(TurnRecord, record_id).steps = steps
+            session.commit()
+
+    def _unread_again(self, session: Session, tender_id: str) -> None:
+        """The office gave up on the tender: what was new for anyone whose turns failed is new for them again."""
+        for staff_id, (tender, last_read) in list(self._read_before.items()):
+            if tender == tender_id:
+                del self._read_before[staff_id]
+                member = session.get(Staff, staff_id)
+                if member is not None:
+                    member.last_read = min(member.last_read, last_read)
 
     @staticmethod
     def _left_tasks(session: Session, tender_id: str, member: Staff, calls: list[dict]) -> None:

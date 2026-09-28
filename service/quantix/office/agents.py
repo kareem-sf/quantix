@@ -1,15 +1,25 @@
 """One agent turn: who the person is, what is new for them, and their tools."""
 
+import json
 import logging
 import time
 from collections import Counter
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from pydantic_ai import Agent, UsageLimitExceeded, UsageLimits
+from pydantic_ai import Agent, BinaryContent, UsageLimitExceeded, UsageLimits
 from pydantic_ai.exceptions import ModelAPIError, ToolRetryError, UnexpectedModelBehavior
-from pydantic_ai.messages import ModelMessage, RetryPromptPart, ToolCallPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelResponse,
+    RetryPromptPart,
+    TextPart,
+    ThinkingPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RunUsage
@@ -35,9 +45,14 @@ log = logging.getLogger("quantix.office")
 
 STEP_LIMIT = 12  # model requests in one turn; the person picks up again on their next turn
 REQUEST_TIMEOUT = 120.0  # seconds for one model request; a stalled service must not freeze the office
+STEP_KEPT = 4000  # characters of a tool call's arguments or answer kept in the turn's steps
+BRIEF_KEPT = 20000  # characters kept of what the person was told at the start of the turn
+SAVE_EVERY = 1.5  # seconds between saves of the steps while the AI is still writing
 
 RULES = """How the office works:
-- You talk only through your tools. Anything else you write is not seen by anyone.
+- You talk only through your tools. Anything else you write is not a message and reaches no one.
+- Before each set of tool calls, write one or two short lines of working notes: what you are about to do and why.
+  The engineer can open them to follow your thinking, so keep them plain and true.
 - The engineer decides scope, the method of measurement, quantities, rates, subcontract and supplier choices, the
   final price and the release. Never decide those for them: the Tender Manager brings each decision to them.
 - Staff do the work: enter, measure, price and draft without asking first. Everything staff propose goes to the
@@ -285,6 +300,45 @@ class Trace:
     note: str | None = None
     calls: list[dict[str, Any]] = field(default_factory=list)
     usage: RunUsage = field(default_factory=RunUsage)
+    steps: list[dict[str, Any]] = field(default_factory=list)  # see steps_in
+    save: Callable[[list[dict[str, Any]]], None] | None = None  # keeps the steps while the turn runs
+
+
+def _shown(content: Any) -> str:
+    """What Quantix answered a tool call, as text; an image is named, not copied."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, BinaryContent):
+        return f"(an image, {content.media_type})"
+    if isinstance(content, list | tuple):
+        return "\n".join(_shown(c) for c in content)
+    return json.dumps(content, default=str, ensure_ascii=False)
+
+
+def steps_in(messages: Sequence[ModelMessage], doing: dict[str, str]) -> list[dict[str, Any]]:
+    """The turn as the engineer can follow it: what the person was told, their thinking and notes as they wrote them,
+    and each tool call with its arguments and what Quantix answered or why it sent the call back."""
+    steps: list[dict[str, Any]] = []
+    calls: dict[str, dict[str, Any]] = {}
+    for message in messages:
+        for part in message.parts:
+            if isinstance(part, UserPromptPart) and isinstance(part.content, str):
+                steps.append({"kind": "brief", "text": part.content[:BRIEF_KEPT]})
+            elif isinstance(part, ThinkingPart) and part.content.strip():
+                steps.append({"kind": "thinking", "text": part.content.strip()})
+            elif isinstance(part, TextPart) and part.content.strip():
+                steps.append({"kind": "note", "text": part.content.strip()})
+            elif isinstance(part, ToolCallPart):
+                call = {"kind": "tool", "tool": part.tool_name, "args": part.args_as_json_str()[:STEP_KEPT]}
+                call |= {"doing": doing.get(part.tool_call_id), "result": None, "sent_back": None}
+                calls[part.tool_call_id] = call
+                steps.append(call)
+            elif isinstance(part, ToolReturnPart) and part.tool_call_id in calls:
+                calls[part.tool_call_id]["result"] = _shown(part.content)[:STEP_KEPT]
+            elif isinstance(part, RetryPromptPart) and part.tool_call_id in calls:
+                reason = part.content if isinstance(part.content, str) else part.model_response()
+                calls[part.tool_call_id]["sent_back"] = reason[:STEP_KEPT]
+    return steps
 
 
 def calls_in(messages: list[ModelMessage]) -> list[dict[str, Any]]:
@@ -346,6 +400,13 @@ async def run_turn(
     )
     limits = UsageLimits(request_limit=STEP_LIMIT)
     async with agent.iter(prompt, deps=turn, usage_limits=limits, message_history=history) as run:
+
+        def save(writing: ModelResponse | None = None) -> None:
+            """Keep the steps so far, with the answer the AI is still writing, so the engineer can follow along."""
+            trace.steps = steps_in(run.new_messages() + ([writing] if writing else []), turn.doing)
+            if trace.save:
+                trace.save(trace.steps)
+
         try:
             asked = time.monotonic()
             async for node in run:
@@ -358,9 +419,14 @@ async def run_turn(
                             log.info("%s: a tool call was sent back: %s", member.name, str(part.content)[:300])
                     # Streamed: some services drop a long answer that arrives in one piece after a quiet minute.
                     async with node.stream(run.ctx) as answer:
+                        save()  # the tool answers of the step before, now in the conversation
+                        saved = time.monotonic()
                         async for _event in answer:
                             if turn.stop.is_set():
                                 raise tools.Stopped()
+                            if time.monotonic() - saved >= SAVE_EVERY:
+                                save(answer.response)
+                                saved = time.monotonic()
                 elif Agent.is_call_tools_node(node):
                     calls = [p.tool_name for p in node.model_response.parts if isinstance(p, ToolCallPart)]
                     log.info("%s: answered in %.1f s, calling %s", member.name, time.monotonic() - asked, calls)
@@ -382,6 +448,7 @@ async def run_turn(
             return run.all_messages()  # a tool call that kept failing: the next turn sees why
         finally:
             trace.calls, trace.usage = calls_in(run.new_messages()), run.usage
+            trace.steps = steps_in(run.new_messages(), turn.doing)
     return None
 
 

@@ -15,16 +15,17 @@ from pydantic_ai.messages import (
     ModelResponse,
     RetryPromptPart,
     TextPart,
+    ThinkingPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
 )
-from pydantic_ai.models.function import DeltaToolCall, FunctionModel
+from pydantic_ai.models.function import DeltaThinkingPart, DeltaToolCall, FunctionModel
 from test_documents import PDF, make_pdf, read_all, upload
 
 from quantix import settings
 from quantix.api.app import create_app
-from quantix.office import runtime
+from quantix.office import agents, runtime
 from quantix.office.models import ENGINEER, TEAM, Staff, TurnRecord
 
 
@@ -53,6 +54,8 @@ def scripted(brain) -> FunctionModel:
         for index, part in enumerate(response.parts):
             if isinstance(part, TextPart):
                 yield part.content
+            elif isinstance(part, ThinkingPart):
+                yield {index: DeltaThinkingPart(content=part.content)}
             elif isinstance(part, ToolCallPart):
                 yield {index: DeltaToolCall(part.tool_name, part.args_as_json_str(), tool_call_id=part.tool_call_id)}
 
@@ -336,6 +339,110 @@ def test_the_office_pauses_when_the_ai_keeps_failing(client, office, monkeypatch
     )
 
 
+def test_a_question_the_office_gave_up_on_is_answered_when_it_carries_on(client, office, monkeypatch):
+    """The real tender: the AI service went down mid-answer, the office paused, and the question was left as read."""
+    tender_id, use = office
+    monkeypatch.setattr(runtime, "RETRY_WAIT", 0)
+
+    def down(messages, info):
+        if info.output_tools:
+            return office_brain(messages, info)
+        if not returns(messages):
+            return call("list_documents")  # partway into the answer
+        raise timed_out()
+
+    use(down)
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Is the markup a percentage?"})
+    paused = wait_for(lambda o: o["state"] == "paused", client, tender_id)
+    assert paused["notice"].startswith("The office stopped: The AI service took too long to answer.")
+    assert [m["now"] for m in paused["staff"]] == [None]  # nobody is doing anything while it is stopped
+    failed = [t for t in turn_records(client, tender_id) if t.ended == "ai_failed"]
+    assert len(failed) == runtime.RETRIES + 1
+
+    told = []
+
+    def back(messages, info):
+        told.append(prompt_of(messages))
+        return DONE
+
+    use(back)
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Are you there?"})
+    wait_for(lambda o: o["state"] == "idle" and told, client, tender_id)
+    new = told[0].split("New for you:")[1]
+    assert "Is the markup a percentage?" in new and "Are you there?" in new
+    assert client.get(f"/tenders/{tender_id}/office").json()["notice"] is None
+
+
+def test_each_turn_keeps_its_thinking_notes_and_tool_calls_for_the_chat(client, office):
+    tender_id, use = office
+
+    def thinks(messages, info):
+        if info.output_tools:
+            return office_brain(messages, info)
+        done = [p for m in messages for p in m.parts if isinstance(p, ToolReturnPart | RetryPromptPart)]
+        if not done:
+            return ModelResponse(
+                parts=[
+                    ThinkingPart("The engineer wants the package reviewed."),
+                    TextPart("First I'll see which documents we have."),
+                    ToolCallPart("list_documents", {}),
+                ]
+            )
+        return [call("read_page", document_id="nope", page=1), DONE][len(done) - 1]
+
+    use(thinks)
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Review the package."})
+    state = wait_for(lambda o: o["staff"] and turn_records(client, tender_id), client, tender_id)
+    [turn] = client.get(f"/tenders/{tender_id}/turns", params={"staff_id": state["staff"][0]["id"]}).json()
+    assert (turn["running"], turn["ended"], turn["steps"]) == (False, "done", 6)
+    assert "model" not in turn and "input_tokens" not in turn  # no provider details in the chat
+
+    brief, thinking, note, listed, read, done = client.get(f"/turns/{turn['id']}").json()["log"]
+    assert brief["kind"] == "brief" and "Review the package." in brief["text"]
+    assert (thinking["kind"], thinking["text"]) == ("thinking", "The engineer wants the package reviewed.")
+    assert (note["kind"], note["text"]) == ("note", "First I'll see which documents we have.")
+    assert (listed["tool"], listed["args"], listed["sent_back"]) == ("list_documents", "{}", None)
+    assert "Conditions.pdf" in listed["result"]
+    assert (read["tool"], read["result"]) == ("read_page", None)
+    assert read["sent_back"] == "No document has that id. Use list_documents or search_documents to find its id."
+    assert (done["kind"], done["text"]) == ("note", "That's everything for now.")
+    assert client.get("/turns/999999").status_code == 404
+
+
+def test_the_chat_follows_a_turn_while_it_runs(client, office, monkeypatch):
+    tender_id, _ = office
+    monkeypatch.setattr(agents, "SAVE_EVERY", 0)
+    carry_on = threading.Event()
+
+    async def stream(messages, info):
+        if not returns(messages):
+            yield {0: DeltaToolCall("list_documents", "{}", tool_call_id="list")}
+        else:
+            yield "Reading the conditions next."
+            carry_on.wait(10)  # the AI is still writing
+            yield " Done."
+
+    client.app.state.office.model = lambda: FunctionModel(office_brain, stream_function=stream)  # the persona
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Review the package."})
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        turns = client.get(f"/tenders/{tender_id}/turns").json()
+        if turns and turns[-1]["steps"] == 3:
+            break
+        time.sleep(0.05)
+    [turn] = turns
+    assert turn["running"] and turn["ended_at"] is None
+    log = client.get(f"/turns/{turn['id']}").json()["log"]
+    assert [s["kind"] for s in log] == ["brief", "tool", "note"]
+    assert log[-1]["text"] == "Reading the conditions next." and "Conditions.pdf" in log[-2]["result"]
+
+    carry_on.set()
+    wait_for(lambda o: o["state"] == "idle", client, tender_id)
+    [turn] = client.get(f"/tenders/{tender_id}/turns").json()
+    assert not turn["running"] and turn["ended"] == "done"
+    assert client.get(f"/turns/{turn['id']}").json()["log"][-1]["text"] == "Reading the conditions next. Done."
+
+
 def test_a_placeholder_profile_is_sent_back():
     from pydantic import ValidationError
 
@@ -597,7 +704,7 @@ def test_released_staff_leave_their_open_tasks_to_be_given_out_again(client, off
         salem_id = salem.id
     state = client.app.state
     turn = tools.Turn(state.home, state.sessions, tender_id, salem_id, False, threading.Event())
-    report = tools.release(SimpleNamespace(deps=turn), "Nora", "Her review is finished.")
+    report = tools.release(SimpleNamespace(deps=turn, tool_call_id="call"), "Nora", "Her review is finished.")
     assert report == (
         "Nora has been released, leaving these tasks undone: audit the insurance annexure. Give any that still need "
         "doing to someone else with assign_task."
@@ -627,7 +734,9 @@ def test_the_manager_sets_the_due_date_the_engineer_gives_or_a_page_he_read_stat
         session.commit()
         salem_id = salem.id
     state = client.app.state
-    ctx = SimpleNamespace(deps=tools.Turn(state.home, state.sessions, tender_id, salem_id, False, threading.Event()))
+    ctx = SimpleNamespace(
+        deps=tools.Turn(state.home, state.sessions, tender_id, salem_id, False, threading.Event()), tool_call_id="call"
+    )
     october = date(2026, 10, 14)
     with pytest.raises(ModelRetry, match="You haven't read ITT.pdf, page 1"):
         tools.set_due_date(ctx, october, "ITT.pdf, page 1", "Tenders are due by 14 October 2026.")

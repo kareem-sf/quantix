@@ -46,7 +46,7 @@ def staffed(client):
         session.commit()
         omar_id = omar.id
     turn = tools.Turn(client.app.state.home, client.app.state.sessions, tender_id, omar_id, False, threading.Event())
-    return tender_id, SimpleNamespace(deps=turn), documents
+    return tender_id, SimpleNamespace(deps=turn, tool_call_id="call"), documents
 
 
 def test_a_sheet_is_read_a_part_at_a_time_or_by_its_words(client, staffed):
