@@ -141,7 +141,7 @@ export function TurnLog(props: { turn: Turn; name: string; technical: boolean; o
               {turn.running
                 ? "Thinking…"
                 : log.length === 0
-                  ? "This turn's steps weren't kept: Quantix keeps them from 28 September 2026."
+                  ? "This turn ran before Quantix kept each turn's steps."
                   : "Nothing was written or done in this turn."}
             </p>
           )}
