@@ -25,7 +25,8 @@ import {
   type Markups,
 } from "./queries";
 
-const COLUMNS = "grid grid-cols-[56px_minmax(0,1fr)_84px_40px_84px_104px_132px] gap-3";
+// Descriptions keep a readable width; in a narrow window the table scrolls sideways rather than hiding them
+const COLUMNS = "grid min-w-fit grid-cols-[56px_minmax(120px,1fr)_84px_40px_84px_104px_120px] gap-3";
 const BASIS: Record<string, string> = {
   quote: "From a quote",
   library: "From the company library",
