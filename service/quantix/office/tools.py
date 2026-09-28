@@ -453,7 +453,6 @@ def ask_engineer(ctx: RunContext[Turn], title: str, question: str, options: list
         try:
             records.ask(session, ctx.deps.tender_id, me, title, question, options)
         except ValueError as already:
-            ctx.deps.doing[ctx.tool_call_id] = "Question not sent"  # the chat said "Asked you to decide" for it
             return str(already)  # not an error: carry on with other work until the engineer answers
     return "The question is waiting for the engineer."
 

@@ -158,9 +158,14 @@ DID = {
 }
 
 
+ASKED = "The question is waiting for the engineer."  # what ask_engineer answers when the question went to them
+
+
 def _in_words(step: dict[str, Any]) -> dict[str, Any]:
     if step["kind"] != "tool" or step["doing"]:
         return step
+    if step["tool"] == "ask_engineer" and step["result"] not in (None, ASKED):
+        return step | {"doing": "Question not sent"}  # refused: the chat said "Asked you to decide" for it
     return step | {"doing": DID.get(step["tool"], step["tool"].replace("_", " ").capitalize())}
 
 
