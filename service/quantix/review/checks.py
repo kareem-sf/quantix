@@ -23,12 +23,14 @@ from quantix.documents.evidence import numbers_in
 from quantix.documents.models import Document
 from quantix.estimate import records as estimate
 from quantix.estimate.models import LibraryResource, Markups, Rate
-from quantix.review import revisions
+from quantix.review import queries, revisions
+from quantix.review.models import TenderQuery
 from quantix.subcontract import records as subcontract
 from quantix.subcontract.models import Package, Quote
 from quantix.submission.models import Draft
+from quantix.takeoff import drawings
 from quantix.takeoff import records as takeoff
-from quantix.takeoff.models import Measurement
+from quantix.takeoff.models import LayerMap, Measurement
 
 BLOCKER, WARNING = "blocker", "warning"
 SAME_ITEM = Decimal("0.01")  # the same item priced more than 1% differently elsewhere in the tender
@@ -72,7 +74,9 @@ def for_record(session: Session, home: Path, kind: str, record: Any, blockers_on
     """What the checks find in one record the office proposed. Blockers only skips reading the drawing, which only
     ever warns."""
     found = _older_copy(session, record)
-    if kind == "measurement":
+    if kind == "measurement" and record.entities is not None:
+        found += _drawing_measurement(session, home, record)
+    elif kind == "measurement":
         found += _measurement(session, home, record, read_drawing=not blockers_only)
     else:
         check = {
@@ -82,6 +86,8 @@ def for_record(session: Session, home: Path, kind: str, record: Any, blockers_on
             "markups": _markups,
             "draft": _draft,
             "recommendation": _recommendation,
+            "layers": _layer_map,
+            "query": _query,
         }.get(kind)
         found += check(session, home, record) if check else []
     return [f for f in found if f.severity == BLOCKER] if blockers_only else found
@@ -89,6 +95,8 @@ def for_record(session: Session, home: Path, kind: str, record: Any, blockers_on
 
 def _older_copy(session: Session, record: Any) -> list[Finding]:
     """Work that rests on a document the engineer has replaced by a newer copy, and didn't move onto it."""
+    if isinstance(record, LayerMap | TenderQuery):  # a map applies by name; a query checks its own sources
+        return []
     if isinstance(record, Package):  # a recommendation rests on the quote it recommends
         record = session.get(Quote, record.recommended_quote_id) if record.recommended_quote_id else None
     why = revisions.problem(session, record) if record is not None else None
@@ -232,6 +240,98 @@ def _measurement(session: Session, home: Path, m: Measurement, read_drawing: boo
     if item is not None:
         found += [Finding(f.key, f.severity, f.message, where + f.refs) for f in _item(session, home, item)]
     return found
+
+
+def _drawing_measurement(session: Session, home: Path, m: Measurement) -> list[Finding]:
+    """A measurement of a CAD drawing's objects: they must all still be in the drawing, none may be measured twice
+    for the same BOQ line, and none should sit on a layer that doesn't print."""
+    found: list[Finding] = []
+    where = _page_ref(session, m.document_id, m.page)
+    document = session.get(Document, m.document_id)
+    try:
+        d = drawings.open_drawing(home, document)
+    except (ValueError, OSError):
+        return [Finding(f"drawing-unread:{m.id}", BLOCKER, f"{document.name} can't be read now.", where)]
+    keys = m.entities or []
+    missing = [k for k in keys if not k.startswith("room:") and k not in d.key_index]
+    room_names = {k.removeprefix("room:") for k in keys if k.startswith("room:")}
+    if room_names:
+        known = {r.name for r in drawings.rooms(session, home, document, 1)}
+        missing += [f"room:{n}" for n in room_names - known]
+    if missing:
+        found.append(
+            Finding(
+                f"drawing-missing:{m.id}",
+                BLOCKER,
+                f"{len(missing)} of the {len(keys)} things it measured aren't in {document.name} as Quantix reads it "
+                "now: measure it again.",
+                where,
+            )
+        )
+    item = session.get(BoqItem, m.boq_item_id) if m.boq_item_id else None
+    if item is not None:
+        others = session.scalars(
+            select(Measurement).where(
+                Measurement.boq_item_id == item.id, Measurement.id != m.id, Measurement.status.in_(LIVE)
+            )
+        )
+        mine, twice, formats = set(keys), [], []
+        stem = document.name.rsplit(".", 1)[0].lower()
+        for other in others:
+            if other.document_id == m.document_id and mine & set(other.entities or []):
+                twice.append(other)
+                continue
+            other_document = session.get(Document, other.document_id)
+            if other_document.kind != document.kind and other_document.name.rsplit(".", 1)[0].lower() == stem:
+                formats.append(other)
+        if twice:
+            found.append(
+                Finding(
+                    f"measured-twice:{m.id}:{','.join(sorted(o.id for o in twice))}",
+                    BLOCKER,
+                    f"It takes objects {_named(twice)} already measured for {boq.reference(item)}: measuring them "
+                    "again counts them twice.",
+                    where,
+                )
+            )
+        if formats:
+            found.append(
+                Finding(
+                    f"two-formats:{m.id}:{','.join(sorted(o.id for o in formats))}",
+                    WARNING,
+                    f"{_named(formats)} measure {boq.reference(item)} on the same drawing in another format: check the "
+                    "work isn't taken off twice.",
+                    where + [r for o in formats for r in _page_ref(session, o.document_id, o.page) if r not in where],
+                )
+            )
+    hidden = {name for name, layer in d.layers.items() if layer.get("off") or layer.get("frozen")}
+    on_hidden = sorted({d.layer_of(d.key_index[k]) for k in keys if k in d.key_index} & hidden)
+    if on_hidden:
+        found.append(
+            Finding(
+                f"hidden-layers:{m.id}:{','.join(on_hidden)}",
+                WARNING,
+                f"Some of what it measured is on layers that are off or frozen ({', '.join(on_hidden[:5])}): "
+                "they don't print, so check that work is part of the tender.",
+                where,
+            )
+        )
+    if item is not None:
+        found += [Finding(f.key, f.severity, f.message, where + f.refs) for f in _item(session, home, item)]
+    return found
+
+
+def _layer_map(session: Session, home: Path, layer_map: LayerMap) -> list[Finding]:
+    where = _page_ref(session, layer_map.document_id, 1)
+    return [
+        Finding(key, severity, message, where)
+        for key, severity, message in drawings.map_problems(session, home, layer_map)
+    ]
+
+
+def _query(session: Session, home: Path, query: TenderQuery) -> list[Finding]:
+    where = [r for s in query.sources for r in _page_ref(session, s["document_id"], s["page"])]
+    return [Finding(key, severity, message, where) for key, severity, message in queries.problems(session, query)]
 
 
 def _benchmarks(session: Session, tender_id: str, item: BoqItem) -> list[tuple[Decimal, str]]:

@@ -34,7 +34,6 @@ KINDS = {
 UNREADABLE = {
     "old_word": "Old Word files (.doc) can't be read. Save it as .docx or PDF and add that copy.",
     "old_spreadsheet": "Old Excel files (.xls) can't be read. Save it as .xlsx and add that copy.",
-    "cad": "CAD drawings can't be read yet. Add the PDF of this drawing instead.",
     "other": "This type of file isn't read.",
 }
 SCAN_CHARACTERS = 20  # a PDF page with fewer visible characters than this is treated as a scan
@@ -66,6 +65,10 @@ def read_file(path: Path, kind: str) -> list[PageText]:
         pages = _spreadsheet(path)
     elif kind == "word":
         pages = _word(path)
+    elif kind == "cad":
+        from quantix.documents import cad  # it reads PageText from here
+
+        pages = cad.pages(path)
     else:
         return [PageText(1, "", has_text=False)]  # an image: the office reads it by looking at it
     for page in pages:

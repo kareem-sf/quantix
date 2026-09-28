@@ -9,6 +9,7 @@ from quantix.api import (
     boq,
     company,
     documents,
+    drawings,
     estimate,
     office,
     review,
@@ -76,6 +77,7 @@ def create_app(home: Path, token: str) -> FastAPI:
     app.include_router(office.router, dependencies=[Depends(require_token)])
     app.include_router(boq.router, dependencies=[Depends(require_token)])
     app.include_router(takeoff.router, dependencies=[Depends(require_token)])
+    app.include_router(drawings.router, dependencies=[Depends(require_token)])
     app.include_router(estimate.router, dependencies=[Depends(require_token)])
     app.include_router(subcontract.router, dependencies=[Depends(require_token)])
     app.include_router(submission.router, dependencies=[Depends(require_token)])

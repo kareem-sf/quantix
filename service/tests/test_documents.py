@@ -135,7 +135,7 @@ def test_a_package_is_stored_and_read(client, tender, tmp_path):
     assert "one percent of the tender price" in word and "Validity | 120 days" in word
 
     dwg = documents["Package/Drawings/A-101.dwg"]
-    assert dwg["status"] == "unreadable" and dwg["note"].startswith("CAD drawings can't be read yet")
+    assert dwg["status"] == "unreadable" and dwg["note"].startswith("This drawing can't be opened")
     kept = (tmp_path / "tenders" / tender / "files").iterdir()
     assert sorted(f.suffix for f in kept) == [".docx", ".dwg", ".pdf", ".xlsx"]
 

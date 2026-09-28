@@ -21,12 +21,13 @@ from quantix.documents.models import Document
 from quantix.estimate import records as estimate
 from quantix.office import records as office
 from quantix.office.models import Decision, Staff
-from quantix.review import checks, revisions
+from quantix.review import checks, queries, revisions
 from quantix.review import records as reviews
 from quantix.review.checks import BLOCKER, WARNING, Finding, Ref
 from quantix.review.models import Acceptance
 from quantix.subcontract import records as subcontract
 from quantix.submission import records as submission
+from quantix.takeoff import drawings, layers
 from quantix.takeoff import records as takeoff
 
 PRICE_FACTS = ("currency", "vat")  # the price can't be stated without them
@@ -34,6 +35,7 @@ AREAS = {
     "boq": "BOQ lines",
     "facts": "tender facts",
     "takeoff": "takeoff marks",
+    "drawings": "layer maps and tender queries",
     "pricing": "prices",
     "subcontract": "quote choices",
     "submission": "drafts",
@@ -53,6 +55,7 @@ def findings(session: Session, home: Path, tender_id: str) -> list[Finding]:
         *_basics(session, tender_id),
         *_missing_rows(session, tender_id),
         *_documents(session, tender_id),
+        *_drawings(session, home, tender_id),
         *_records(session, home, tender_id),
         *_older_copies(session, tender_id),
     ]
@@ -107,6 +110,7 @@ def _waiting(session: Session, tender_id: str) -> list[Finding]:
     gates = {
         **boq.waiting_counts(session, tender_id),
         "takeoff": takeoff.waiting(session, tender_id),
+        "drawings": layers.waiting(session, tender_id) + queries.waiting(session, tender_id),
         "pricing": estimate.waiting(session, tender_id),
         "subcontract": subcontract.waiting(session, tender_id),
         "submission": submission.waiting(session, tender_id),
@@ -262,6 +266,22 @@ def _documents(session: Session, tender_id: str) -> list[Finding]:
                 "what they say: " + "; ".join(d.name + (f" ({d.note})" if d.note else "") for d in unread[:10]),
             )
         )
+    return found
+
+
+READ_PROBLEMS = ("drawing-units", "drawing-xref", "drawing-not-read", "drawing-records", "drawing-clipped")
+
+
+def _drawings(session: Session, home: Path, tender_id: str) -> list[Finding]:
+    """What Quantix couldn't read in the drawings the takeoff rests on: part of their work may be unmeasured."""
+    measured = {m.document_id for m in takeoff.measurements(session, tender_id) if m.entities is not None}
+    found = []
+    for document in library.documents(session, tender_id):
+        if document.id not in measured or document.status != "read":
+            continue
+        for p in drawings.drawing_problems(session, home, document):
+            if p.key.startswith(READ_PROBLEMS):
+                found.append(Finding(p.key, WARNING, p.message, [Ref(document.name, document.id, p.page)]))
     return found
 
 

@@ -17,13 +17,14 @@ from sqlalchemy.orm import Session
 from quantix.boq import records as boq
 from quantix.boq.models import BoqItem, Fact
 from quantix.core.review import LIVE
-from quantix.documents import library, readers
+from quantix.documents import cad, library, readers
 from quantix.documents.evidence import missing_piece
 from quantix.documents.models import Document, Page
 from quantix.estimate import records as estimate
 from quantix.estimate.models import Rate
 from quantix.subcontract.models import Company, Package, Quote
 from quantix.submission.models import PricingColumns, Requirement
+from quantix.takeoff import drawings
 from quantix.takeoff import records as takeoff
 from quantix.takeoff.models import Measurement, Scale
 
@@ -106,9 +107,44 @@ class _NewerCopy:
         box = (min(xs) - AROUND, min(ys) - AROUND, max(xs) + AROUND, max(ys) + AROUND)
         return _within(before, box) == _within(after, box)
 
+    def same_objects(self, older: Document, record: Scale | Measurement) -> bool:
+        """On a CAD drawing: whether the newer copy states the same units, or whether the measurement's rule takes
+        exactly the same objects there, each with the same extent, length and area. An object added that the rule
+        takes (a door drawn in by an addendum) keeps the measurement on the older copy, to be done again."""
+        if self.document.kind != "cad" or older.kind != "cad":
+            return False
+        try:
+            before = drawings.open_drawing(self.home, older)
+            after = drawings.open_drawing(self.home, self.document)
+        except (ValueError, OSError):
+            return False
+        if isinstance(record, Scale):
+            return before.info["units"] == after.info["units"]
+        if record.rule is None:
+            return False
+        keys = record.entities or []
+        try:
+            again, _ = takeoff.resolve(self.session, self.home, self.document, record.kind, cad.Rule(**record.rule))
+        except ValueError:
+            return False
+        if sorted(again) != sorted(keys):
+            return False
+        for key in keys:
+            if key.startswith("room:"):
+                continue  # a room is its walls, which the rule's other objects and the map already compare
+            i, j = before.key_index.get(key), after.key_index.get(key)
+            if i is None or j is None:
+                return False
+            a, b = before.num[i], after.num[j]
+            if not all(abs(x - y) <= 1e-6 * max(abs(x), abs(y), 1.0) for x, y in zip(a, b, strict=True)):
+                return False
+        return True
+
     def moved(self, record: Any) -> dict[str, Any] | None:
         """What changes when the record moves onto this copy, or None if what it cites isn't unchanged here."""
         older = self.session.get(Document, record.document_id)
+        if isinstance(record, Scale | Measurement) and older.kind == "cad":
+            return {"document_id": self.document.id} if self.same_objects(older, record) else None
         if isinstance(record, Scale | Measurement):
             points = record.line if isinstance(record, Scale) else record.points
             return {"document_id": self.document.id} if self.same_drawing(older, record.page, points) else None
@@ -166,6 +202,11 @@ def problem(session: Session, record: Any) -> str | None:
         )
     if newer.status != "read":
         return f"It rests on an older copy of {document.name}, and Quantix couldn't read the newer copy."
+    if isinstance(record, Scale | Measurement) and document.kind == "cad":
+        return (
+            f"What it measured has changed in the newer copy of {document.name}, or objects were added that its "
+            "rule takes: do it again on the newer copy."
+        )
     if isinstance(record, Scale | Measurement):
         return (
             f"The drawing around it has changed in the newer copy of {document.name}, page {record.page}: do it "

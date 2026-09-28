@@ -13,9 +13,11 @@ from quantix.documents.models import Document
 from quantix.estimate import records as estimate
 from quantix.office import records as office
 from quantix.office.models import ENGINEER
+from quantix.review import queries
 from quantix.review import records as reviews
 from quantix.subcontract import records as subcontract
 from quantix.submission import records as submission
+from quantix.takeoff import layers
 from quantix.takeoff import records as takeoff
 
 router = APIRouter(tags=["boq"])
@@ -70,6 +72,7 @@ class Gates(BaseModel):
     boq: int
     facts: int
     takeoff: int
+    drawings: int  # layer maps and tender queries
     pricing: int
     subcontract: int
     submission: int
@@ -143,6 +146,7 @@ def gates(tender_id: str, session: DB) -> Gates:
         manager=len(reviews.pending(session, tender_id)),
         **records.waiting_counts(session, tender_id),
         takeoff=takeoff.waiting(session, tender_id),
+        drawings=layers.waiting(session, tender_id) + queries.waiting(session, tender_id),
         pricing=estimate.waiting(session, tender_id),
         subcontract=subcontract.waiting(session, tender_id),
         submission=submission.waiting(session, tender_id),

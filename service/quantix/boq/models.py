@@ -15,6 +15,9 @@ FACT_KINDS = {
     "method_of_measurement": "Method of measurement",
     "currency": "Currency",
     "vat": "VAT",
+    # what decides how much a difference between the drawings and the BOQ matters, and which document wins
+    "contract_type": "Contract type",
+    "precedence": "Order of precedence",
 }
 
 

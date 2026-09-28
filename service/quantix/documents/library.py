@@ -22,6 +22,11 @@ def files_dir(home: Path, tender_id: str) -> Path:
     return home / "tenders" / tender_id / "files"
 
 
+def home_of(session: Session) -> Path:
+    """The data home a session's database lives in: the drawings Quantix read are kept there beside it."""
+    return Path(session.get_bind().url.database).parent
+
+
 def stored_file(home: Path, document: Document) -> Path:
     """Copies are named by their content, so a file is never moved or overwritten, even while it is being read."""
     return files_dir(home, document.tender_id) / f"{document.sha256}{PurePosixPath(document.path).suffix.lower()}"

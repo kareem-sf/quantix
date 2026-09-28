@@ -24,10 +24,11 @@ from quantix.estimate import records as estimate
 from quantix.office import packs, records, tools
 from quantix.office.models import ENGINEER, OFFICE, TEAM, Message, Staff
 from quantix.office.tools import Persona, Turn
-from quantix.review import lessons, revisions
+from quantix.review import lessons, queries, revisions
 from quantix.review import records as reviews
 from quantix.subcontract import records as subcontract
 from quantix.submission import records as submission
+from quantix.takeoff import drawings, layers
 from quantix.takeoff import records as takeoff
 
 log = logging.getLogger("quantix.office")
@@ -264,6 +265,10 @@ def standing(session: Session, tender_id: str) -> str:
             f"- Takeoff: {len(takeoff.measurements(session, tender_id))} measurements; "
             f"{with_manager['scale'] + with_manager['measurement']} scales or measurements with the Tender Manager, "
             f"{takeoff.waiting(session, tender_id)} waiting for the engineer.",
+            f"- Drawings: {len(drawings.layer_maps(session, tender_id))} layer maps, "
+            f"{len(queries.queries(session, tender_id))} tender queries; "
+            f"{with_manager['layers'] + with_manager['query']} with the Tender Manager, "
+            f"{layers.waiting(session, tender_id) + queries.waiting(session, tender_id)} waiting for the engineer.",
             f"- Subcontract: {len(packages)} packages, {sum(bool(p.selected_quote_id) for p in packages)} chosen.",
             f"- Submission: {checklist.count('ready')} of {len(checklist)} checklist items ready; "
             f"{checklist.count('manager')} drafts with the Tender Manager, {checklist.count('review')} waiting for "

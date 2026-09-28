@@ -7,6 +7,7 @@ service/.venv/
 .pytest_cache/
 .ruff_cache/
 desktop/target/
+cad/target/
 
 # local tooling and worktrees
 .worktrees/
@@ -18,3 +19,5 @@ desktop/target/
 *.db
 tender-packages/
 desktop/gen/
+*.dwg
+*.dxf

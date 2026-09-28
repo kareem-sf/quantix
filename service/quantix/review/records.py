@@ -22,14 +22,15 @@ from quantix.estimate import records as estimate
 from quantix.estimate.models import Markups, Rate
 from quantix.office import records as office
 from quantix.office.models import ENGINEER, TEAM, Decision, Staff
-from quantix.review import checks, lessons
-from quantix.review.models import Acceptance
+from quantix.review import checks, lessons, queries
+from quantix.review.models import Acceptance, TenderQuery
 from quantix.subcontract import records as subcontract
 from quantix.subcontract.models import Company, Enquiry, Package, Quote
 from quantix.submission import records as submission
 from quantix.submission.models import Draft, PricingColumns, Requirement
+from quantix.takeoff import drawings, layers
 from quantix.takeoff import records as takeoff
-from quantix.takeoff.models import Measurement, Scale
+from quantix.takeoff.models import LayerMap, Measurement, Scale
 
 # Records with a status of their own, the module that approves them, and what the queue calls them
 REVIEWED_KINDS: dict[str, Any] = {
@@ -37,6 +38,8 @@ REVIEWED_KINDS: dict[str, Any] = {
     "fact": (Fact, boq),
     "scale": (Scale, takeoff),
     "measurement": (Measurement, takeoff),
+    "layers": (LayerMap, layers),
+    "query": (TenderQuery, queries),
     "rate": (Rate, estimate),
     "markups": (Markups, estimate),
     "draft": (Draft, submission),
@@ -46,6 +49,8 @@ NAMES = {  # one, many
     "fact": ("fact", "facts"),
     "scale": ("scale", "scales"),
     "measurement": ("measurement", "measurements"),
+    "layers": ("layer map", "layer maps"),
+    "query": ("tender query", "tender queries"),
     "rate": ("rate", "rates"),
     "markups": ("set of markups", "sets of markups"),
     "draft": ("draft", "drafts"),
@@ -146,7 +151,14 @@ def _names(session: Session, tender_id: str) -> dict[str, str]:
 
 def _where(session: Session, document_id: str | None, page: int | None) -> str:
     document = session.get(Document, document_id) if document_id else None
-    return f"{document.name}, page {page}" if document else ""
+    if document is None:
+        return ""
+    return f"{document.name}, page {page}" if page is not None else document.name
+
+
+def _is_drawing(session: Session, document_id: str | None) -> bool:
+    document = session.get(Document, document_id) if document_id else None
+    return document is not None and document.kind == "cad"
 
 
 def _amount(value: Decimal | None) -> str:
@@ -160,9 +172,15 @@ def describe(session: Session, p: Pending, names: dict[str, str]) -> str:
         line = f"{boq.reference(r)}: {r.description[:70]} · {_amount(r.quantity)} {r.unit}"
     elif p.kind == "fact":
         line = f"{FACT_KINDS[r.kind]}: {r.value}"
+    elif p.kind == "scale" and _is_drawing(session, r.document_id):
+        line = f"units of {_where(session, r.document_id, None)}: {drawings.unit_name(r.metres_per_point)}"
     elif p.kind == "scale":
         ratio = takeoff.drawing_ratio(r.metres_per_point)
         line = f"scale of {_where(session, r.document_id, r.page)}: about 1:{ratio:,}"
+    elif p.kind == "layers":
+        line = f"layer map from {_where(session, r.document_id, None)}: {layers.describe(r)}"
+    elif p.kind == "query":
+        line = queries.describe(session, r)
     elif p.kind == "measurement":
         item = session.get(BoqItem, r.boq_item_id) if r.boq_item_id else None
         line = f"“{r.label}”: {_amount(takeoff.quantity(session, r))} {r.unit}"
@@ -237,11 +255,44 @@ def details(session: Session, p: Pending) -> str:
     if p.kind in ("boq", "fact"):
         revised = f"\n{r.reason}" if r.reason else ""  # a BOQ line entered again from a newer copy
         return f"From {_where(session, r.document_id, r.page)}: “{r.quote}”{revised}"
+    if p.kind == "scale" and _is_drawing(session, r.document_id):
+        document = session.get(Document, r.document_id)
+        evidence = drawings.units_evidence(drawings.open_drawing(library.home_of(session), document))
+        return (
+            f"{document.name}'s units set as {drawings.unit_name(r.metres_per_point)} ({r.dimension}). What the "
+            "drawing says:\n" + "\n".join(f"- {line}" for line in evidence)
+        )
     if p.kind == "scale":
         return (
             f"Set from “{r.dimension}” as {r.length_m} m between {r.line} (page points) on "
             f"{_where(session, r.document_id, r.page)}. Check it against the scale printed in the title block."
         )
+    if p.kind == "layers":
+        by_meaning: dict[str, list[str]] = {}
+        for name, meaning in [*r.layers.items(), *((f"block {k}", v) for k, v in r.blocks.items())]:
+            by_meaning.setdefault(meaning, []).append(name)
+        listed = "\n".join(
+            f"- {drawings.MEANINGS.get(m, m)}: {', '.join(names)}" for m, names in sorted(by_meaning.items())
+        )
+        return f"Worked out on {_where(session, r.document_id, None)}:\n{listed}\nNote: {r.note}"
+    if p.kind == "query":
+        return queries.details(session, r)
+    if p.kind == "measurement" and r.entities is not None:
+        document = session.get(Document, r.document_id)
+        item = session.get(BoqItem, r.boq_item_id) if r.boq_item_id else None
+        text = (
+            f"A {r.kind} of {len(r.entities)} drawing objects on {document.name}, page {r.page}, chosen by the rule "
+            f"{r.rule}; Quantix makes it {_amount(takeoff.quantity(session, r))} {r.unit}."
+        )
+        if r.entities:
+            text += f" The objects: {', '.join(r.entities[:12])}{' …' if len(r.entities) > 12 else ''}."
+        else:
+            text += " Nothing on the drawing matches: it records that the work isn't on this drawing."
+        if r.multiplier is not None:
+            text += f" Multiplied by {r.multiplier} m."
+        if item is not None:
+            text += f" The BOQ has {_amount(item.quantity)} {item.unit} for {boq.reference(item)}."
+        return text
     if p.kind == "measurement":
         text = f"A {r.kind} of {len(r.points)} points on {_where(session, r.document_id, r.page)}: {r.points}."
         if r.multiplier is not None:
@@ -426,6 +477,10 @@ def same_work(kind: str, record: Any) -> Any:
         return (BoqItem.section == record.section) & (BoqItem.item == record.item)
     if kind == "scale":
         return (Scale.document_id == record.document_id) & (Scale.page == record.page)
+    if kind == "layers":
+        return LayerMap.document_id == record.document_id
+    if kind == "query":
+        return TenderQuery.title == record.title
     return Markups.id.is_not(None)  # the markups: one set per tender
 
 
@@ -476,7 +531,10 @@ def _send_back(session: Session, tender_id: str, p: Pending, manager: Staff, not
 def reopen(session: Session, kind: str, record_id: str, reason: str) -> Any:
     """The engineer sends back something already approved, so the office does it again."""
     if kind not in REVIEWED_KINDS:
-        raise ValueError("Only BOQ lines, facts, scales, measurements, rates, markups and drafts can be reopened.")
+        raise ValueError(
+            "Only BOQ lines, facts, scales, measurements, layer maps, queries, rates, markups and drafts can be "
+            "reopened."
+        )
     model, module = REVIEWED_KINDS[kind]
     record = session.get(model, record_id)
     if record is None:

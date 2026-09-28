@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -12,13 +13,16 @@ from sqlalchemy.orm import Session
 from quantix.boq import records as boq
 from quantix.boq.models import BoqItem
 from quantix.core.review import APPROVED, LIVE, REVIEWED
-from quantix.documents import library
+from quantix.documents import cad, library
 from quantix.documents.models import Document, Page
+from quantix.documents.readers import Unreadable
 from quantix.office import records as office
 from quantix.office.models import ENGINEER
+from quantix.takeoff import drawings
 from quantix.takeoff.models import Measurement, Scale
 
 UNITS = {"length": ("m", "m2"), "area": ("m2", "m3"), "count": ("nr",)}
+MAX_OBJECTS = 20_000  # objects one drawing measurement may take: more means the rule is too wide
 TOLERANCE = Decimal("0.02")  # takeoff and BOQ within 2% are a match
 _UNIT_NAMES = {
     "m": ("m", "م", "lm", "l.m", "rm", "m.l", "م.ط", "مط"),
@@ -55,6 +59,11 @@ def _fits_printed_scale(page_text: str, ratio: int) -> tuple[bool, list[int]]:
 
 def _page(session: Session, tender_id: str, document_id: str, number: int) -> tuple[Document, Page]:
     document = session.get(Document, document_id)
+    if document is not None and document.kind == "cad":
+        raise ValueError(
+            f"{document.name} is a CAD drawing: measure its objects with measure_drawing, and set its units with "
+            "set_drawing_units."
+        )
     if document is None or document.tender_id != tender_id or document.kind != "pdf":
         raise ValueError("Takeoff works on PDF drawings: that document id is not a PDF in this tender.")
     page = library.page(session, document_id, number)
@@ -162,6 +171,18 @@ def _replace_older_scales(session: Session, scale: Scale) -> None:
         older.status = "replaced"
 
 
+def _kind_and_unit(kind: str, unit: str, multiplier: Decimal | None) -> None:
+    if kind not in UNITS:
+        raise ValueError("A measurement is a length, an area or a count.")
+    if unit not in UNITS[kind]:
+        raise ValueError(f"A {kind} is measured in {' or '.join(UNITS[kind])}.")
+    needs_multiplier = (kind, unit) in (("length", "m2"), ("area", "m3"))
+    if needs_multiplier != (multiplier is not None):
+        raise ValueError(
+            "Give a height (length to m2) or a thickness (area to m3) in metres as the multiplier, and only then."
+        )
+
+
 def measure(
     session: Session,
     tender_id: str,
@@ -177,15 +198,7 @@ def measure(
     status: str = "proposed",
 ) -> Measurement:
     document, found = _page(session, tender_id, document_id, page)
-    if kind not in UNITS:
-        raise ValueError("A measurement is a length, an area or a count.")
-    if unit not in UNITS[kind]:
-        raise ValueError(f"A {kind} is measured in {' or '.join(UNITS[kind])}.")
-    needs_multiplier = (kind, unit) in (("length", "m2"), ("area", "m3"))
-    if needs_multiplier != (multiplier is not None):
-        raise ValueError(
-            "Give a height (length to m2) or a thickness (area to m3) in metres as the multiplier, and only then."
-        )
+    _kind_and_unit(kind, unit, multiplier)
     least = {"length": 2, "area": 3, "count": 1}[kind]
     if len(points) < least:
         raise ValueError(f"A {kind} needs at least {least} points.")
@@ -215,8 +228,169 @@ def measure(
     return measurement
 
 
+def set_units(
+    session: Session,
+    home: Path,
+    tender_id: str,
+    by: str,
+    document_id: str,
+    metres: float,
+    status: str = "proposed",
+) -> Scale:
+    """A CAD drawing's units, as metres in one drawing unit: the drawing's scale. It is kept as the scale of the
+    drawing's model space, so everything measured on the drawing waits for it at the engineer's gate."""
+    document = drawings.drawing_document(session, tender_id, document_id)
+    if document.status == "replaced":
+        raise ValueError(f"A newer copy of {document.name} replaced this one: set the units on the newer copy.")
+    if not metres or metres <= 0:
+        raise ValueError("Give the metres in one drawing unit, e.g. 0.001 for millimetres.")
+    d = drawings.open_drawing(home, document)
+    current = drawings.units_record(session, document_id)
+    if by != ENGINEER and current is not None and current.status == "approved":
+        raise ValueError(
+            f"The engineer approved {document.name}'s units ({drawings.unit_name(current.metres_per_point)}). "
+            "Measure on them; if you think they are wrong, say why with raise_concern."
+        )
+    header = d.units
+    if by != ENGINEER and header and abs(header[1] - metres) > header[1] * 1e-9:
+        raise ValueError(
+            f"{document.name}'s header says its units are {header[0]}, not {drawings.unit_name(metres)}. Set what "
+            "the drawing says; if you think its header is wrong, say why with raise_concern."
+        )
+    said = "as the drawing's header says" if header else "the header says none"
+    scale = Scale(
+        tender_id=tender_id,
+        document_id=document_id,
+        page=1,
+        metres_per_point=metres,
+        line=[],
+        length_m=metres,
+        dimension=f"{drawings.unit_name(metres)}, {said}"[:100],
+        proposed_by=by,
+        status=status,
+    )
+    session.add(scale)
+    session.flush()
+    _replace_on_older_copies(session, scale)
+    if status in APPROVED:
+        _replace_older_scales(session, scale)
+    return scale
+
+
+def measurable(d: cad.Drawing, found, kind: str) -> list[int]:
+    """The objects a measurement of this kind takes: outlines with an area, lines with a length, or anything to
+    count."""
+    if kind == "area":
+        return [int(i) for i in found if d.flags(int(i)) & cad.CLOSED and d.area(int(i)) > 0]
+    if kind == "length":
+        return [int(i) for i in found if d.length(int(i)) > 0]
+    return [int(i) for i in found]
+
+
+def resolve(
+    session: Session, home: Path, document: Document, kind: str, rule: cad.Rule
+) -> tuple[list[str], cad.Drawing]:
+    """The keys of the objects (or rooms) a rule takes for a measurement of this kind."""
+    found, found_rooms = drawings.choose(session, home, document, 1, rule)
+    d = drawings.open_drawing(home, document)
+    if [t.lower() for t in rule.types] == ["room"]:
+        return [drawings.room_key(r) for r in found_rooms], d
+    return [d.keys[i] for i in measurable(d, found, kind)], d
+
+
+def measure_drawing(
+    session: Session,
+    home: Path,
+    tender_id: str,
+    by: str,
+    document_id: str,
+    page: int,
+    kind: str,
+    label: str,
+    rule: cad.Rule,
+    unit: str,
+    multiplier: Decimal | None,
+    boq_item: str | None,
+    status: str = "proposed",
+) -> Measurement:
+    """A measurement of a CAD drawing's own objects, chosen by a rule. Quantix works out which objects the rule
+    takes when it is filed, so whoever checks it sees exactly what was counted, and computes the quantity from their
+    geometry whenever it is read. A rule that finds nothing, linked to a BOQ line, records that the line's work isn't
+    on this drawing."""
+    document = drawings.drawing_document(session, tender_id, document_id)
+    if document.status == "replaced":
+        raise ValueError(f"A newer copy of {document.name} replaced this one: measure on the newer copy.")
+    if page != 1:
+        raise ValueError("Measure in model space, page 1, where the drawing is full size; layouts show it scaled.")
+    _kind_and_unit(kind, unit, multiplier)
+    if rule.empty():
+        raise ValueError(
+            "Say which objects to take: layers, blocks, types, words, attributes, a region, rooms or keys."
+        )
+    keys, d = resolve(session, home, document, kind, rule)
+    if len(keys) > MAX_OBJECTS:
+        raise ValueError(f"That rule takes {len(keys):,} objects: narrow it to the work you mean.")
+    item_id = boq.find_item(session, tender_id, boq_item).id if boq_item else None
+    if not keys and item_id is None:
+        what = {"area": "closed outline or hatch", "length": "line", "count": "object"}[kind]
+        raise ValueError(
+            f"No {what} on {document.name} matches that rule. Look at the layers and blocks with drawing_overview, "
+            "or try the rule with query_drawing first."
+        )
+    measurement = Measurement(
+        tender_id=tender_id,
+        document_id=document_id,
+        page=1,
+        kind=kind,
+        label=label.strip(),
+        points=[],
+        unit=unit,
+        multiplier=multiplier,
+        boq_item_id=item_id,
+        proposed_by=by,
+        status=status,
+        entities=keys,
+        rule=rule.model_dump(exclude_defaults=True),
+    )
+    session.add(measurement)
+    session.flush()
+    _replace_on_older_copies(session, measurement)
+    return measurement
+
+
+def _drawing_base(session: Session, m: Measurement) -> Decimal | None:
+    """The count, or the length or area in square metres, of the objects a drawing measurement took."""
+    document = session.get(Document, m.document_id)
+    home = library.home_of(session)
+    try:
+        d = drawings.open_drawing(home, document)
+    except (Unreadable, OSError, ValueError):
+        return None
+    keys = m.entities or []
+    room_names = {k.removeprefix("room:") for k in keys if k.startswith("room:")}
+    found_rooms = [r for r in drawings.rooms(session, home, document, 1) if r.name in room_names] if room_names else []
+    objects = [d.key_index[k] for k in keys if k in d.key_index]
+    if m.kind == "count":
+        return Decimal(sum(d.copies(i) for i in objects) + len(found_rooms))
+    metres = drawings.metres_per_unit(session, m.document_id)
+    if metres is None:
+        return None
+    if m.kind == "length":
+        units = sum(d.length(i) for i in objects) + sum(r.perimeter for r in found_rooms)
+        return Decimal(str(units * metres))
+    units = sum(d.area(i) for i in objects) + sum(r.area for r in found_rooms)
+    return Decimal(str(units * metres * metres))
+
+
 def quantity(session: Session, m: Measurement) -> Decimal | None:
-    """Computed from the points and the sheet's current scale, to 3 decimals. None until the sheet has a scale."""
+    """Computed from the points and the sheet's current scale, to 3 decimals. None until the sheet has a scale. On a
+    CAD drawing, from the geometry of the objects measured and the drawing's units."""
+    if m.entities is not None:
+        base = _drawing_base(session, m)
+        if base is None:
+            return None
+        total = base * (m.multiplier or 1)
+        return total.quantize(Decimal("1" if m.kind == "count" else "0.001"), rounding=ROUND_HALF_UP)
     if m.kind == "count":
         base = Decimal(len(m.points))
     else:
@@ -248,7 +422,8 @@ class Comparison:
     boq_unit: str | None
     takeoff: Decimal | None
     unit: str
-    result: str  # matches | differs | unit_differs | no_boq_quantity | not_in_boq | no_scale
+    # matches | differs | unit_differs | no_boq_quantity | not_in_boq | not_on_drawings | no_scale
+    result: str
     difference: Decimal | None  # takeoff minus BOQ, as a fraction of the BOQ quantity
 
 
@@ -271,6 +446,8 @@ def compare(session: Session, tender_id: str) -> list[Comparison]:
         unit = units.pop() if len(units) == 1 else "mixed"
         if total is None:
             result, difference = "no_scale", None
+        elif total == 0 and all(m.entities == [] for m in group):
+            result, difference = "not_on_drawings", None  # the office looked, and the drawings don't show it
         elif unit != plain_unit(item.unit):
             result, difference = "unit_differs", None
         elif item.quantity is None or item.quantity == 0:
@@ -288,7 +465,9 @@ def label(session: Session, record: Scale | Measurement) -> str:
     """How a message names the record."""
     document = session.get(Document, record.document_id)
     where = f"{document.name}, page {record.page}"
-    return f"the scale of {where}" if isinstance(record, Scale) else f"the measurement “{record.label}” on {where}"
+    if isinstance(record, Scale):
+        return f"the units of {document.name}" if document.kind == "cad" else f"the scale of {where}"
+    return f"the measurement “{record.label}” on {where}"
 
 
 def approve(session: Session, record: Scale | Measurement, status: str = "approved") -> None:

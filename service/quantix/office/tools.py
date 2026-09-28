@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import numpy as np
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from pydantic_ai import BinaryContent, ModelRetry, RunContext, ToolReturn
 from sqlalchemy import select
@@ -18,23 +19,25 @@ from quantix.boq import records as boq
 from quantix.boq.models import FACT_KINDS, BoqItem
 from quantix.core import calculate as calculate_
 from quantix.core.review import APPROVED, PROPOSED
-from quantix.documents import evidence, library, readers, web
+from quantix.documents import cad, evidence, library, readers, web
 from quantix.documents.models import Document
 from quantix.estimate import analysis
 from quantix.estimate import records as estimate
 from quantix.office import records
 from quantix.office.models import TEAM, Decision, Staff, Task
-from quantix.review import activity, audit, lookup, package
+from quantix.review import activity, audit, lookup, package, queries
 from quantix.review import records as reviews
 from quantix.subcontract import records as subcontract
 from quantix.submission import records as submission
+from quantix.takeoff import drawings
+from quantix.takeoff import layers as layers_
 from quantix.takeoff import records as takeoff
 from quantix.tenders import Tender
 
 TEAM_LIMIT = 5  # staff under the Manager; a tender's work is shared among a few, not spread across many
 FOLLOW_UP = "Follow up: "  # a task someone set themselves when they told the engineer what they would do next
 MAX_FOLLOW_UPS = 3  # open at once per person, so promises can't pile up
-WORK_KINDS = ("documents", "boq", "takeoff", "pricing", "subcontract", "submission")  # the packs in office.packs
+WORK_KINDS = ("documents", "boq", "takeoff", "drawings", "pricing", "subcontract", "submission")  # office.packs
 FOREIGN_SCRIPT = re.compile("[぀-ヿ㐀-鿿가-힯]")  # Chinese, Japanese, Korean
 
 
@@ -90,9 +93,10 @@ class Turn:
 
 
 BLIND = (  # in the instructions of a turn whose AI can't see; its image tools are left out
-    "The office's AI can't read images, so you can't look at drawings or measure on them. Work from the text with "
+    "The office's AI can't read images, so you can't look at PDF drawings or measure on them. Work from the text with "
     "read_page, which has scans' words read by OCR, and tell the engineer what you couldn't check: they can measure "
-    "on the Takeoff screen or choose an AI that reads images in Settings."
+    "on the Takeoff screen or choose an AI that reads images in Settings. CAD drawings (DWG and DXF) need no looking: "
+    "read and measure them with the drawings tools."
 )
 
 
@@ -472,7 +476,8 @@ def hire(
 ) -> str:
     """Hire someone for work this tender needs. Make them a real person: a full name that suits the region,
     their own background, working style, professional opinions and way of speaking. work: the kinds of work they
-    will do, which decides the tools they have at hand: documents, boq, takeoff, pricing, subcontract or
+    will do, which decides the tools they have at hand: documents, boq, takeoff, drawings (CAD drawings, BOQ
+    checks and tender queries), pricing, subcontract or
     submission (they can load the others when they need them)."""
     chosen = [w.strip().lower() for w in work]
     if not chosen or any(w not in WORK_KINDS for w in chosen):
@@ -699,7 +704,8 @@ def precheck(ctx: RunContext[Turn]) -> str:
 
 def propose_fact(ctx: RunContext[Turn], kind: str, value: str, document_id: str, page: int, quote: str) -> str:
     """Record a tender fact pricing depends on, for the engineer's approval: kind is method_of_measurement,
-    currency or vat. The quote must be on the page."""
+    currency, vat, contract_type (e.g. lump sum, remeasured, from the conditions) or precedence (the order in which
+    the documents govern when they disagree, from the clause that states it). The quote must be on the page."""
     with _working(ctx, f"Recording the {FACT_KINDS.get(kind, kind).lower()}") as (session, me):
         _read_first(ctx, session, {(document_id, page)})
         boq.propose_fact(session, ctx.deps.tender_id, me, kind, value, document_id, page, quote)
@@ -821,6 +827,338 @@ def takeoff_summary(ctx: RunContext[Turn], boq_item: str | None = None) -> str:
     with _working(ctx, "Comparing the takeoff with the BOQ") as (session, _):
         _opened(ctx, session, "summary", "takeoff_summary")
         return lookup.takeoff_view(session, ctx.deps.tender_id, boq_item)
+
+
+LAYERS_AT_ONCE = 60  # drawing_overview rows at a time
+UNIT_WORDS = {"mm": "millimetres", "cm": "centimetres", "m": "metres", "in": "inches", "ft": "feet"}
+
+
+def _drawing(ctx: RunContext[Turn], session: Session, document_id: str) -> tuple[Document, cad.Drawing]:
+    document = drawings.drawing_document(session, ctx.deps.tender_id, document_id)
+    return document, drawings.open_drawing(ctx.deps.home, document)
+
+
+def _units_line(session: Session, document: Document, d: cad.Drawing) -> tuple[str, float | None]:
+    record = drawings.units_record(session, document.id)
+    if record is not None:
+        state = "approved" if record.status in APPROVED else "waiting for approval"
+        return f"Units: {drawings.unit_name(record.metres_per_point)} ({state}).", record.metres_per_point
+    return "Units: not set yet (set them with set_drawing_units). " + " ".join(drawings.units_evidence(d)), None
+
+
+def _amounts(totals: dict[str, float], metres: float | None) -> str:
+    parts = [f"{totals['count']:,} object{'s' if totals['count'] != 1 else ''}"]
+    if totals["length"]:
+        parts.append(
+            f"length {totals['length']:,.3f} drawing units"
+            + (f" = {totals['length'] * metres:,.3f} m" if metres else "")
+        )
+    if totals["area"]:
+        parts.append(
+            f"closed area {totals['area']:,.3f} square units"
+            + (f" = {totals['area'] * metres * metres:,.3f} m2" if metres else "")
+        )
+    return ", ".join(parts)
+
+
+def drawing_overview(ctx: RunContext[Turn], document_id: str, page: int = 1, start: int = 1) -> str:
+    """A CAD drawing (DWG or DXF) at a glance: its units and what in it says so, its pages (page 1 is model space,
+    the others its layouts), what Quantix couldn't read, every layer with what it holds (objects by type, total length
+    in drawing units, closed outlines, blocks placed on it, hatch patterns, sample words, whether it prints) 60 at a
+    time from start, and every block with its copies. With the layer map, each one's meaning. Work out what a layer
+    is from what it holds, not from its name alone."""
+    with _working(ctx) as (session, me):
+        document, d = _drawing(ctx, session, document_id)
+        space = d.space(page)
+        me.now = f"Looking over {document.name}"
+        _opened(ctx, session, "page", f"{document_id}:{page}")
+        units, metres = _units_line(session, document, d)
+        known = drawings.meanings(session, ctx.deps.tender_id)
+        facts = drawings.layer_facts(d, page)
+        counts = drawings.block_counts(d, page)
+    lines = [f"{document.name}, page {page}: {space.label}.", units]
+    lines.append("Pages: " + "; ".join(f"{s.number} {s.label} ({s.objects:,} objects)" for s in d.spaces) + ".")
+    if space.extents and metres:
+        lines.append(f"It spans {space.width * metres:,.1f} m × {space.height * metres:,.1f} m.")
+    read = d.info["read"]
+    if read["not_read"]:
+        lines.append("Not read: " + ", ".join(f"{n} {what}" for what, n in read["not_read"].items()) + ".")
+    missing = [x["path"] or x["name"] for x in d.info["xrefs"] if not x["loaded"]]
+    if missing:
+        lines.append("It refers to drawings it doesn't hold: " + ", ".join(missing) + ".")
+    first = max(start, 1)
+    shown = facts[first - 1 : first - 1 + LAYERS_AT_ONCE]
+    more = f" Call again with start={first + len(shown)} for the rest." if first - 1 + len(shown) < len(facts) else ""
+    lines.append(f"{len(facts)} layers hold objects here; layers {first} to {first + len(shown) - 1}:{more}")
+    for f in shown:
+        row = f"- {f.name}: " + ", ".join(f"{n} {t}" for t, n in f.types.most_common(4))
+        if f.length:
+            row += f"; length {f.length:,.0f}"
+        if f.closed:
+            row += f"; {f.closed} closed outlines (median area {f.closed_area_median:,.0f})"
+        if f.blocks:
+            row += "; blocks " + ", ".join(f"{b} ×{n}" for b, n in f.blocks.most_common(3))
+        if f.hatch_patterns:
+            row += "; hatches " + ", ".join(f"{p} ×{n}" for p, n in f.hatch_patterns.most_common(3))
+        if f.texts:
+            row += "; words " + " · ".join(f"“{t}”" for t in f.texts[:3])
+        if f.off or f.frozen:
+            row += "; doesn't print (off or frozen)"
+        meaning = drawings.meaning_of(known.layers, f.name)
+        lines.append(row + (f" → {drawings.MEANINGS[meaning]}" if meaning else ""))
+    if first == 1 and counts:
+        lines.append(f"{len(counts)} blocks are placed here (copies, wherever they sit):")
+        for name, n in counts.most_common(40):
+            meaning = drawings.meaning_of(known.blocks, name)
+            lines.append(f"- {name} ×{n}" + (f" → {drawings.MEANINGS[meaning]}" if meaning else ""))
+        if len(counts) > 40:
+            lines.append(f"… and {len(counts) - 40} more: find them with query_drawing and types ['Insert'].")
+    return "\n".join(lines)
+
+
+def query_drawing(
+    ctx: RunContext[Turn], document_id: str, rule: cad.Rule, page: int = 1, group_by: str = "layer", show: int = 20
+) -> str:
+    """Find objects on a CAD drawing by a rule and see what Quantix measures of them: how many (each copy of a block
+    counted), their total length and closed area, in drawing units and in metres once the units are set, grouped by
+    layer, block, type, room or a block attribute's tag ("attribute:TYPE"), with the first objects and their keys.
+    types ['Room'] lists the rooms Quantix finds from the layer map. Try a rule here before you measure with it."""
+    with _working(ctx) as (session, me):
+        document, d = _drawing(ctx, session, document_id)
+        me.now = f"Looking through {document.name}"
+        _opened(ctx, session, "page", f"{document_id}:{page}")
+        found, found_rooms = drawings.choose(session, ctx.deps.home, document, page, rule)
+        metres = drawings.metres_per_unit(session, document.id)
+    if [t.lower() for t in rule.types] == ["room"]:
+        if not found_rooms:
+            return (
+                "No rooms: map the layers that outline rooms (room_boundary), or the walls, doors and windows, with "
+                "propose_layer_map, and the room names (room_label)."
+            )
+        lines = [f"{len(found_rooms)} rooms on {document.name}, page {page}:"]
+        for r in found_rooms:
+            area = f"{r.area * metres * metres:,.2f} m2" if metres else f"{r.area:,.0f} square units"
+            perimeter = f"{r.perimeter * metres:,.2f} m" if metres else f"{r.perimeter:,.0f} units"
+            lines.append(f"- {r.name}: area {area}, perimeter {perimeter} (from its {r.source})")
+        return "\n".join(lines)
+    if not len(found):
+        return f"Nothing on {document.name}, page {page} matches that rule."
+    lines = [f"{document.name}, page {page}: {_amounts(d.totals(found), metres)} (Quantix's figures)."]
+    groups: dict[str, list[int]] = {}
+    for i in found:
+        i = int(i)
+        if group_by == "block":
+            key = d.placed[i].block if i in d.placed else "(not a block)"
+        elif group_by == "type":
+            key = d.type_of(i)
+        elif group_by.startswith("attribute:"):
+            tag = group_by.split(":", 1)[1].strip().upper()
+            key = d.placed[i].attributes.get(tag, "(none)") if i in d.placed else "(not a block)"
+        elif group_by == "room":
+            centre = [(d.num[i, 0] + d.num[i, 2]) / 2, (d.num[i, 1] + d.num[i, 3]) / 2]
+            key = next((r.name for r in found_rooms if cad.inside(r.ring, centre)[0]), "(in no room)")
+        else:
+            key = d.layer_of(i)
+        groups.setdefault(key, []).append(i)
+    if len(groups) > 1:
+        lines.append(f"By {group_by}:")
+        for key, members in sorted(groups.items(), key=lambda kv: -len(kv[1]))[:40]:
+            lines.append(f"- {key}: {_amounts(d.totals(np.array(members)), metres)}")
+    lines.append(f"The first {min(show, len(found))} objects:")
+    for i in found[: max(1, min(show, 60))]:
+        i = int(i)
+        row = f"- {d.keys[i]} · {d.type_of(i)} · {d.layer_of(i)}"
+        if i in d.placed:
+            placed = d.placed[i]
+            row += f" · block {placed.block}" + (f" ×{placed.copies}" if placed.copies > 1 else "")
+            if placed.attributes:
+                row += " · " + ", ".join(f"{k}={v}" for k, v in list(placed.attributes.items())[:4])
+        text = d.text_of(i)
+        if text and i not in d.placed:
+            row += f" · “{text[:60]}”"
+        if d.length(i):
+            row += f" · length {d.length(i):,.1f}"
+        if d.area(i):
+            row += f" · area {d.area(i):,.1f}"
+        lines.append(row)
+    return "\n".join(lines)
+
+
+def view_drawing(
+    ctx: RunContext[Turn],
+    document_id: str,
+    page: int = 1,
+    region: list[float] | None = None,
+    rule: cad.Rule | None = None,
+) -> ToolReturn:
+    """Look at a CAD drawing as a picture: a whole page, or a region of it as [left, bottom, right, top] in drawing
+    units. With a rule, the objects it takes are drawn in orange and numbered, and the reply gives each number's
+    key. A picture is for checking what things are; count and measure with query_drawing, never by eye."""
+    with _working(ctx) as (session, me):
+        document, d = _drawing(ctx, session, document_id)
+        me.now = f"Looking at {document.name}"
+        _opened(ctx, session, "page", f"{document_id}:{page}")
+        marked: dict[int, str] = {}
+        if rule is not None and not rule.empty():
+            found, _ = drawings.choose(session, ctx.deps.home, document, page, rule)
+            marked = {int(i): str(n + 1) for n, i in enumerate(found[:60])}
+        if region is not None and len(region) != 4:
+            raise ValueError("Give the region as [left, bottom, right, top] in drawing units.")
+        image, shown = cad.render(d, page, VIEW_WIDTH, tuple(region) if region else None, marked)
+    text = (
+        f"{document.name}, page {page}, from ({shown[0]:,.0f}, {shown[1]:,.0f}) to ({shown[2]:,.0f}, {shown[3]:,.0f}) "
+        "in drawing units, follows."
+    )
+    if marked:
+        text += " Numbered: " + "; ".join(f"{n} = {d.keys[i]}" for i, n in marked.items())
+    return ToolReturn(return_value=text, content=[BinaryContent(data=image, media_type="image/png")])
+
+
+def find_problems(ctx: RunContext[Turn], document_id: str | None = None) -> str:
+    """What Quantix's own checks find. With a CAD drawing: what couldn't be read, lines drawn twice, dimensions
+    written by hand that disagree with the drawing, drawn work nothing measures yet (from the layer map), room names
+    in no closed room, and services crossing fire-rated walls. Without one: the BOQ's own problems (lines billed
+    twice, provisional and prime cost sums, lines without a quantity, odd units, lines the office found nothing of on
+    the drawings) and grids that differ between drawings. Each is a lead to check, not a conclusion: raise a tender
+    query only for what matters to the price."""
+    with _working(ctx, "Checking the drawings and the BOQ") as (session, _):
+        _opened(ctx, session, "summary", "find_problems")
+        if document_id:
+            document, _d = _drawing(ctx, session, document_id)
+            _opened(ctx, session, "page", f"{document_id}:1")
+            found = drawings.drawing_problems(session, ctx.deps.home, document)
+            where = document.name
+        else:
+            found = drawings.boq_problems(session, ctx.deps.tender_id)
+            found += drawings.grid_problems(session, ctx.deps.home, ctx.deps.tender_id)
+            where = "the BOQ and across the drawings"
+    if not found:
+        return f"Quantix's checks find nothing in {where}."
+    lines = [f"Quantix's checks find {len(found)} things in {where}:"]
+    for p in found:
+        objects = f" Objects: {', '.join(p.objects[:8])}{' …' if len(p.objects) > 8 else ''}" if p.objects else ""
+        lines.append(f"- {p.message}{objects}")
+    return "\n".join(lines)
+
+
+def set_drawing_units(ctx: RunContext[Turn], document_id: str, units: str) -> str:
+    """Set a CAD drawing's units, which every quantity measured on it rests on: millimetres, centimetres, metres,
+    inches or feet, as the drawing states them (drawing_overview shows what says so). The engineer approves them."""
+    name = UNIT_WORDS.get(units.strip().lower(), units.strip().lower())
+    if name not in cad.UNIT_NAMES:
+        raise ModelRetry(f"Give the units as one of {', '.join(cad.UNIT_NAMES)}.")
+    with _working(ctx, "Setting the units of a drawing") as (session, me):
+        _read_first(ctx, session, {(document_id, 1)})
+        takeoff.set_units(session, ctx.deps.home, ctx.deps.tender_id, me.id, document_id, cad.UNIT_NAMES[name])
+    return f"Units set as {name}, for the Tender Manager's review and the engineer's approval."
+
+
+def measure_drawing(
+    ctx: RunContext[Turn],
+    document_id: str,
+    kind: str,
+    label: str,
+    rule: cad.Rule,
+    unit: str,
+    multiplier_m: float | None = None,
+    boq_item: str | None = None,
+) -> str:
+    """Take off from a CAD drawing's own objects in model space, by a rule: kind count (block copies or objects),
+    length (lines, polylines, arcs; a room's perimeter) or area (closed outlines and hatches; a room's area). unit:
+    count nr; length m, or m2 with a height as multiplier_m; area m2, or m3 with a thickness. Link the BOQ line it
+    belongs to. Quantix takes the objects the rule finds, lists them for the Tender Manager and computes the quantity
+    from their geometry and the drawing's units. A rule that finds nothing, linked to a BOQ line, records that the
+    line's work isn't on this drawing. Try the rule with query_drawing first."""
+    with _working(ctx, f"Measuring {label}") as (session, me):
+        _read_first(ctx, session, {(document_id, 1)})
+        m = takeoff.measure_drawing(
+            session,
+            ctx.deps.home,
+            ctx.deps.tender_id,
+            me.id,
+            document_id,
+            1,
+            kind,
+            label,
+            rule,
+            unit,
+            Decimal(str(multiplier_m)) if multiplier_m is not None else None,
+            boq_item,
+        )
+        q = takeoff.quantity(session, m)
+        item = session.get(BoqItem, m.boq_item_id) if m.boq_item_id else None
+        name = session.get(Document, document_id).name
+    if not m.entities:
+        return f"Recorded that {label} isn't on {name}: nothing there matches the rule."
+    if q is None:
+        return f"Took {len(m.entities)} objects, but {name} has no units yet: set them with set_drawing_units."
+    report = f"Measured {label}: {len(m.entities)} objects, {q} {unit} (Quantix's figure)."
+    if item and item.quantity and takeoff.plain_unit(item.unit) == takeoff.plain_unit(unit):
+        times = q / item.quantity
+        if times > 3 or times < Decimal("0.33"):
+            report += (
+                f" That is {times:,.2f} times the BOQ's {item.quantity:,.3f} {item.unit}: check the rule and the "
+                "units, and raise a query if the BOQ looks wrong."
+            )
+    return report
+
+
+def propose_layer_map(
+    ctx: RunContext[Turn],
+    document_id: str,
+    layers: dict[str, str],
+    note: str,
+    blocks: dict[str, str] | None = None,
+) -> str:
+    """Say what the layers and blocks of the tender's drawings are, worked out on this drawing, for the Tender
+    Manager's review and the engineer's approval. Give each name one of: walls, columns, structure, doors, windows,
+    room_boundary, room_label, floor_finish, wall_finish, ceiling, skirting, sanitary, fixtures, furniture,
+    services, fire_rated, stairs, external_works, landscape, grid, levels, dimensions, annotation, title_block,
+    hatching or ignore. A newer map overrides an older one name by name. Rooms, the check for drawn work nothing
+    measures and the crossings of services and fire-rated walls rest on it. note: how you worked it out."""
+    with _working(ctx, "Mapping the drawing layers") as (session, me):
+        _read_first(ctx, session, {(document_id, 1)})
+        layer_map = layers_.propose(
+            session, ctx.deps.home, ctx.deps.tender_id, me.id, document_id, layers, blocks or {}, note
+        )
+    return f"Layer map {layer_map.id[:8]} filed for the Tender Manager's review: {layers_.describe(layer_map)}."
+
+
+def raise_query(
+    ctx: RunContext[Turn],
+    kind: str,
+    title: str,
+    detail: str,
+    wording: str,
+    sources: list[queries.QuerySource],
+    boq_item: str | None = None,
+    measurements: list[str] | None = None,
+    governs: str | None = None,
+) -> str:
+    """Raise a tender query, for the engineer to decide whether it goes to the client. kind: missing (work drawn or
+    specified that no BOQ line or preamble covers), conflict (documents that disagree, with the page of each), boq
+    (an error in a BOQ line: link it and the measurements that show it) or clarification. title: a few words.
+    detail: what you found, for the engineer. wording: the query as the client will read it. sources: every page it
+    rests on, each with its words quoted or, on a CAD drawing, its objects' keys. governs: which document governs and
+    the clause that says so, from the order of precedence. Put repeats of one problem into one query with all their
+    sources. Every figure must come from the sources or from Quantix's takeoff."""
+    with _working(ctx, "Raising a tender query") as (session, me):
+        _read_first(ctx, session, {(s.document_id, s.page) for s in sources})
+        query = queries.raise_query(
+            session,
+            ctx.deps.home,
+            ctx.deps.tender_id,
+            me.id,
+            kind,
+            title,
+            detail,
+            wording,
+            sources,
+            boq_item,
+            measurements,
+            governs,
+        )
+    return f"Query {query.id[:8]} filed for the Tender Manager's review."
 
 
 def search_library(ctx: RunContext[Turn], words: str) -> str:

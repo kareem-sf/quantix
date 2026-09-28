@@ -19,19 +19,24 @@ from quantix.estimate import records as estimate
 from quantix.estimate.models import Markups, Rate
 from quantix.office import records as office
 from quantix.office.models import ENGINEER, Opened, Task
+from quantix.review import queries
 from quantix.review import records as reviews
+from quantix.review.models import TenderQuery
 from quantix.subcontract import records as subcontract
 from quantix.subcontract.models import Company, Enquiry, Package, Quote
 from quantix.submission import records as submission
 from quantix.submission.models import Draft, Requirement
+from quantix.takeoff import drawings
 from quantix.takeoff import records as takeoff
-from quantix.takeoff.models import Measurement, Scale
+from quantix.takeoff.models import LayerMap, Measurement, Scale
 
 MODELS: dict[str, Any] = {
     "boq": BoqItem,
     "fact": Fact,
     "scale": Scale,
     "measurement": Measurement,
+    "layers": LayerMap,
+    "query": TenderQuery,
     "rate": Rate,
     "markups": Markups,
     "draft": Draft,
@@ -62,6 +67,7 @@ SUMMARIES = {
     "priced_boq": "The priced BOQ",
     "list_boq": "The BOQ",
     "takeoff_summary": "The takeoff against the BOQ",
+    "find_problems": "What Quantix's checks find in the drawings and the BOQ",
     "list_requirements": "The submission checklist",
     "audit_tender": "The audit of the tender",
     "what_changed": "What changed in the office",
@@ -186,7 +192,14 @@ def _brief(session: Session, kind: str, r: Any) -> str:
     if kind == "draft":
         return f"“{r.title}”"
     if kind == "scale":
+        document = session.get(Document, r.document_id)
+        if document is not None and document.kind == "cad":
+            return drawings.unit_name(r.metres_per_point)
         return f"about 1:{takeoff.drawing_ratio(r.metres_per_point):,}"
+    if kind == "layers":
+        return f"{len(r.layers)} layers, {len(r.blocks)} blocks"
+    if kind == "query":
+        return f"“{r.title}”"
     return f"overheads {r.overheads:.1%}, profit {r.profit:.1%}"
 
 
@@ -329,7 +342,7 @@ def _boq_line(session: Session, item: BoqItem) -> str:
     return line
 
 
-FINDABLE = ("boq", "fact", "checklist", "draft", "measurement", "package", "quote")
+FINDABLE = ("boq", "fact", "checklist", "draft", "measurement", "query", "package", "quote")
 
 
 def search(session: Session, tender_id: str, words: str, kind: str | None = None) -> list[str]:
@@ -375,6 +388,12 @@ def search(session: Session, tender_id: str, words: str, kind: str | None = None
                 f"measurement {m.id[:8]} · “{m.label}” {_amount(takeoff.quantity(session, m))} {m.unit}"
                 + (f" for {boq.reference(item)}" if item else "")
                 + f" · {SHORT.get(m.status, m.status)}",
+            )
+    if kind in (None, "query"):
+        for q in queries.queries(session, tender_id):
+            add(
+                f"{q.title} {q.detail} {queries.KINDS[q.kind]}",
+                f"query {q.id[:8]} · {queries.KINDS[q.kind]}: {q.title} · {SHORT.get(q.status, q.status)}",
             )
     if kind in (None, "package", "quote"):
         for p in subcontract.packages(session, tender_id):
@@ -551,6 +570,15 @@ def promised(session: Session, tender_id: str, staff_id: str) -> bool:
 
 def _measured(session: Session, m: Measurement) -> str:
     document = session.get(Document, m.document_id)
+    if m.entities is not None:
+        metres = drawings.metres_per_unit(session, m.document_id)
+        units = f"in {drawings.unit_name(metres)}" if metres else "with no units set"
+        times = f" × {m.multiplier} m" if m.multiplier is not None else ""
+        return (
+            f"measurement {m.id[:8]} · “{m.label}” on {document.name}, page {m.page} {units}: a {m.kind} of "
+            f"{len(m.entities)} drawing objects by the rule {m.rule}{times} = {_amount(takeoff.quantity(session, m))} "
+            f"{m.unit} · {SHORT.get(m.status, '')}"
+        )
     scale = takeoff.scale_for(session, m.document_id, m.page)
     ratio = f"at about 1:{takeoff.drawing_ratio(scale.metres_per_point):,}" if scale else "with no scale set"
     times = f" × {m.multiplier} m" if m.multiplier is not None else ""

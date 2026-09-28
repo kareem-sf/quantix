@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from quantix import tenders
 from quantix.api.tenders import DB
-from quantix.documents import library, readers
+from quantix.documents import cad, library, readers
 from quantix.documents.models import Document
 from quantix.review import package
 
@@ -122,6 +122,12 @@ def page_image(document_id: str, number: int, session: DB, home: Home) -> Respon
     path = library.stored_file(home, document)
     if document.kind == "image":
         return FileResponse(path)
+    if document.kind == "cad" and document.page_count and 1 <= number <= document.page_count:
+        try:
+            image, _ = cad.render(cad.drawing(path), number, width=1400)
+        except (readers.Unreadable, ValueError) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return Response(image, media_type="image/png")
     if document.kind != "pdf" or not document.page_count or not 1 <= number <= document.page_count:
         raise HTTPException(status_code=404, detail="This page has no image.")
     return Response(readers.render_page(path, number), media_type="image/png")

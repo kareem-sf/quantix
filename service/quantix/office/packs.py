@@ -60,6 +60,19 @@ WORK: dict[str, Work] = {
         reads=[t.find_on_page, t.takeoff_summary, t.earthwork_volumes],
         produces=[t.set_scale, t.measure],
     ),
+    "drawings": Work(
+        "CAD drawings (DWG and DXF): what their layers and blocks hold, rooms, takeoff from their own objects, "
+        "checking them and the BOQ, and tender queries for missing items and conflicts.",
+        "CAD drawings: start with drawing_overview. Set the units with set_drawing_units from what the drawing says. "
+        "Work out what each layer and block is from what it holds, not from its name alone, and propose the layer "
+        "map. Take off by rule with measure_drawing (count a block's copies, take the length or area of what is on "
+        "a layer, or a room's area and perimeter); try each rule with query_drawing first, and never work out a "
+        "quantity yourself. Check a drawing, and the BOQ, with find_problems. Raise a tender query for work that is "
+        "drawn or specified but in no BOQ line or preamble, and for documents that disagree, with every source and "
+        "which document governs; put repeats of one problem into one query.",
+        reads=[t.drawing_overview, t.query_drawing, t.view_drawing, t.find_problems],
+        produces=[t.set_drawing_units, t.measure_drawing, t.propose_layer_map, t.raise_query],
+    ),
     "pricing": Work(
         "Pricing BOQ lines and markups: build-ups, the rate library, earlier tenders, market prices, how a rate "
         "compares, where the money is and what a change would do.",
@@ -140,7 +153,8 @@ MANAGER: list[Callable] = [
     t.set_due_date,
     t.audit_tender,
 ]
-SEEING = {t.view_page, t.find_on_page, t.set_scale, t.measure}  # left out for an AI that can't read images
+# left out for an AI that can't read images
+SEEING = {t.view_page, t.find_on_page, t.set_scale, t.measure, t.view_drawing}
 
 
 def work_of(member: Staff) -> list[str]:
