@@ -3,6 +3,7 @@
 import logging
 import time
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -139,7 +140,7 @@ def _due(session: Session, tender: tenders.Tender) -> str:
     return f"{when}, the engineer's date, not from the tender documents"
 
 
-def situation(session: Session, member: Staff, new: list[Message]) -> str:
+def situation(session: Session, member: Staff, new: list[Message], problems: Sequence[tuple[str, Any]] = ()) -> str:
     """What this person needs to know now. Rebuilt every turn from the records, never from memory."""
     tender = tenders.get_tender(session, member.tender_id)
     team = records.team(session, member.tender_id)
@@ -199,6 +200,13 @@ def situation(session: Session, member: Staff, new: list[Message]) -> str:
     waiting = [d for d in decisions if d.status == "waiting"]
     if waiting:
         parts.append("Waiting for the engineer:\n" + "\n".join(f"- {d.title}" for d in waiting))
+    if problems:  # found in work the engineer approved, which only they can reopen
+        parts.append(
+            "Quantix finds problems in work the engineer already approved. You can't change approved work: bring "
+            "each to the engineer with escalate, by the reference below, with where it shows, your recommended "
+            "correction first and the other options after. If they choose a correction, Quantix reopens the work for "
+            "whoever made it.\n" + "\n".join(f"- {ref}: {f.message}" for ref, f in problems)
+        )
     shown = {m.id for m in new}
     earlier = [m for m in records.messages(session, member.tender_id, TEAM, limit=12) if m.id not in shown]
     if earlier:

@@ -1,7 +1,7 @@
 """The tender audit before release: what the tender still lacks and every open finding on the office's work."""
 
 import io
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 import openpyxl
@@ -13,9 +13,9 @@ from test_office import scripted, wait_for
 from quantix import settings
 from quantix.boq import records as boq
 from quantix.estimate import records as estimate
-from quantix.estimate.models import LibraryResource
+from quantix.estimate.models import LibraryResource, Markups
 from quantix.office import records as office
-from quantix.office.models import ENGINEER
+from quantix.office.models import ENGINEER, Staff
 from quantix.review import audit
 from quantix.review import records as reviews
 from quantix.submission import records as submission
@@ -187,10 +187,8 @@ def test_the_manager_audits_through_his_tool(client, tender, tmp_path):
     )
 
 
-def test_markups_approved_before_the_programme_are_checked_against_it(client, tender):
-    """The engineer's approval settles the warnings they saw. Markups priced for longer than a programme approved
-    after them is news, so the audit shows it until the markups are approved again, or redone."""
-    tender_id, _, docs = tender
+def markups_before_programme(client, tender_id, docs) -> str:
+    """Markups approved with site staff for 4 months, then a programme of 40 working days approved after them."""
     with client.app.state.sessions() as session:
         layla = next(m for m in office.team(session, tender_id) if m.first_name == "Layla")
         earlier = estimate.current_markups(session, tender_id)
@@ -202,6 +200,7 @@ def test_markups_approved_before_the_programme_are_checked_against_it(client, te
         ]
         markups = estimate.propose_markups(session, tender_id, layla.id, staff, zero, zero, zero, "Four months.")
         estimate.approve(session, markups)
+        markups.decided_at -= timedelta(hours=1)  # approved well before the programme, as on the real tender
         quote = "7.9 The tenderer shall submit a programme."
         wanted = submission.RequirementIn(
             section="Technical", title="Work schedule", document_id=docs["Conditions.pdf"], page=1, quote=quote
@@ -212,6 +211,14 @@ def test_markups_approved_before_the_programme_are_checked_against_it(client, te
         record = submission.schedule_record(rows, 40)
         submission.draft(session, requirement, layla.id, "Work schedule", "Excavate first.", "approved", record)
         session.commit()
+        return markups.id
+
+
+def test_markups_approved_before_the_programme_are_checked_against_it(client, tender):
+    """The engineer's approval settles the warnings they saw. Markups priced for longer than a programme approved
+    after them is news, so the audit shows it until the markups are approved again, or redone."""
+    tender_id, _, docs = tender
+    markups_id = markups_before_programme(client, tender_id, docs)
 
     def audited() -> list[str]:
         with client.app.state.sessions() as session:
@@ -223,6 +230,73 @@ def test_markups_approved_before_the_programme_are_checked_against_it(client, te
     )
     assert news in audited()  # one finding for both, not one each
     with client.app.state.sessions() as session:
-        estimate.approve(session, session.get(type(markups), markups.id))  # approved again, with the programme known
+        estimate.approve(session, session.get(Markups, markups_id))  # approved again, with the programme known
         session.commit()
     assert news not in audited()
+
+
+def test_the_manager_puts_a_problem_in_approved_work_to_the_engineer_who_decides(client, tender):
+    """Salem never raised the markups: approved work was his to leave alone, and nothing told him. Now the problem is
+    his to bring to the engineer, with his recommended correction; the engineer's choice reopens the work."""
+    tender_id, rania_id, docs = tender
+    markups_id = markups_before_programme(client, tender_id, docs)
+    ref = f"markups {markups_id[:8]}"
+    with client.app.state.sessions() as session:
+        assert ref in [r for r, _ in audit.approved_problems(session, client.app.state.home, tender_id)]
+        correction = "Price the site engineer and foreman for 2 months, the programme's 40 working days."
+        where = [reviews.Source(boq_item="3.1", what="the excavation that sets the programme")]
+        problem = "Site staff are priced for 4 months, but the approved programme is 40 working days."
+        decision = reviews.escalate(session, tender_id, session.get(Staff, rania_id), ref, problem, where, [correction])
+        session.commit()
+        options, decision_id = decision.options, decision.id
+    assert options == [correction, "Keep it as approved"]
+    with client.app.state.sessions() as session:  # put to the engineer, so not raised again
+        assert ref not in [r for r, _ in audit.approved_problems(session, client.app.state.home, tender_id)]
+
+    client.post(f"/decisions/{decision_id}/answer", json={"answer": correction})
+    with client.app.state.sessions() as session:
+        assert session.get(Markups, markups_id).status == "rejected"
+        [redo] = [t for t in office.all_tasks(session, tender_id) if t.status == "open"]
+        assert (redo.title, redo.brief) == ("Redo the markups", correction)
+
+
+def test_keeping_approved_work_as_it_is_changes_nothing(client, tender):
+    tender_id, rania_id, docs = tender
+    markups_id = markups_before_programme(client, tender_id, docs)
+    with client.app.state.sessions() as session:
+        where = [reviews.Source(boq_item="3.1", what="the excavation that sets the programme")]
+        problem = "Site staff are priced for 4 months, but the approved programme is 40 working days."
+        manager = session.get(Staff, rania_id)
+        decision = reviews.escalate(session, tender_id, manager, "markups", problem, where, ["Price 2 months."])
+        session.commit()
+        decision_id = decision.id
+    client.post(f"/decisions/{decision_id}/answer", json={"answer": "Keep it as approved"})
+    with client.app.state.sessions() as session:
+        assert session.get(Markups, markups_id).status == "approved"
+
+
+def test_a_problem_in_approved_work_wakes_the_manager_once(client, tender):
+    """Nothing else would bring him to it: no message, nothing in his queue."""
+    import asyncio
+    from datetime import UTC, datetime
+
+    from test_office import DONE, prompt_of
+
+    tender_id, rania_id, docs = tender
+    markups_id = markups_before_programme(client, tender_id, docs)
+    with client.app.state.sessions() as session:  # he has read everything and looked at his queue
+        rania = session.get(Staff, rania_id)
+        office.mark_read(session, rania)
+        rania.reviewed_up_to = datetime.now(UTC)
+        session.commit()
+    briefings: list[str] = []
+
+    def brain(messages, info):
+        briefings.append(prompt_of(messages))
+        return DONE
+
+    runtime = client.app.state.office
+    assert asyncio.run(runtime._turn(scripted(brain), tender_id, rania_id)) is True
+    shown = f"- markups {markups_id[:8]}: The markups: Site engineer and Foreman: 4 month is about 104 working days"
+    assert "Quantix finds problems in work the engineer already approved." in briefings[0] and shown in briefings[0]
+    assert asyncio.run(runtime._turn(scripted(brain), tender_id, rania_id)) is False  # once, not every pass

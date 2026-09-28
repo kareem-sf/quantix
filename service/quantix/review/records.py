@@ -544,6 +544,23 @@ def _title(session: Session, p: Pending) -> str:
     return text[0].upper() + text[1:]
 
 
+KEEP_APPROVED = "Keep it as approved"
+
+
+def _approved(session: Session, tender_id: str, ref: str) -> Pending | None:
+    """Work the engineer approved, by its reference, e.g. "markups e8d6e257"."""
+    kind, _, short = ref.strip().partition(" ")
+    kind, short = kind.lower(), short.strip().lower()
+    if kind not in REVIEWED_KINDS:
+        return None
+    model = REVIEWED_KINDS[kind][0]
+    query = select(model).where(model.tender_id == tender_id, model.status == "approved")
+    record = session.scalars(query.where(model.id.startswith(short)) if short else query).first()
+    if record is None:
+        return None
+    return Pending(kind, record, getattr(record, "proposed_by", "") or "", record.decided_at or record.created_at)
+
+
 def escalate(
     session: Session,
     tender_id: str,
@@ -554,8 +571,18 @@ def escalate(
     suggestions: list[str],
 ) -> Decision:
     """A decision for the engineer on a record the office couldn't settle. The record stays in the Manager's queue
-    until the engineer answers; the answer goes to his chat for him to apply."""
-    p = find(session, tender_id, ref)
+    until the engineer answers; the answer goes to his chat for him to apply. Work the engineer already approved can
+    be brought to them too, when Quantix finds a problem in it: they choose a correction, which reopens it for
+    whoever made it, or keep it as approved."""
+    try:
+        p, approved = find(session, tender_id, ref), False
+    except ValueError:
+        p, approved = _approved(session, tender_id, ref), True
+        if p is None:
+            raise ValueError(
+                "nothing with that reference is waiting for your review or approved by the engineer; use "
+                "review_queue, or open_record for approved work"
+            ) from None
     if escalation(session, p.record.id):
         raise ValueError("You already escalated it. The engineer's answer will come to your chat.")
     if len(problem.split()) < 5:
@@ -571,7 +598,7 @@ def escalate(
         raised_by=manager.id,
         title=_title(session, p),
         text=problem.strip(),
-        options=suggestions,
+        options=[*suggestions, KEEP_APPROVED] if approved else suggestions,
         subject_kind=p.kind,
         subject_id=p.record.id,
         sources=shown,
@@ -579,6 +606,17 @@ def escalate(
     session.add(decision)
     session.flush()
     return decision
+
+
+def apply_answer(session: Session, decision: Decision, answer: str) -> None:
+    """The engineer chose a correction to work they had approved: it is reopened, with their answer as the
+    instruction, for whoever made it. Keeping it as approved changes nothing."""
+    if KEEP_APPROVED not in (decision.options or []) or answer.strip() == KEEP_APPROVED:
+        return
+    model = REVIEWED_KINDS.get(decision.subject_kind or "", (None,))[0]
+    record = session.get(model, decision.subject_id) if model else None
+    if record is not None and record.status in APPROVED:
+        reopen(session, decision.subject_kind, record.id, answer)
 
 
 def filed_since(session: Session, staff_id: str, since: datetime) -> str:

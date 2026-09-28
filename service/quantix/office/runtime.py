@@ -18,8 +18,8 @@ from quantix.documents import library
 from quantix.office import agents, packs, records
 from quantix.office.models import ENGINEER, OFFICE, TEAM, Message, Staff, TurnRecord
 from quantix.office.tools import Stopped, Turn
+from quantix.review import audit, revisions
 from quantix.review import records as reviews
-from quantix.review import revisions
 from quantix.tenders import Tender
 
 log = logging.getLogger("quantix.office")
@@ -187,11 +187,14 @@ class Office:
             if member.status == "released":  # released earlier in this pass
                 return False
             new = records.inbox(session, member)
-            # the Tender Manager also wakes for work his staff put in his review queue, and for work a newer copy of a
-            # document left on the older copy
+            # the Tender Manager also wakes for work his staff put in his review queue, for work a newer copy of a
+            # document left on the older copy, and once for each problem found in work the engineer approved
+            problems = audit.approved_problems(session, self.home, tender_id) if member.is_manager else []
+            unseen = [f for _, f in problems if not records.has_opened(session, staff_id, "finding", f.key[:80])]
             to_review = member.is_manager and (
                 reviews.has_new(session, tender_id, member.reviewed_up_to)
                 or revisions.news(session, tender_id, member.reviewed_up_to)
+                or bool(unseen)
             )
             if (
                 not new
@@ -201,7 +204,9 @@ class Office:
             ):
                 return False
             history = self._carry.pop(staff_id, None)
-            prompt = agents.situation(session, member, new)
+            prompt = agents.situation(session, member, new, problems)
+            for _, finding in problems:
+                records.note_opened(session, tender_id, staff_id, "finding", finding.key[:80])
             if history is not None:
                 prompt = f"{CARRY_ON}\n\n{prompt}"
             records.mark_read(session, member)

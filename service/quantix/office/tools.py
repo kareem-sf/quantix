@@ -1298,10 +1298,12 @@ def escalate(
     ctx: RunContext[Turn], record: str, problem: str, sources: list[reviews.Source], suggestions: list[str]
 ) -> str:
     """Bring the engineer a problem the office can't settle: a record in your review queue that keeps coming back
-    wrong, or one only the engineer can decide. problem: what is wrong and why the office can't settle it. sources:
-    where it shows, each a document page or a BOQ line, with what the engineer will find there. suggestions: 1 to 4
-    corrections you would make, each complete enough to act on. The record waits in your queue; the engineer's
-    answer comes to your chat, and you apply it with review."""
+    wrong, one only the engineer can decide, or work the engineer already approved that Quantix finds a problem in.
+    problem: what is wrong, what it costs or risks, and why the office can't settle it. sources: where it shows, each
+    a document page or a BOQ line, with what the engineer will find there. suggestions: 1 to 4 corrections, your
+    recommended one first, each complete enough to act on. A record in your queue waits there; the engineer's answer
+    comes to your chat, and you apply it with review. For approved work Quantix adds "Keep it as approved"; a
+    correction the engineer chooses reopens the work for whoever made it."""
     with _working(ctx, "Bringing a problem to the engineer") as (session, me):
         found = reviews.escalate(session, ctx.deps.tender_id, me, record, problem, sources, suggestions)
         title = found.title

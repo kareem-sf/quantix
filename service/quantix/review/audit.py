@@ -7,6 +7,7 @@ import re
 from collections import Counter, defaultdict
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -19,7 +20,7 @@ from quantix.documents import library
 from quantix.documents.models import Document
 from quantix.estimate import records as estimate
 from quantix.office import records as office
-from quantix.office.models import Staff
+from quantix.office.models import Decision, Staff
 from quantix.review import checks, revisions
 from quantix.review import records as reviews
 from quantix.review.checks import BLOCKER, WARNING, Finding, Ref
@@ -243,9 +244,14 @@ def _documents(session: Session, tender_id: str) -> list[Finding]:
 
 
 def _records(session: Session, home: Path, tender_id: str) -> list[Finding]:
-    """What the checks find on work already past the Manager's review. The engineer's own approval settles the
-    warnings they saw when approving; one that compares the work with something settled after it, such as markups
-    with a programme approved later, is new to them. A blocker stands whoever approved the work."""
+    """What the checks find on work already past the Manager's review."""
+    return [f for _, _, f in _checked(session, home, tender_id)]
+
+
+def _checked(session: Session, home: Path, tender_id: str) -> list[tuple[str, Any, Finding]]:
+    """Each finding on work past the Manager's review, with the work's kind and record. The engineer's own approval
+    settles the warnings they saw when approving; one that compares the work with something settled after it, such
+    as markups with a programme approved later, is new to them. A blocker stands whoever approved the work."""
     found = []
     for kind, (model, module) in reviews.REVIEWED_KINDS.items():
         query = select(model).where(model.tender_id == tender_id, model.status.in_((REVIEWED, *APPROVED)))
@@ -257,8 +263,21 @@ def _records(session: Session, home: Path, tender_id: str) -> list[Finding]:
                 if approved and f.severity != BLOCKER and not (f.since and f.since > approved):
                     continue
                 label = module.label(session, record)
-                found.append(Finding(f.key, f.severity, f"{label[0].upper()}{label[1:]}: {f.message}", f.refs))
+                message = f"{label[0].upper()}{label[1:]}: {f.message}"
+                found.append((kind, record, Finding(f.key, f.severity, message, f.refs, f.since)))
     return found
+
+
+def approved_problems(session: Session, home: Path, tender_id: str) -> list[tuple[str, Finding]]:
+    """Problems in work the engineer approved that nobody has brought to them yet, each with the reference to
+    escalate it by. Only the engineer can reopen approved work, so the Tender Manager puts each to them."""
+    settled = reviews.accepted(session, tender_id)
+    asked = set(session.scalars(select(Decision.subject_id).where(Decision.tender_id == tender_id)))
+    return [
+        (f"{kind} {record.id[:8]}", f)
+        for kind, record, f in _checked(session, home, tender_id)
+        if record.status == "approved" and record.id not in asked and f.key not in settled
+    ]
 
 
 def _older_copies(session: Session, tender_id: str) -> list[Finding]:

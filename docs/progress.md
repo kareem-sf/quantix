@@ -802,3 +802,17 @@ Going through each screen on the real tender and asking the office live found fi
 
 Also dropped, as the engineer: two lessons that had led to wrong redrafts.
 - **Checks:** 5 new service tests and 1 interface test. 182 service tests and 72 interface tests pass.
+
+## 28 September 2026: problems in approved work reach the engineer through the Manager
+
+The demo found the markups priced for 4 months against a 72-day programme approved after them. Salem never raised
+it: the audit hid it, nothing woke him for it, and approved work was not his to change or to escalate.
+
+- **He is told.** Quantix lists the problems it finds in work the engineer approved that nobody has put to them yet
+  (`audit.approved_problems`), and wakes the Manager once for each he hasn't seen; his briefing names each with the
+  reference to escalate it by.
+- **He brings it with options.** `escalate` now takes approved work: the problem, where it shows, and 1 to 4
+  corrections with his recommendation first. Quantix adds "Keep it as approved".
+- **The engineer's answer acts.** A correction they choose reopens the work, with the answer as the instruction for
+  whoever made it; keeping it changes nothing. Once put to them, the problem isn't raised again.
+- **Checks:** 3 new service tests. 185 service tests and 72 interface tests pass.

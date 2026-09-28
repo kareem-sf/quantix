@@ -11,6 +11,7 @@ from quantix.estimate import records as estimate
 from quantix.estimate.models import Rate
 from quantix.office import records
 from quantix.office.models import ENGINEER, TEAM, Decision, Staff
+from quantix.review import records as reviews
 
 router = APIRouter(tags=["office"])
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8000)]
@@ -147,6 +148,7 @@ def answer_decision(decision_id: str, body: AnswerIn, session: DB, request: Requ
     if decision.status != "waiting":
         raise HTTPException(status_code=400, detail="This has already been decided.")
     records.answer(session, decision, body.answer)
+    reviews.apply_answer(session, decision, body.answer)
     if decision.subject_kind == "library" and body.answer == estimate.KEEP_IN_LIBRARY:
         rate = session.get(Rate, decision.subject_id)
         if rate is not None:
