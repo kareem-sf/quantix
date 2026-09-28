@@ -4,6 +4,7 @@ the work still to do as its own tasks, never with a promise to look."""
 import io
 import re
 import threading
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -244,6 +245,11 @@ def test_find_records_and_the_priced_boq(client, tender):
         assert agents.standing(session, tender_id).count(
             "Markups: the last set was sent back, and none proposed since."
         )
+        # and the set the engineer sent back last, not a newer duplicate turned down the day before
+        filed.decided_at = datetime.now(UTC)
+        duplicate = estimate.propose_markups(session, tender_id, priya_id, [site], six, zero, zero, "Again.")
+        duplicate.status, duplicate.decided_at = "rejected", filed.decided_at - timedelta(days=1)
+        assert lookup.find(session, tender_id, "markups") == ("markups", filed)
 
         text = lookup.priced(session, tender_id)
         head, *rows, foot = text.splitlines()
@@ -342,6 +348,27 @@ def test_a_question_gets_one_set_of_next_steps_then_an_answer(client, tender):
     assert tools.message_engineer(ctx, "Built up from a gang, rebar and wire.", sources=[f"rate {rate_id[:8]}"]) == (
         "Sent. It replaces your last message, which the engineer hadn't answered."
     )
+
+
+def test_sources_written_as_the_last_line_are_taken_as_the_sources(client, tender):
+    """On the real tender Salem ended his answer with "Sources: markups, estimate_summary" instead of giving them,
+    was refused, and stopped: the engineer never got the answer."""
+    written = "It is both.\n\n- Overheads 6%.\n\n**Sources:** markups, Bill.xlsx, page 2; estimate_summary"
+    assert tools._written_sources(written) == (
+        "It is both.\n\n- Overheads 6%.",
+        ["markups", "Bill.xlsx, page 2", "estimate_summary"],
+    )
+    assert tools._written_sources("No sources line here.") == ("No sources line here.", [])
+
+    tender_id, priya_id, _ = tender
+    rania_id, rate_id, _ = priced_after_a_send_back(client, tender_id, priya_id)
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": rania_id, "text": QUESTION})
+    ctx = fake_turn(client, tender_id, rania_id)
+    tools.open_record(ctx, [f"rate {rate_id[:8]}"])
+    assert tools.message_engineer(ctx, f"Built up from a gang.\nSources: rate {rate_id[:8]}").startswith("Sent.")
+    answer = client.get(f"/tenders/{tender_id}/messages", params={"channel": rania_id}).json()[-1]
+    assert answer["text"] == "Built up from a gang."
+    assert [s["label"] for s in answer["sources"]] == ["The rate for BOQ item 4.3"]
 
 
 def test_a_refused_answer_names_what_it_may_rest_on(client, tender, tmp_path):

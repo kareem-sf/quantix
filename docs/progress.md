@@ -926,3 +926,10 @@ was already marked as read, so it would not have come back as new.
   the right answer ("It is both…"), but twice gave the whole `find_records` line as his source. Quantix refused it
   both times, so the answer never reached the engineer. A source, or anything else opened by reference, is now read
   by the reference its line starts with ("markups · …" is "markups"). It must still have been opened.
+- **Sources written in the text.** Asked a fourth time, Salem opened the markups and wrote the answer, but ended it
+  with a "Sources: markups, estimate_summary" line instead of giving them. He was refused and stopped. A message with
+  no sources now takes a last "Sources:" line as its sources (a page's own comma, as in "Bill.xlsx, page 2", is
+  kept), and the checks on them are unchanged.
+- **The markups sent back last.** The sent-back set shown to the office was the newest made: a duplicate turned down
+  on 27 September. The set the engineer reopened today (approved on 27 September; "Reduce the site-support allowance
+  to match the 72-working-day programme") is older. The office now sees the set sent back most recently.

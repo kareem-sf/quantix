@@ -123,11 +123,12 @@ def find(session: Session, tender_id: str, ref: str) -> tuple[str, Any]:
 
 
 def returned_markups(session: Session, tender_id: str) -> Markups | None:
-    """The newest markups when they were sent back and nothing has replaced them: what to correct."""
+    """The markups sent back last, when nothing has replaced them: what to correct. Sent back last, not made last:
+    reopening approved markups sends back an older set than a duplicate turned down the day before."""
     if estimate.current_markups(session, tender_id) is not None:
         return None
     query = select(Markups).where(Markups.tender_id == tender_id, Markups.status == "rejected")
-    return session.scalars(query.order_by(Markups.created_at.desc())).first()
+    return session.scalars(query.order_by(Markups.decided_at.desc())).first()
 
 
 def returned_draft(session: Session, requirement: Requirement) -> Draft | None:

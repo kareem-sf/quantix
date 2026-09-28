@@ -359,6 +359,19 @@ ANSWER_NOW = (
 )
 
 
+# a last line "Sources: markups, Bill.xlsx, page 2": what a weak model writes instead of giving sources
+SOURCES_LINE = re.compile(r"\n\s*\**sources?\**\s*:\**\s*(.+?)\s*$", re.IGNORECASE)
+
+
+def _written_sources(text: str) -> tuple[str, list[str]]:
+    """The message without its written "Sources:" line, and the sources it names (a page's own comma is kept)."""
+    found = SOURCES_LINE.search(text)
+    if found is None:
+        return text, []
+    named = re.split(r";|,(?!\s*page\b)", found[1])
+    return text[: found.start()].rstrip(), [n.strip(" .*`") for n in named if n.strip(" .*`")]
+
+
 def message_engineer(
     ctx: RunContext[Turn], text: str, sources: list[str] | None = None, next_steps: list[str] | None = None
 ) -> str:
@@ -375,6 +388,8 @@ def message_engineer(
     steps = [s.strip() for s in next_steps or [] if s.strip()]
     if len(steps) > 3:
         raise ModelRetry("Give at most 3 next steps: the ones you will do yourself next.")
+    if not sources:
+        text, sources = _written_sources(text)
     with _working(ctx) as (session, me):
         try:
             cited = [lookup.cited(session, ctx.deps.tender_id, me.id, s) for s in sources or [] if s.strip()]
