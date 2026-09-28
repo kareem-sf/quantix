@@ -467,11 +467,17 @@ def complete_task(ctx: RunContext[Turn], task_id: str, result: str, only_reporte
         own = task is not None and task.title.startswith(FOLLOW_UP)
         if task is not None and task.staff_id == me.id and task.status == "open" and not own:
             filed = reviews.filed_since(session, me.id, task.created_at)
-            if not filed and task.title.startswith("Redo "):
+            if task.title.startswith("Give out: "):  # done once someone else has the redo
+                given = select(Task.id).where(
+                    Task.tender_id == ctx.deps.tender_id, Task.staff_id != me.id, Task.created_at >= task.created_at
+                )
+                if session.scalars(given).first() is None:
+                    raise ValueError("Give the redo to someone with assign_task first, then complete this task.")
+            elif not filed and task.title.startswith("Redo "):
                 raise ValueError(
                     "You haven't filed the corrected work yet. Redo it with its tool, then complete the task."
                 )
-            if not filed and not only_reported:
+            elif not filed and not only_reported:
                 raise ValueError(
                     "You haven't filed anything since this task began. If it asked you to draft, measure, price, enter "
                     "or record something, do that with its tool first. If it only asked you to find, read or check "

@@ -1,8 +1,10 @@
 """The tender audit before release: what the tender still lacks and every open finding on the office's work."""
 
 import io
+import threading
 from datetime import date, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 import openpyxl
 import pytest
@@ -15,7 +17,8 @@ from quantix.boq import records as boq
 from quantix.estimate import records as estimate
 from quantix.estimate.models import LibraryResource, Markups
 from quantix.office import records as office
-from quantix.office.models import ENGINEER, Staff
+from quantix.office import tools
+from quantix.office.models import ENGINEER, Staff, Task
 from quantix.review import audit
 from quantix.review import records as reviews
 from quantix.submission import records as submission
@@ -318,3 +321,31 @@ def test_a_problem_in_approved_work_wakes_the_manager_once(client, tender):
     # as what woke him, not after "Nothing new", which on the real tender he took at its word
     assert f"New for you:\n- Quantix, in work the engineer approved (markups {markups_id[:8]}): " in briefings[0]
     assert asyncio.run(runtime._turn(scripted(brain), tender_id, rania_id)) is False  # once, not every pass
+
+
+def test_work_the_manager_made_is_given_out_again_when_the_engineer_reopens_it(client, tender):
+    """The real tender: the engineer reopened markups Salem had made before the Manager stopped producing work. The
+    redo went to no one, and the office went quiet with no markups."""
+
+    tender_id, _, _ = tender
+    with client.app.state.sessions() as session:
+        rania = office.manager(session, tender_id)
+        markups = estimate.current_markups(session, tender_id)
+        markups.proposed_by = rania.id  # made by the Manager, as the real tender's were
+        reviews.reopen(session, "markups", markups.id, "Price the site staff for the 72-day programme.")
+        session.commit()
+        [task] = [t for t in office.open_tasks(session, rania)]
+        assert task.title == "Give out: Redo the markups"
+        assert task.brief.startswith("Price the site staff for the 72-day programme.\nGive this redo to someone")
+        rania_id = rania.id
+
+    state = client.app.state
+    ctx = SimpleNamespace(
+        deps=tools.Turn(state.home, state.sessions, tender_id, rania_id, False, threading.Event()), tool_call_id="c"
+    )
+    with pytest.raises(Exception, match="Give the redo to someone with assign_task first"):
+        tools.complete_task(ctx, task.id, "Given to Layla.")
+    tools.assign_task(ctx, "Layla", "redo the markups", "Price the site staff for the 72-day programme.")
+    assert tools.complete_task(ctx, task.id, "Given to Layla.") == "Done. The Manager has your result."
+    with client.app.state.sessions() as session:
+        assert session.get(Task, task.id).status == "done"

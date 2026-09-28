@@ -78,8 +78,16 @@ def send_back(session: Session, tender_id: str, record: Any, what: str, reason: 
     person = session.get(Staff, record.proposed_by)
     to = f"{person.first_name}, " if person else ""
     post(session, tender_id, by, TEAM, f"{to}I sent back {what}" + (f": {reason}" if reason else "."))
-    if person is not None and person.status == "active" and not person.is_manager:
-        title, brief = f"Redo {what}", reason or "See the team room."
+    title, brief = f"Redo {what}", reason or "See the team room."
+    if person is None or person.status != "active" or person.is_manager:
+        # made by someone who can't redo it: the Manager, who produces nothing, or someone released. Without this
+        # the redo was no one's task, and work the engineer reopened waited unseen (the real tender's markups).
+        lead = manager(session, tender_id)
+        if lead is not None:
+            maker = "you made it, and your staff produce the work" if person is lead else "its maker has left the team"
+            brief = f"{brief}\nGive this redo to someone on the team with assign_task, passing on the reason: {maker}."
+            person, title = lead, f"Give out: {title}"
+    if person is not None and person.status == "active":
         query = select(Task).where(Task.staff_id == person.id, Task.status == "open", Task.title == title)
         earlier = session.scalars(query).first()
         if earlier is not None:  # sent back again: the newest correction is the one to follow, from now

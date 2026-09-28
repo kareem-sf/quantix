@@ -933,3 +933,9 @@ was already marked as read, so it would not have come back as new.
 - **The markups sent back last.** The sent-back set shown to the office was the newest made: a duplicate turned down
   on 27 September. The set the engineer reopened today (approved on 27 September; "Reduce the site-support allowance
   to match the 72-working-day programme") is older. The office now sees the set sent back most recently.
+- **Reopened work always has someone to redo it.** After Salem answered, the office went idle with no markups at
+  all. The engineer had reopened the approved set at 12:11. A send-back becomes a "Redo …" task for whoever made the
+  record, but Salem made those markups before the Manager stopped producing work, and the Manager gets no redo
+  tasks. So the redo was no one's. Now, when the maker is the Manager or has been released, the Manager gets
+  "Give out: Redo …" with the reason, to hand to someone with assign_task. He can complete it only once someone
+  else has a task from after it.
