@@ -292,6 +292,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/documents/{document_id}/sheets/{number}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Sheet
+         * @description A sheet of a workbook as Excel shows it: its cells' text, merges, sizes and formatting. With `hidden`, the rows
+         *     and columns the sheet hides are shown too.
+         */
+        get: operations["sheet_documents__document_id__sheets__number__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{document_id}/open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open In App
+         * @description Opens the file in the app this computer uses for its type. The app gets a read-only copy, so the stored file
+         *     stays exactly as it was supplied.
+         */
+        post: operations["open_in_app_documents__document_id__open_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tenders/{tender_id}/office": {
         parameters: {
             query?: never;
@@ -1473,6 +1515,31 @@ export interface components {
             /** Facts */
             facts: components["schemas"]["FactOut"][];
         };
+        /** Cell */
+        Cell: {
+            /** Column */
+            column: number;
+            /**
+             * Text
+             * @default
+             */
+            text: string;
+            /**
+             * Style
+             * @default 0
+             */
+            style: number;
+            /**
+             * Rows
+             * @default 1
+             */
+            rows: number;
+            /**
+             * Columns
+             * @default 1
+             */
+            columns: number;
+        };
         /** CheckRequest */
         CheckRequest: {
             /** Model */
@@ -1492,6 +1559,18 @@ export interface components {
             area_m2: number | null;
             /** Volume M3 */
             volume_m3: number | null;
+        };
+        /** Column */
+        Column: {
+            /** Letter */
+            letter: string;
+            /** Width */
+            width: number;
+            /**
+             * Hidden
+             * @default false
+             */
+            hidden: boolean;
         };
         /** ColumnsOut */
         ColumnsOut: {
@@ -2544,6 +2623,20 @@ export interface components {
             /** Ring */
             ring: number[][];
         };
+        /** Row */
+        Row: {
+            /** Number */
+            number: number;
+            /** Height */
+            height: number;
+            /**
+             * Hidden
+             * @default false
+             */
+            hidden: boolean;
+            /** Cells */
+            cells: components["schemas"]["Cell"][];
+        };
         /**
          * Rule
          * @description Which objects of a drawing space to take: every condition given must hold, and within a list any one will do.
@@ -2722,6 +2815,69 @@ export interface components {
             /** Units */
             units?: string | null;
         };
+        /** SheetTab */
+        SheetTab: {
+            /** Name */
+            name: string;
+            /**
+             * Hidden
+             * @default false
+             */
+            hidden: boolean;
+        };
+        /** SheetView */
+        SheetView: {
+            /** Sheets */
+            sheets: components["schemas"]["SheetTab"][];
+            /** Number */
+            number: number;
+            /**
+             * Right To Left
+             * @default false
+             */
+            right_to_left: boolean;
+            /**
+             * Gridlines
+             * @default true
+             */
+            gridlines: boolean;
+            /**
+             * Frozen Rows
+             * @default 0
+             */
+            frozen_rows: number;
+            /**
+             * Frozen Columns
+             * @default 0
+             */
+            frozen_columns: number;
+            /** Columns */
+            columns: components["schemas"]["Column"][];
+            /** Rows */
+            rows: components["schemas"]["Row"][];
+            /** Styles */
+            styles: components["schemas"]["Style"][];
+            /**
+             * More Rows
+             * @default 0
+             */
+            more_rows: number;
+            /**
+             * More Columns
+             * @default 0
+             */
+            more_columns: number;
+            /**
+             * Hidden Rows
+             * @default 0
+             */
+            hidden_rows: number;
+            /**
+             * Hidden Columns
+             * @default 0
+             */
+            hidden_columns: number;
+        };
         /** Source */
         Source: {
             /** Document Id */
@@ -2751,6 +2907,62 @@ export interface components {
             status: string;
             /** Now */
             now: string | null;
+        };
+        /**
+         * Style
+         * @description How a cell looks. Colours are "#rrggbb"; a border side is CSS, e.g. "1px solid #000000".
+         */
+        Style: {
+            /**
+             * Bold
+             * @default false
+             */
+            bold: boolean;
+            /**
+             * Italic
+             * @default false
+             */
+            italic: boolean;
+            /**
+             * Underline
+             * @default false
+             */
+            underline: boolean;
+            /**
+             * Strike
+             * @default false
+             */
+            strike: boolean;
+            /** Font */
+            font?: string | null;
+            /** Size */
+            size?: number | null;
+            /** Color */
+            color?: string | null;
+            /** Fill */
+            fill?: string | null;
+            /** Align */
+            align?: string | null;
+            /** Valign */
+            valign?: string | null;
+            /**
+             * Wrap
+             * @default false
+             */
+            wrap: boolean;
+            /**
+             * Indent
+             * @default 0
+             */
+            indent: number;
+            /** Top */
+            top?: string | null;
+            /** Right */
+            right?: string | null;
+            /** Bottom */
+            bottom?: string | null;
+            /** Left */
+            left?: string | null;
         };
         /** SubmissionOut */
         SubmissionOut: {
@@ -3831,6 +4043,73 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sheet_documents__document_id__sheets__number__get: {
+        parameters: {
+            query?: {
+                hidden?: boolean;
+            };
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                document_id: string;
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SheetView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    open_in_app_documents__document_id__open_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };

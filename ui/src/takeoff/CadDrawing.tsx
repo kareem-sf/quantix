@@ -26,7 +26,7 @@ export function CadDrawing(props: {
   marked: number[];
   chosen: number[];
   rooms?: Room[];
-  onPick: (object: number | null, add: boolean) => void;
+  onPick?: (object: number | null, add: boolean) => void; // without it the drawing is only looked at
 }) {
   const { copy } = props;
   const box = useRef<HTMLDivElement>(null);
@@ -213,7 +213,7 @@ export function CadDrawing(props: {
   const onPointerUp = (event: PointerEvent) => {
     const d = drag.current;
     drag.current = null;
-    if (!d || d.moved || !view) return;
+    if (!d || d.moved || !view || !props.onPick) return;
     const [x, y] = toDrawing(event);
     props.onPick(pick(copy, props.hiddenLayers, x, y, 8 / view.scale), event.shiftKey);
   };
@@ -229,7 +229,7 @@ export function CadDrawing(props: {
       ref={box}
       role="img"
       aria-label={`${copy.header.name}: ${copy.header.objects.toLocaleString("en-US")} objects`}
-      className="relative h-full min-h-[360px] w-full cursor-crosshair touch-none overflow-hidden rounded-md bg-white shadow-sm"
+      className={`relative h-full min-h-[360px] w-full touch-none overflow-hidden rounded-md bg-white shadow-sm ${props.onPick ? "cursor-crosshair" : "cursor-grab active:cursor-grabbing"}`}
       onWheel={onWheel}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

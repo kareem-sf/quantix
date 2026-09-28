@@ -226,13 +226,16 @@ def vector_points(path: Path, number: int, limit: int = 2_000_000) -> tuple[tupl
     return tuple(found)
 
 
-def render_image(path: Path, width: int = 1400, region: tuple[float, float, float, float] | None = None) -> bytes:
-    """A PNG of an image file about `width` pixels wide; or of a region of it (left, top, right, bottom in pixels of
-    the image at that width), enlarged to that width."""
+def render_image(
+    path: Path, width: int | None = 1400, region: tuple[float, float, float, float] | None = None
+) -> bytes:
+    """A PNG of an image file about `width` pixels wide (its own size when None); or of a region of it (left, top,
+    right, bottom in pixels of the image at that width), enlarged to that width."""
     from PIL import Image
 
     with Image.open(path) as opened:
         image = opened.convert("RGB")
+    width = width or image.width
     if region is not None:
         factor = image.width / width
         image = image.crop(tuple(round(v * factor) for v in region))

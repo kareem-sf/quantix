@@ -1,6 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { createReadStream, existsSync, readdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:net";
+import path from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import type { Plugin } from "vite";
@@ -16,7 +18,7 @@ export default defineConfig(async ({ command }) => {
 
   return {
     root: "ui",
-    plugins: [react(), tailwindcss(), ...(dev ? [service(port, token)] : [])],
+    plugins: [react(), tailwindcss(), pdfjsAssets(), ...(dev ? [service(port, token)] : [])],
     server: {
       port: 1420,
       strictPort: true,
@@ -55,6 +57,34 @@ function service(port: number, token: string): Plugin {
       const stop = () => child?.kill();
       server.httpServer?.on("close", stop);
       process.on("exit", stop);
+    },
+  };
+}
+
+// PDF.js fetches its character maps, standard fonts, colour profiles and image decoders by address while it reads a
+// PDF: they are served from the package under /pdfjs in development and copied there in a build.
+function pdfjsAssets(): Plugin {
+  const source = path.join(root, "node_modules", "pdfjs-dist");
+  const folders = ["cmaps", "standard_fonts", "iccs", "wasm"];
+  return {
+    name: "pdfjs-assets",
+    configureServer(server) {
+      server.middlewares.use("/pdfjs", (request, response, next) => {
+        const [folder, file, ...rest] = decodeURIComponent((request.url ?? "").split("?")[0]).split("/").filter(Boolean);
+        if (!folders.includes(folder) || !file || rest.length || file.includes("..")) return next();
+        const full = path.join(source, folder, file);
+        if (!existsSync(full)) return next();
+        response.setHeader("Content-Type", file.endsWith(".wasm") ? "application/wasm" : "application/octet-stream");
+        createReadStream(full).pipe(response);
+      });
+    },
+    generateBundle() {
+      for (const folder of folders) {
+        for (const file of readdirSync(path.join(source, folder))) {
+          const fileName = `pdfjs/${folder}/${file}`;
+          this.emitFile({ type: "asset", fileName, source: readFileSync(path.join(source, folder, file)) });
+        }
+      }
     },
   };
 }

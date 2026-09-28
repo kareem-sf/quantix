@@ -29,4 +29,40 @@
   button {
     cursor: pointer;
   }
+  /* The interface isn't text to select, as in any desktop app; tables, documents and messages stay selectable. */
+  nav,
+  button,
+  h1,
+  h2,
+  [role="tab"],
+  [role="toolbar"] {
+    user-select: none;
+  }
+}
+
+/* The document viewers. PDF pages and Word pages sit on the grey like paper, with a hairline edge. */
+.pdf-view .pdfViewer .page .canvasWrapper {
+  box-shadow:
+    0 0 0 1px var(--color-line-strong),
+    0 1px 3px rgb(0 0 0 / 0.06);
+}
+.pdf-view .textLayer .search-hit {
+  background: rgb(194 65 12 / 0.28);
+  border-radius: 2px;
+}
+.word-view .docx-wrapper {
+  background: transparent;
+  padding: 24px 24px 0;
+}
+.word-view .docx-wrapper > section.docx {
+  margin-bottom: 24px;
+  box-shadow:
+    0 0 0 1px var(--color-line-strong),
+    0 1px 3px rgb(0 0 0 / 0.06);
+}
+.word-view p {
+  transition: background-color 0.8s;
+}
+.word-view p.cited {
+  background-color: rgb(194 65 12 / 0.14);
 }

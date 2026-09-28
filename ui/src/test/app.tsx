@@ -4,7 +4,7 @@ import { createMemoryRouter, RouterProvider } from "react-router";
 import { vi } from "vitest";
 import type { Tender } from "../api/client";
 import { routes } from "../app/router";
-import type { SearchHit, TenderDocument } from "../documents/queries";
+import type { SearchHit, TenderDocument, WorkbookSheet } from "../documents/queries";
 import type { BoqItem, Fact, LibraryEntry, Markups, Priced, Summary } from "../estimate/queries";
 import type { Decision, Message, Staff, Task, Turn, TurnStep } from "../office/queries";
 import type { Comparison, Measurement, Sheet } from "../takeoff/queries";
@@ -28,6 +28,9 @@ export interface FakeState {
   models: string[];
   documents: TenderDocument[];
   pages: Record<string, string>;
+  /** A workbook's sheets as the Documents screen shows them, by sheet number; and the files opened in their apps. */
+  workbook: Record<number, WorkbookSheet>;
+  opened: string[];
   hits: SearchHit[];
   staff: Staff[];
   messages: Message[];
@@ -90,6 +93,8 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     models: ["model-b", "model-a"],
     documents: [],
     pages: {},
+    workbook: {},
+    opened: [],
     hits: [],
     staff: [],
     messages: [],
@@ -175,6 +180,17 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     if (path.match(/^\/tenders\/\w+\/search$/)) return json(state.hits);
     const page = path.match(/^\/documents\/(\w+)\/pages\/(\d+)$/);
     if (page) return json({ number: Number(page[2]), text: state.pages[page[1]] ?? "", has_text: true });
+    const workbook = path.match(/^\/documents\/\w+\/sheets\/(\d+)$/);
+    if (workbook) {
+      const hidden = new URL(request.url).searchParams.get("hidden") === "true";
+      const sheet = state.workbook[Number(workbook[1])];
+      return sheet ? json({ ...sheet, columns: sheet.columns.filter((c) => hidden || !c.hidden) }) : json({ detail: "This workbook has no such sheet." }, 404);
+    }
+    const opened = path.match(/^\/documents\/(\w+)\/open$/);
+    if (opened && method === "POST") {
+      state.opened.push(opened[1]);
+      return new Response(null, { status: 204 });
+    }
 
     const office = path.match(/^\/tenders\/(\w+)\/(office|messages|decisions|tasks)$/);
     if (office?.[2] === "office") {

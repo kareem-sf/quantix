@@ -988,3 +988,28 @@ told the engineer when the last approval was done, either. The same gap showed i
   sheets with marks waiting ("· needs you"). The Overview counts enquiries to send (`gates.enquiries`). The rail
   shows the count beside the open tender's Overview. The Manager's chat ends with "Waiting for your approval", one
   click from each screen, until nothing waits (`tenders/needsYou.ts`, shared with the Overview).
+
+## 28 September 2026: every document opens as its own app shows it
+
+The Documents viewer showed PDFs as fixed pictures and everything else as the text Quantix read: a DWG was a list of
+its words, a workbook "A1=… | B1=…". Each kind now opens as its own app shows it, at the page a source names:
+
+- **PDF** with PDF.js (`pdfjs-dist`): pages drawn from the file, sharp at any zoom, text that can be selected, links
+  inside the document. A 100 MB, 2,250-page specification opens by the megabyte at the page asked for, and holds it
+  while pages of other sizes load. Opened from a search, the words searched for are marked. PDF.js's character maps,
+  fonts and image decoders are served under `/pdfjs` (a plugin in `vite.config.ts`); the window's CSP allows
+  WebAssembly for the decoders.
+- **Word** with `docx-preview`: pages, fonts, tables, pictures, headers and footers. A source names one of Quantix's
+  parts of about 3,000 characters; the document opens where that part starts, marked for a moment.
+- **Excel** from the service (`documents/sheets.py`, `GET /documents/{id}/sheets/{n}`): each cell's text as Excel
+  shows it with its number format, merged cells, widths, heights, fonts, fills (theme colours and tints), borders,
+  frozen rows and columns, right-to-left sheets, and sheets as tabs. Hidden rows and columns stay hidden, with a
+  switch to show them; the first 5,000 rows show.
+- **DWG and DXF** drawn by the Takeoff screen's drawing view, read-only, with model space and each layout as tabs.
+- **Images** zoom and pan; a TIFF is sent as PNG, which screens can show.
+- **Open original** opens the file in the app the computer uses for its type (AutoCAD, Excel, Word…), from a
+  read-only copy under `tenders/<id>/opened`, so the stored file stays as supplied. It used to take the whole window
+  to the raw file. Deleting the tender removes the copies.
+- **The list** is narrower, with an icon per kind and plainer coverage ("12 pages opened by the office · 3 cited").
+  A search can be cleared with × or Escape, keeps the open document, and says how many pages it found. Zoom works
+  with the controls and Ctrl + wheel; moving through a document replaces the address instead of adding steps to Back.

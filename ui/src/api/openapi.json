@@ -1181,6 +1181,124 @@
         }
       }
     },
+    "/documents/{document_id}/sheets/{number}": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Sheet",
+        "description": "A sheet of a workbook as Excel shows it: its cells' text, merges, sizes and formatting. With `hidden`, the rows\nand columns the sheet hides are shown too.",
+        "operationId": "sheet_documents__document_id__sheets__number__get",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Number"
+            }
+          },
+          {
+            "name": "hidden",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Hidden"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SheetView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{document_id}/open": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Open In App",
+        "description": "Opens the file in the app this computer uses for its type. The app gets a read-only copy, so the stored file\nstays exactly as it was supplied.",
+        "operationId": "open_in_app_documents__document_id__open_post",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/tenders/{tender_id}/office": {
       "get": {
         "tags": [
@@ -5199,6 +5317,39 @@
         ],
         "title": "Boq"
       },
+      "Cell": {
+        "properties": {
+          "column": {
+            "type": "integer",
+            "title": "Column"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "default": ""
+          },
+          "style": {
+            "type": "integer",
+            "title": "Style",
+            "default": 0
+          },
+          "rows": {
+            "type": "integer",
+            "title": "Rows",
+            "default": 1
+          },
+          "columns": {
+            "type": "integer",
+            "title": "Columns",
+            "default": 1
+          }
+        },
+        "type": "object",
+        "required": [
+          "column"
+        ],
+        "title": "Cell"
+      },
       "CheckRequest": {
         "properties": {
           "model": {
@@ -5277,6 +5428,29 @@
           "volume_m3"
         ],
         "title": "Chosen"
+      },
+      "Column": {
+        "properties": {
+          "letter": {
+            "type": "string",
+            "title": "Letter"
+          },
+          "width": {
+            "type": "number",
+            "title": "Width"
+          },
+          "hidden": {
+            "type": "boolean",
+            "title": "Hidden",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "letter",
+          "width"
+        ],
+        "title": "Column"
       },
       "ColumnsOut": {
         "properties": {
@@ -8727,6 +8901,37 @@
         ],
         "title": "RoomOut"
       },
+      "Row": {
+        "properties": {
+          "number": {
+            "type": "integer",
+            "title": "Number"
+          },
+          "height": {
+            "type": "number",
+            "title": "Height"
+          },
+          "hidden": {
+            "type": "boolean",
+            "title": "Hidden",
+            "default": false
+          },
+          "cells": {
+            "items": {
+              "$ref": "#/components/schemas/Cell"
+            },
+            "type": "array",
+            "title": "Cells"
+          }
+        },
+        "type": "object",
+        "required": [
+          "number",
+          "height",
+          "cells"
+        ],
+        "title": "Row"
+      },
       "Rule": {
         "properties": {
           "layers": {
@@ -9193,6 +9398,109 @@
         ],
         "title": "Sheet"
       },
+      "SheetTab": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "hidden": {
+            "type": "boolean",
+            "title": "Hidden",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "SheetTab"
+      },
+      "SheetView": {
+        "properties": {
+          "sheets": {
+            "items": {
+              "$ref": "#/components/schemas/SheetTab"
+            },
+            "type": "array",
+            "title": "Sheets"
+          },
+          "number": {
+            "type": "integer",
+            "title": "Number"
+          },
+          "right_to_left": {
+            "type": "boolean",
+            "title": "Right To Left",
+            "default": false
+          },
+          "gridlines": {
+            "type": "boolean",
+            "title": "Gridlines",
+            "default": true
+          },
+          "frozen_rows": {
+            "type": "integer",
+            "title": "Frozen Rows",
+            "default": 0
+          },
+          "frozen_columns": {
+            "type": "integer",
+            "title": "Frozen Columns",
+            "default": 0
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/Column"
+            },
+            "type": "array",
+            "title": "Columns"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/Row"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "styles": {
+            "items": {
+              "$ref": "#/components/schemas/Style"
+            },
+            "type": "array",
+            "title": "Styles"
+          },
+          "more_rows": {
+            "type": "integer",
+            "title": "More Rows",
+            "default": 0
+          },
+          "more_columns": {
+            "type": "integer",
+            "title": "More Columns",
+            "default": 0
+          },
+          "hidden_rows": {
+            "type": "integer",
+            "title": "Hidden Rows",
+            "default": 0
+          },
+          "hidden_columns": {
+            "type": "integer",
+            "title": "Hidden Columns",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "sheets",
+          "number",
+          "columns",
+          "rows",
+          "styles"
+        ],
+        "title": "SheetView"
+      },
       "Source": {
         "properties": {
           "document_id": {
@@ -9271,6 +9579,153 @@
           "now"
         ],
         "title": "StaffOut"
+      },
+      "Style": {
+        "properties": {
+          "bold": {
+            "type": "boolean",
+            "title": "Bold",
+            "default": false
+          },
+          "italic": {
+            "type": "boolean",
+            "title": "Italic",
+            "default": false
+          },
+          "underline": {
+            "type": "boolean",
+            "title": "Underline",
+            "default": false
+          },
+          "strike": {
+            "type": "boolean",
+            "title": "Strike",
+            "default": false
+          },
+          "font": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Font"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "fill": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fill"
+          },
+          "align": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Align"
+          },
+          "valign": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valign"
+          },
+          "wrap": {
+            "type": "boolean",
+            "title": "Wrap",
+            "default": false
+          },
+          "indent": {
+            "type": "integer",
+            "title": "Indent",
+            "default": 0
+          },
+          "top": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top"
+          },
+          "right": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Right"
+          },
+          "bottom": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bottom"
+          },
+          "left": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Left"
+          }
+        },
+        "type": "object",
+        "title": "Style",
+        "description": "How a cell looks. Colours are \"#rrggbb\"; a border side is CSS, e.g. \"1px solid #000000\"."
       },
       "SubmissionOut": {
         "properties": {

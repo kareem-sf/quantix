@@ -1,5 +1,7 @@
+import os
 import shutil
-from collections.abc import Iterator
+import stat
+from collections.abc import Callable, Iterator
 from datetime import date, datetime
 from typing import Annotated, Literal
 
@@ -115,4 +117,13 @@ def delete_tender(tender_id: str, session: DB, request: Request) -> None:
     request.app.state.office.stop(tender_id)
     session.delete(tender)  # the database removes its documents, BOQ, rates, packages and the rest with it
     session.commit()
-    shutil.rmtree(request.app.state.home / "tenders" / tender_id, ignore_errors=True)
+    shutil.rmtree(request.app.state.home / "tenders" / tender_id, onexc=_remove_anyway)
+
+
+def _remove_anyway(function: Callable[[str], object], path: str, _error: BaseException) -> None:
+    """Copies opened in their apps are read-only: make them writable and try again. A file still open stays."""
+    try:
+        os.chmod(path, stat.S_IWRITE)
+        function(path)
+    except OSError:
+        pass

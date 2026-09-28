@@ -1,9 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, must } from "../api/client";
 import type { components } from "../api/schema";
 
 export type TenderDocument = components["schemas"]["DocumentOut"];
 export type SearchHit = components["schemas"]["SearchHit"];
+export type WorkbookSheet = components["schemas"]["SheetView"];
 
 const busy = (d: TenderDocument) => d.status === "waiting" || d.status === "reading";
 
@@ -59,14 +60,35 @@ export function useAddDocuments(tenderId: string) {
   });
 }
 
+/** A sheet of a workbook as Excel shows it. Stored files never change, so a sheet is fetched once. */
+export function useSheet(documentId: string, number: number, hidden: boolean) {
+  return useQuery({
+    queryKey: ["workbook-sheet", documentId, number, hidden],
+    staleTime: Infinity,
+    placeholderData: keepPreviousData, // the last sheet stays on screen while the next one opens
+    queryFn: async () =>
+      must(
+        await api.GET("/documents/{document_id}/sheets/{number}", {
+          params: { path: { document_id: documentId, number }, query: { hidden } },
+        }),
+      ),
+  });
+}
+
+/** Opens the file in the app the computer uses for its type (the service hands that app a read-only copy). */
+export function useOpenOriginal() {
+  return useMutation({
+    mutationFn: async (documentId: string) => {
+      const result = await api.POST("/documents/{document_id}/open", { params: { path: { document_id: documentId } } });
+      if (!result.response.ok) must(result);
+    },
+  });
+}
+
 export function pageImage(documentId: string, number: number) {
   return `${window.location.origin}/api/documents/${documentId}/pages/${number}/image`;
 }
 
 export function originalFile(documentId: string) {
   return `${window.location.origin}/api/documents/${documentId}/file`;
-}
-
-export function hasImages(document: TenderDocument) {
-  return document.kind === "pdf" || document.kind === "image";
 }
