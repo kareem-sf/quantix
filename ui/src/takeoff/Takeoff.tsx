@@ -497,7 +497,7 @@ function SheetPanel({
       })}
       <span className="pt-2 text-xs leading-normal text-ink-3">
         {onShow
-          ? "Quantix calculates every length, area and count from the drawing’s own objects and its units."
+          ? "Quantix calculates every length, area, volume and count from the drawing’s own objects and its units."
           : "Quantix calculates every length, area and count from the marks and the sheet’s scale."}
       </span>
     </>
