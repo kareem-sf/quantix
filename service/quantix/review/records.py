@@ -592,7 +592,18 @@ def escalate(
     suggestions = [s.strip() for s in suggestions if s.strip()]
     if not 1 <= len(suggestions) <= 4:
         raise ValueError("Suggest 1 to 4 corrections for the engineer to choose from, each complete enough to act on.")
-    shown = _own_sources(session, p) + [_source(session, tender_id, s) for s in sources]
+    shown = _own_sources(session, p)
+    for s in sources:
+        if approved and (s.boq_item or "").strip().lower() in (ref.strip().lower(), p.ref):
+            continue  # the escalated work itself, not a place it shows
+        try:
+            shown.append(_source(session, tender_id, s))
+        except ValueError as error:
+            if not approved:
+                raise
+            raise ValueError(
+                f"{error}. For approved work you can leave sources out: Quantix's finding says where."
+            ) from error
     decision = Decision(
         tender_id=tender_id,
         raised_by=manager.id,
