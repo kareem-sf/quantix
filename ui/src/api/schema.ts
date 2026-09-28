@@ -61,6 +61,23 @@ export interface paths {
         patch: operations["change_tender_tenders__tender_id__patch"];
         trace?: never;
     };
+    "/desk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Desk */
+        get: operations["desk_desk_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/ai/connections": {
         parameters: {
             query?: never;
@@ -3094,6 +3111,8 @@ export interface components {
             outcome?: ("open" | "submitted" | "won" | "lost") | null;
             /** Due Date */
             due_date?: string | null;
+            /** Archived */
+            archived?: boolean | null;
         };
         /** TenderCreate */
         TenderCreate: {
@@ -3101,6 +3120,73 @@ export interface components {
             name: string;
             /** Due Date */
             due_date?: string | null;
+        };
+        /**
+         * TenderGlance
+         * @description One tender as the Desk and the register show it. Quantix counts every figure; nothing here is the AI's.
+         */
+        TenderGlance: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Due Date */
+            due_date: string | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "open" | "submitted" | "won" | "lost";
+            /** Outcome At */
+            outcome_at: string | null;
+            /** Archived */
+            archived: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Team
+             * @enum {string}
+             */
+            team: "working" | "paused" | "idle";
+            /**
+             * Doing
+             * @description What someone on the team is doing now, with their first name
+             */
+            doing: string | null;
+            /**
+             * Waiting
+             * @description Approvals at every gate and questions, waiting for the engineer
+             */
+            waiting: number;
+            /** Documents */
+            documents: number;
+            /**
+             * Read
+             * @description Documents read, or that can't be read, out of the current ones
+             */
+            read: number;
+            /** Items */
+            items: number;
+            /** Priced */
+            priced: number;
+            /** Currency */
+            currency: string;
+            /**
+             * Total
+             * @description The tender total before VAT, once an item is priced
+             */
+            total: string | null;
+            /** Packages */
+            packages: number;
+            /** Chosen */
+            chosen: number;
+            /** Requirements */
+            requirements: number;
+            /** Ready */
+            ready: number;
         };
         /** TenderOut */
         TenderOut: {
@@ -3119,6 +3205,17 @@ export interface components {
              * @enum {string}
              */
             outcome: "open" | "submitted" | "won" | "lost";
+            /**
+             * Outcome At
+             * @description When the outcome was last set
+             */
+            outcome_at?: string | null;
+            /**
+             * Archived
+             * @description Put away: kept in the register, out of the sidebar and the Desk
+             * @default false
+             */
+            archived: boolean;
             /**
              * Created At
              * Format: date-time
@@ -3538,6 +3635,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TenderOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    desk_desk_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenderGlance"][];
                 };
             };
             /** @description Validation Error */

@@ -40,6 +40,8 @@ export function screenOf(pathname: string): string {
     if (inTender[1] === "/decisions") return "Decision";
     return TENDER_SCREENS.find(([, path]) => path === (inTender[1] ?? ""))?.[0] ?? "";
   }
+  if (pathname === "/desk") return "Desk";
+  if (pathname === "/tenders") return "Tenders";
   if (pathname === "/settings") return "Settings";
   if (pathname === "/new") return "New tender";
   return COMPANY_SCREENS.find(([, path]) => pathname.startsWith(path))?.[0] ?? "";

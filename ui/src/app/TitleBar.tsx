@@ -16,6 +16,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { firstName, useOffice } from "../office/queries";
 import { useNeedsYou } from "../tenders/needsYou";
+import { useDesk } from "../tenders/queries";
 import type { Tender } from "../api/client";
 import { screenOf } from "./screens";
 import { useShell } from "./context";
@@ -66,7 +67,7 @@ export function TitleBar({ tender }: { tender?: Tender }) {
       </button>
       <span data-tauri-drag-region className="grow" />
       {tender && <Status tenderId={tender.id} />}
-      {tender && <NeedsYou tenderId={tender.id} />}
+      <NeedsYou />
       {tender && <TeamButton tenderId={tender.id} />}
       {isTauri() ? <WindowButtons /> : <span className="w-2" />}
     </header>
@@ -118,14 +119,14 @@ function Status({ tenderId }: { tenderId: string }) {
   );
 }
 
-/** How many decisions wait for the engineer on this tender; opens its Overview, where they are listed. */
-function NeedsYou({ tenderId }: { tenderId: string }) {
-  const { approvals, questions } = useNeedsYou(tenderId);
-  const count = approvals.length + questions.length;
+/** How many decisions wait for the engineer on every open tender; opens the Desk, where they are listed. */
+function NeedsYou() {
+  const desk = useDesk();
+  const count = (desk.data ?? []).filter((t) => t.outcome === "open" && !t.archived).reduce((n, t) => n + t.waiting, 0);
   const label = count ? `${count} ${count === 1 ? "decision needs" : "decisions need"} you` : "Nothing needs you";
   return (
     <Link
-      to={`/tenders/${tenderId}`}
+      to="/desk"
       draggable={false}
       aria-label={label}
       title={label}

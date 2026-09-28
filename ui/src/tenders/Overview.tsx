@@ -1,6 +1,6 @@
 import { IconChevronRight, IconInfoCircle } from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { Link, useParams } from "react-router";
 import { AddDocuments } from "../documents/AddDocuments";
 import { useDocuments } from "../documents/queries";
 import { money, useEstimate, useGates } from "../estimate/queries";
@@ -14,7 +14,8 @@ import { dueSentence, dueSource, type DueSource as DueSourceOut } from "./due";
 import { useNeedsYou } from "./needsYou";
 import { usePackages } from "../subcontract/queries";
 import { useSubmission } from "../submission/queries";
-import { useDeleteTender, useSetDueDate, useSetOutcome, useTender } from "./queries";
+import { useSetDueDate, useTender } from "./queries";
+import { TenderMenu } from "./TenderMenu";
 
 export function Overview() {
   const { tenderId = "" } = useParams();
@@ -37,7 +38,18 @@ export function Overview() {
 
   return (
     <div className="flex min-h-full w-full max-w-[784px] flex-col px-8 pt-14">
-      <span className="text-ink-3">{tender.data.name}</span>
+      <span className="flex items-center justify-between gap-4 text-ink-3">
+        <span className="truncate">
+          {tender.data.name}
+          {tender.data.archived && " · archived"}
+        </span>
+        <TenderMenu
+          tenderId={tenderId}
+          name={tender.data.name}
+          outcome={tender.data.outcome}
+          archived={tender.data.archived}
+        />
+      </span>
       <h1 className="mt-1.5 mb-1 text-[28px] font-semibold tracking-tight">
         {waiting.length === 0
           ? "Nothing needs you right now"
@@ -46,7 +58,9 @@ export function Overview() {
       <p className="flex flex-wrap items-center gap-x-2 text-sm text-ink-2">
         <DueDate tenderId={tenderId} due={tender.data.due_date} source={tender.data.due_date_source} />
         {state && <span>{state.trim()}</span>}
-        <Outcome tenderId={tenderId} outcome={tender.data.outcome} />
+        {tender.data.outcome !== "open" && (
+          <span>{{ submitted: "Submitted.", won: "Won.", lost: "Lost." }[tender.data.outcome]}</span>
+        )}
       </p>
       {manager && gates.data?.manager ? (
         <p className="mt-1 text-sm text-ink-2">
@@ -122,7 +136,6 @@ export function Overview() {
       )}
       {current.length > 0 && <Audit tenderId={tenderId} />}
       <Lessons tenderId={tenderId} />
-      <DeleteTender tenderId={tenderId} name={tender.data.name} />
     </div>
   );
 }
@@ -299,40 +312,7 @@ function Progress({ tenderId }: { tenderId: string }) {
   );
 }
 
-function DeleteTender({ tenderId, name }: { tenderId: string; name: string }) {
-  const remove = useDeleteTender(tenderId);
-  const navigate = useNavigate();
-  const [asking, setAsking] = useState(false);
-  if (!asking)
-    return (
-      <button onClick={() => setAsking(true)} className="mt-9 self-start text-ink-3 hover:text-attention">
-        Delete this tender
-      </button>
-    );
-  return (
-    <div className="mt-9 flex flex-col gap-2.5 rounded-[10px] border border-line p-3.5">
-      <span>
-        Delete <span className="font-medium">{name}</span> and everything Quantix keeps for it: documents, BOQ,
-        rates, the team and its conversations. Your original files and built packages stay.
-      </span>
-      <span className="flex gap-2">
-        <button
-          onClick={() => remove.mutate(undefined, { onSuccess: () => navigate("/") })}
-          disabled={remove.isPending}
-          className="h-[34px] rounded-lg bg-attention px-3.5 text-[13px] text-white"
-        >
-          Delete tender
-        </button>
-        <button onClick={() => setAsking(false)} className="h-[34px] rounded-lg border border-line-strong px-3.5 text-[13px]">
-          Keep it
-        </button>
-      </span>
-      {remove.isError && <span className="text-attention">{remove.error.message}</span>}
-    </div>
-  );
-}
-
-/** How the tender went. Later tenders use won and lost rates as benchmarks. */
+/** When the tender closes, and where that date comes from; the engineer can change it. */
 function DueDate({ tenderId, due, source }: { tenderId: string; due: string | null; source?: DueSourceOut | null }) {
   const set = useSetDueDate(tenderId);
   const [value, setValue] = useState<string | null>(null); // the date being entered, while changing it
@@ -403,26 +383,6 @@ function DueSourceNote({ tenderId, source }: { tenderId: string; source?: DueSou
         )}
       </span>
     </span>
-  );
-}
-
-function Outcome({ tenderId, outcome }: { tenderId: string; outcome: "open" | "submitted" | "won" | "lost" }) {
-  const set = useSetOutcome(tenderId);
-  return (
-    <label className="flex items-center gap-1 text-ink-3">
-      · Outcome
-      <select
-      aria-label="Outcome"
-      value={outcome}
-      onChange={(e) => set.mutate(e.target.value as typeof outcome)}
-      className="rounded-md bg-transparent text-ink-3 outline-none hover:text-ink"
-    >
-      <option value="open">Open</option>
-      <option value="submitted">Submitted</option>
-      <option value="won">Won</option>
-      <option value="lost">Lost</option>
-      </select>
-    </label>
   );
 }
 

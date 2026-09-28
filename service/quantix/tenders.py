@@ -26,6 +26,8 @@ class Tender(Base):
     due_date_page: Mapped[int | None] = mapped_column(Integer)
     due_date_quote: Mapped[str | None] = mapped_column(Text)
     outcome: Mapped[str] = mapped_column(String(20), default="open")  # open | submitted | won | lost
+    outcome_at: Mapped[datetime | None] = mapped_column(UTCDateTime)  # when the outcome was last set
+    archived_at: Mapped[datetime | None] = mapped_column(UTCDateTime)  # put away: out of the sidebar and the Desk
     # stopped by the engineer or paused by the office, until the engineer writes; kept across a restart
     office_paused: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=lambda: datetime.now(UTC))

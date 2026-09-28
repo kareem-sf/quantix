@@ -20,7 +20,7 @@ function json(body: unknown, status = 200) {
 }
 
 export interface FakeState {
-  tenders: (Omit<Tender, "outcome"> & Partial<Pick<Tender, "outcome">>)[];
+  tenders: (Omit<Tender, "outcome" | "archived"> & Partial<Pick<Tender, "outcome" | "archived">>)[];
   rules: Rule[];
   company: Profile;
   connections: Connection[];
@@ -428,7 +428,22 @@ export function fakeService(initial: Partial<FakeState> = {}) {
       state.rules = state.rules.filter((r) => `/rules/${r.id}` !== path);
       return new Response(null, { status: 204 });
     }
-    if (path === "/tenders" && method === "GET") return json(state.tenders.map((t) => ({ outcome: "open", ...t })));
+    if (path === "/tenders" && method === "GET") return json(state.tenders.map((t) => ({ outcome: "open", archived: false, ...t })));
+    if (path === "/desk") {
+      // every tender at a glance; the fake keeps one tender's records, so each tender shows them
+      const reviewed = (list: { status: string }[]) => list.filter((r) => r.status === "reviewed").length;
+      const waiting = reviewed(state.items) + reviewed(state.facts) + reviewed(state.measurements) +
+        state.decisions.filter((d) => d.status === "waiting").length;
+      return json(state.tenders.map((t) => ({
+        outcome: "open", archived: false, outcome_at: null, ...t,
+        team: state.officeState, doing: null, waiting,
+        documents: state.documents.length, read: state.documents.filter((d) => d.status !== "waiting" && d.status !== "reading").length,
+        items: state.items.length, priced: state.priced.filter((i) => i.rate).length,
+        currency: state.summary?.currency ?? "", total: state.summary?.priced ? state.summary.total : null,
+        packages: state.packages.length, chosen: state.packages.filter((p) => p.selected_quote_id).length,
+        requirements: state.requirements.length, ready: state.requirements.filter((r) => r.state === "ready").length,
+      })));
+    }
     if (path === "/tenders" && method === "POST") {
       const tender = { id: `t${state.tenders.length + 1}`, created_at: "2026-09-23T10:00:00Z", ...body };
       state.tenders.unshift(tender);
@@ -446,7 +461,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
       state.tenders = state.tenders.filter((t) => t !== tender);
       return new Response(null, { status: 204 });
     }
-    if (path.startsWith("/tenders/")) return tender ? json({ outcome: "open", ...tender }) : json({ detail: "Tender not found." }, 404);
+    if (path.startsWith("/tenders/")) return tender ? json({ outcome: "open", archived: false, ...tender }) : json({ detail: "Tender not found." }, 404);
 
     if (path === "/ai/connections" && method === "GET") return json(state.connections);
     if (path === "/ai/connections" && method === "POST") {

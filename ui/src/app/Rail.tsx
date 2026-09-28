@@ -1,10 +1,10 @@
-import { IconPlus, IconSelector, IconSettings, type Icon } from "@tabler/icons-react";
+import { IconHome, IconListDetails, IconPlus, IconSelector, IconSettings, type Icon } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router";
 import type { Tender } from "../api/client";
 import { dueShort, dueSource } from "../tenders/due";
 import { useNeedsYou } from "../tenders/needsYou";
-import { useTenders } from "../tenders/queries";
+import { useDesk, useTenders } from "../tenders/queries";
 import { placeIn } from "./place";
 import { COMPANY_SCREENS, TENDER_SCREENS } from "./screens";
 import { useShell } from "./context";
@@ -21,6 +21,7 @@ export function Rail({ tender }: { tender?: Tender }) {
       className={`relative z-20 flex shrink-0 flex-col border-r border-line bg-rail px-2 py-2.5 select-none ${folded ? "w-[52px]" : "w-56"}`}
     >
       {tenders.isError && !folded && <span className="px-2 py-1 text-ink-2">Waiting for the Quantix service…</span>}
+      <Office />
       {tender && <Switcher tender={tender} tenders={tenders.data ?? []} />}
       <div className="-mx-2 flex min-h-0 grow flex-col gap-0.5 overflow-x-hidden overflow-y-auto px-2">
         {tender ? <Screens tenderId={tender.id} /> : tenders.data && <Item to="/new" label="Start a tender" icon={IconPlus} />}
@@ -67,6 +68,24 @@ function Item(props: { to: string; label: string; icon: Icon; end?: boolean; cou
   );
 }
 
+/** The engineer's own screens: the Desk, counting what needs them on every open tender, and the register. */
+function Office() {
+  const desk = useDesk();
+  const waiting = (desk.data ?? []).filter((t) => t.outcome === "open" && !t.archived).reduce((n, t) => n + t.waiting, 0);
+  return (
+    <div className="mb-2 flex flex-col gap-0.5">
+      <Item
+        to="/desk"
+        label="Desk"
+        icon={IconHome}
+        count={waiting}
+        countLabel={`${waiting} ${waiting === 1 ? "decision needs" : "decisions need"} you across your tenders`}
+      />
+      <Item to="/tenders" label="Tenders" icon={IconListDetails} end />
+    </div>
+  );
+}
+
 /** The open tender's screens, each counting what waits for the engineer there. The Overview counts everything. */
 function Screens({ tenderId }: { tenderId: string }) {
   const { approvals, questions } = useNeedsYou(tenderId);
@@ -97,7 +116,7 @@ function Switcher({ tender, tenders }: { tender: Tender; tenders: Tender[] }) {
   const box = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const due = (t: Tender) => (t.due_date ? Date.parse(t.due_date) : Infinity);
-  const sorted = [...tenders].sort((a, b) => due(a) - due(b) || Date.parse(b.created_at) - Date.parse(a.created_at));
+  const sorted = tenders.filter((t) => !t.archived || t.id === tender.id).sort((a, b) => due(a) - due(b) || Date.parse(b.created_at) - Date.parse(a.created_at));
 
   useEffect(() => {
     if (!open) return;

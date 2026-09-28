@@ -1,11 +1,5 @@
 import { useEffect } from "react";
-import {
-  Navigate,
-  useParams,
-  useRouteError,
-  useSearchParams,
-  type RouteObject,
-} from "react-router";
+import { Navigate, useParams, useRouteError, useSearchParams, type RouteObject } from "react-router";
 import { Details } from "../company/Details";
 import { Rules } from "../company/Rules";
 import { Documents } from "../documents/Documents";
@@ -19,11 +13,12 @@ import { Directory } from "../subcontract/Directory";
 import { Subcontract } from "../subcontract/Subcontract";
 import { Submission } from "../submission/Submission";
 import { NewTender } from "../tenders/NewTender";
+import { Desk } from "../tenders/Desk";
 import { Overview } from "../tenders/Overview";
+import { Tenders } from "../tenders/Tenders";
 import { useTenders } from "../tenders/queries";
 import { TEAM } from "../office/queries";
 import { Opening } from "./Opening";
-import { lastTender, placeIn } from "./place";
 import { Shell } from "./Shell";
 import { useShell } from "./context";
 
@@ -34,23 +29,18 @@ function ScreenError() {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 text-ink-2">
       <p className="text-sm">Something went wrong on this screen.</p>
-      <button
-        onClick={() => window.location.reload()}
-        className="font-medium text-ink underline underline-offset-4"
-      >
+      <button onClick={() => window.location.reload()} className="font-medium text-ink underline underline-offset-4">
         Try again
       </button>
     </div>
   );
 }
 
-/** Quantix opens where the engineer left off: the last tender, on the screen they were on. */
+/** Quantix opens on the Desk, or on starting the first tender. */
 function Home() {
   const tenders = useTenders();
   if (!tenders.data) return <Opening error={tenders.isError} />;
-  const last =
-    tenders.data.find((t) => t.id === lastTender()) ?? tenders.data[0];
-  return <Navigate to={last ? placeIn(last.id) : "/new"} replace />;
+  return <Navigate to={tenders.data.length ? "/desk" : "/new"} replace />;
 }
 
 /** The Office screen became the team panel: an old link to it opens the panel on that chat, over the Overview. */
@@ -72,6 +62,8 @@ export const routes: RouteObject[] = [
         errorElement: <ScreenError />,
         children: [
           { path: "/", element: <Home /> },
+          { path: "/desk", element: <Desk /> },
+          { path: "/tenders", element: <Tenders /> },
           { path: "/new", element: <NewTender /> },
           { path: "/tenders/:tenderId", element: <Overview /> },
           { path: "/tenders/:tenderId/documents", element: <Documents /> },

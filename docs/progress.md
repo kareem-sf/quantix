@@ -1067,3 +1067,25 @@ in the Office, lessons and a delete button on the Overview, and a window that be
 - **Where the engineer was.** Quantix reopens on the last tender and screen.
 - **Checks:** 5 new shell tests and the Office tests moved to the panel; walked through in the desktop window
   (switching tenders, the panel and profile, Ctrl+K, maximise, double-click and drag, Takeoff folding, Alt+Left).
+
+## 29 September 2026: the Desk and the tender register
+
+The engineer runs several tenders at once and had no place to see them together, nor history or an archive.
+
+- **Desk** (`/desk`, where Quantix now opens): what needs the engineer on every open tender, grouped by tender and
+  soonest closing first, each one click from where it is decided (a question opens the asker's chat); closing
+  dates; who is working now; four figures (open tenders and how many close this week, priced so far, closed this
+  year, won of decided); and the open tenders with where each stands, its total and what waits.
+- **Tenders** (`/tenders`): the register by Open, Submitted, Won, Lost and Archived, with a search.
+- **The tender's menu** (⋯ on its Overview): how it went (open, submitted, won, lost, dated), Archive or Restore,
+  and Delete behind a confirmation. It replaces the outcome picker in the date line and the delete link at the
+  foot of the Overview. Archiving keeps everything, stops the team, and takes the tender out of the switcher and
+  the Desk.
+- **Service:** `GET /desk` (`api/desk.py`), each tender counted by Quantix: documents read, BOQ items priced,
+  packages chosen, checklist ready, the total before VAT, the team's state and what waits for the engineer.
+  Migration 0025 adds `archived_at` and `outcome_at` to tenders, in place; rehearsed on a copy of the real
+  database (3 tenders and their records unchanged).
+- **Sidebar and title bar:** Desk and Tenders at the top of the sidebar, Desk counting what waits on every open
+  tender; the title-bar bell counts the same and opens the Desk.
+- **Checks:** 2 service tests (the Desk's counts, archiving and dated outcomes) and 3 interface tests (the Desk,
+  the register, the tender's menu); walked through in the desktop window on the real tenders.

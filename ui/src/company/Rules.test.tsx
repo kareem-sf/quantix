@@ -26,11 +26,17 @@ describe("Company rules", () => {
 });
 
 describe("Tender outcome", () => {
-  it("records how the tender went from the overview", async () => {
+  it("records how the tender went, and archives it, from the tender's menu", async () => {
     const service = fakeService({ tenders: [tender] });
     openApp("/tenders/t1");
 
-    await userEvent.selectOptions(await screen.findByLabelText("Outcome"), "Won");
+    await userEvent.click(await screen.findByRole("button", { name: "Tender actions" }));
+    await userEvent.click(screen.getByRole("menuitemradio", { name: "Won" }));
     await waitFor(() => expect(service.state.tenders[0].outcome).toBe("won"));
+
+    await userEvent.click(screen.getByRole("button", { name: "Tender actions" }));
+    expect(screen.getByRole("menuitemradio", { name: "Won" })).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Archive tender" }));
+    await waitFor(() => expect(service.state.tenders[0].archived).toBe(true));
   });
 });

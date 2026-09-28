@@ -284,6 +284,53 @@
         }
       }
     },
+    "/desk": {
+      "get": {
+        "tags": [
+          "desk"
+        ],
+        "summary": "Desk",
+        "operationId": "desk_desk_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TenderGlance"
+                  },
+                  "title": "Response Desk Desk Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/ai/connections": {
       "get": {
         "tags": [
@@ -10153,6 +10200,17 @@
               }
             ],
             "title": "Due Date"
+          },
+          "archived": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived"
           }
         },
         "type": "object",
@@ -10185,6 +10243,162 @@
           "name"
         ],
         "title": "TenderCreate"
+      },
+      "TenderGlance": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "due_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due Date"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "open",
+              "submitted",
+              "won",
+              "lost"
+            ],
+            "title": "Outcome"
+          },
+          "outcome_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome At"
+          },
+          "archived": {
+            "type": "boolean",
+            "title": "Archived"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "team": {
+            "type": "string",
+            "enum": [
+              "working",
+              "paused",
+              "idle"
+            ],
+            "title": "Team"
+          },
+          "doing": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doing",
+            "description": "What someone on the team is doing now, with their first name"
+          },
+          "waiting": {
+            "type": "integer",
+            "title": "Waiting",
+            "description": "Approvals at every gate and questions, waiting for the engineer"
+          },
+          "documents": {
+            "type": "integer",
+            "title": "Documents"
+          },
+          "read": {
+            "type": "integer",
+            "title": "Read",
+            "description": "Documents read, or that can't be read, out of the current ones"
+          },
+          "items": {
+            "type": "integer",
+            "title": "Items"
+          },
+          "priced": {
+            "type": "integer",
+            "title": "Priced"
+          },
+          "currency": {
+            "type": "string",
+            "title": "Currency"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total",
+            "description": "The tender total before VAT, once an item is priced"
+          },
+          "packages": {
+            "type": "integer",
+            "title": "Packages"
+          },
+          "chosen": {
+            "type": "integer",
+            "title": "Chosen"
+          },
+          "requirements": {
+            "type": "integer",
+            "title": "Requirements"
+          },
+          "ready": {
+            "type": "integer",
+            "title": "Ready"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "due_date",
+          "outcome",
+          "outcome_at",
+          "archived",
+          "created_at",
+          "team",
+          "doing",
+          "waiting",
+          "documents",
+          "read",
+          "items",
+          "priced",
+          "currency",
+          "total",
+          "packages",
+          "chosen",
+          "requirements",
+          "ready"
+        ],
+        "title": "TenderGlance",
+        "description": "One tender as the Desk and the register show it. Quantix counts every figure; nothing here is the AI's."
       },
       "TenderOut": {
         "properties": {
@@ -10228,6 +10442,25 @@
               "lost"
             ],
             "title": "Outcome"
+          },
+          "outcome_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome At",
+            "description": "When the outcome was last set"
+          },
+          "archived": {
+            "type": "boolean",
+            "title": "Archived",
+            "description": "Put away: kept in the register, out of the sidebar and the Desk",
+            "default": false
           },
           "created_at": {
             "type": "string",

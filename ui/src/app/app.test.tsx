@@ -1,4 +1,4 @@
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { fakeService, openApp } from "../test/app";
@@ -23,15 +23,50 @@ describe("Quantix shell", () => {
     expect(sidebar).toHaveTextContent("due 14 Oct");
   });
 
-  it("opens the newest tender from the start page", async () => {
+  it("opens on the Desk, with what needs the engineer on every open tender", async () => {
     fakeService({
-      tenders: [{ id: "t9", name: "Riyadh Warehouse", due_date: null, created_at: "2026-09-20T08:00:00Z" }],
+      tenders: [warehouse, { ...school, id: "t2" }],
+      decisions: [
+        {
+          id: "q1", raised_by: "s1", title: "Site support period", text: "72 working days or 4 months?",
+          options: ["72 days", "4 months"], subject_kind: null, subject_id: null, sources: null,
+          status: "waiting", answer: null, created_at: "2026-09-28T09:00:00Z",
+        },
+      ],
     });
-    openApp("/");
+    const router = openApp("/");
 
-    expect(await screen.findByRole("heading", { name: "Nothing needs you right now" })).toBeInTheDocument();
-    expect(within(screen.getByRole("main")).getByText("Riyadh Warehouse")).toBeInTheDocument();
-    expect(screen.getByText("No due date yet.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "2 things need you across 2 tenders" })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/desk");
+    const needs = screen.getByRole("region", { name: "Needs you" });
+    await waitFor(() => expect(within(needs).getAllByText("Site support period")).toHaveLength(2));
+    const closing = screen.getByRole("region", { name: "Closing dates" });
+    expect(within(closing).getAllByRole("link").map((l) => l.textContent)).toEqual([
+      expect.stringContaining("Al Noor Primary School"), // soonest due first
+      expect.stringContaining("Riyadh Warehouse"),
+    ]);
+    await userEvent.click(within(screen.getByRole("region", { name: "Open tenders" })).getByRole("link", { name: "Riyadh Warehouse" }));
+    expect(router.state.location.pathname).toBe("/tenders/t9");
+  });
+
+  it("keeps closed and archived tenders in the register", async () => {
+    fakeService({
+      tenders: [
+        school,
+        { ...warehouse, outcome: "lost" },
+        { id: "t3", name: "Jubail Housing", due_date: null, created_at: "2026-08-01T08:00:00Z", archived: true },
+      ],
+    });
+    openApp("/tenders");
+
+    expect(await screen.findByRole("tab", { name: "Open 1" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("link", { name: "Al Noor Primary School" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: "Lost 1" }));
+    expect(screen.getByRole("link", { name: "Riyadh Warehouse" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: "Archived 1" }));
+    expect(screen.getByRole("link", { name: "Jubail Housing" })).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Find a tender"), "noor");
+    expect(screen.getByText("None.")).toBeInTheDocument();
   });
 
   it("shows the service's reason when a tender can't be created", async () => {
@@ -72,16 +107,6 @@ describe("Quantix shell", () => {
     await userEvent.click(within(sidebar).getByRole("button", { name: /Switch tender/ }));
     await userEvent.click(screen.getByRole("menuitem", { name: /Al Noor Primary School/ }));
     expect(router.state.location.pathname).toBe("/tenders/t1/estimate");
-  });
-
-  it("reopens the tender and screen the engineer was last on", async () => {
-    fakeService({ tenders: [school, warehouse] });
-    openApp("/tenders/t9/documents");
-    await screen.findByRole("heading", { name: "Documents" });
-    cleanup();
-
-    const router = openApp("/");
-    await waitFor(() => expect(router.state.location.pathname).toBe("/tenders/t9/documents"));
   });
 
   it("jumps with Ctrl+K and the keyboard, and folds the sidebar with Ctrl+B", async () => {

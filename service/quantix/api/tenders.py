@@ -2,7 +2,7 @@ import os
 import shutil
 import stat
 from collections.abc import Callable, Iterator
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -49,11 +49,14 @@ class TenderOut(BaseModel):
     due_date: date | None = Field(description="Submission deadline, when known")
     due_date_source: DueSource | None = None
     outcome: Literal["open", "submitted", "won", "lost"]
+    outcome_at: datetime | None = Field(default=None, description="When the outcome was last set")
+    archived: bool = Field(default=False, description="Put away: kept in the register, out of the sidebar and the Desk")
     created_at: datetime
 
 
 def _out(session: Session, tender: service.Tender) -> TenderOut:
     out = TenderOut.model_validate(tender)
+    out.archived = tender.archived_at is not None
     if tender.due_date is None or tender.due_date_basis is None:
         return out
     person = session.get(Staff, tender.due_date_by) if tender.due_date_by != ENGINEER else None
@@ -75,6 +78,7 @@ class TenderChange(BaseModel):
 
     outcome: Literal["open", "submitted", "won", "lost"] | None = None
     due_date: date | None = None
+    archived: bool | None = None
 
 
 @router.get("")
@@ -96,12 +100,16 @@ def get_tender(tender_id: str, session: DB) -> TenderOut:
 
 
 @router.patch("/{tender_id}")
-def change_tender(tender_id: str, body: TenderChange, session: DB) -> TenderOut:
+def change_tender(tender_id: str, body: TenderChange, session: DB, request: Request) -> TenderOut:
     tender = service.get_tender(session, tender_id)
     if tender is None:
         raise HTTPException(status_code=404, detail="Tender not found.")
-    if body.outcome is not None:
-        tender.outcome = body.outcome
+    if body.outcome is not None and body.outcome != tender.outcome:
+        tender.outcome, tender.outcome_at = body.outcome, datetime.now(UTC)
+    if body.archived is not None and body.archived != (tender.archived_at is not None):
+        tender.archived_at = datetime.now(UTC) if body.archived else None
+        if body.archived:
+            request.app.state.office.stop(tender_id)  # an archived tender's team stops; writing to it starts it again
     if "due_date" in body.model_fields_set:  # the engineer's own date, whatever the documents say
         service.set_due_date(tender, body.due_date, ENGINEER)
     session.commit()

@@ -161,11 +161,12 @@ describe("Overview", () => {
     const service = fakeService({ tenders: [tender], documents: [doc] });
     const router = openApp("/tenders/t1");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Delete this tender" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Tender actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete this tender" }));
     await userEvent.click(screen.getByRole("button", { name: "Keep it" }));
     expect(service.state.tenders).toHaveLength(1);
 
-    await userEvent.click(screen.getByRole("button", { name: "Delete this tender" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete this tender" }));
     await userEvent.click(screen.getByRole("button", { name: "Delete tender" }));
     await waitFor(() => expect(service.state.tenders).toHaveLength(0));
     await waitFor(() => expect(router.state.location.pathname).not.toBe("/tenders/t1"));
