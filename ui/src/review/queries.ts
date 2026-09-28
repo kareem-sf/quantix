@@ -4,9 +4,9 @@ import type { components } from "../api/schema";
 
 export type Waiting = components["schemas"]["Waiting"];
 export type Finding = components["schemas"]["FindingOut"];
-export type Reopenable = "boq" | "fact" | "scale" | "measurement" | "rate" | "markups" | "draft";
+export type Reopenable = "boq" | "fact" | "scale" | "measurement" | "layers" | "query" | "rate" | "markups" | "draft";
 export type Checked = Exclude<Reopenable, "scale"> | "recommendation";
-const CHECKED: string[] = ["boq", "fact", "measurement", "rate", "markups", "draft", "recommendation"];
+const CHECKED: string[] = ["boq", "fact", "measurement", "layers", "query", "rate", "markups", "draft", "recommendation"];
 export const isChecked = (kind: string | null): kind is Checked => CHECKED.includes(kind ?? "");
 
 /** What Quantix's checks find in a record now, with the Manager's reason for each warning he accepted. */

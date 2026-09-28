@@ -18,6 +18,7 @@ const STAGES = [
   ["Office", "/office"],
   ["Documents", "/documents"],
   ["Takeoff", "/takeoff"],
+  ["Queries", "/queries"],
   ["Estimate", "/estimate"],
   ["Subcontract", "/subcontract"],
   ["Submission", "/submission"],

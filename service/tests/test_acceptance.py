@@ -253,6 +253,7 @@ def test_a_synthetic_tender_goes_through_every_gate_to_a_built_package(client, t
         "boq": 0,
         "facts": 0,
         "takeoff": 0,
+        "drawings": 0,
         "pricing": 0,
         "subcontract": 0,
         "submission": 0,

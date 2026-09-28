@@ -31,6 +31,7 @@ from quantix.takeoff import drawings, layers
 from quantix.takeoff import records as takeoff
 
 PRICE_FACTS = ("currency", "vat")  # the price can't be stated without them
+QUERY_FACTS = ("contract_type", "precedence")
 AREAS = {
     "boq": "BOQ lines",
     "facts": "tender facts",
@@ -135,7 +136,10 @@ def _basics(session: Session, tender_id: str) -> list[Finding]:
     """The price's facts and markups, a rate for every line with a quantity, and a checklist that is ready."""
     found = []
     recorded = {f.kind for f in boq.facts(session, tender_id)}
+    raised = bool(queries.queries(session, tender_id))
     for kind, name in FACT_KINDS.items():
+        if kind in QUERY_FACTS and not raised:
+            continue  # they decide how much a query matters, and which document wins: needed once there are queries
         if kind not in recorded:
             severity = BLOCKER if kind in PRICE_FACTS else WARNING
             found.append(Finding(f"no-fact:{kind}", severity, f"{name} isn't recorded from the tender documents."))

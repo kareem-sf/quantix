@@ -24,16 +24,34 @@ pub struct Affine {
 }
 
 impl Affine {
-    pub const IDENTITY: Affine = Affine { a: 1.0, b: 0.0, c: 0.0, d: 0.0, e: 1.0, f: 0.0 };
+    pub const IDENTITY: Affine = Affine {
+        a: 1.0,
+        b: 0.0,
+        c: 0.0,
+        d: 0.0,
+        e: 1.0,
+        f: 0.0,
+    };
 
     pub fn translate(x: f64, y: f64) -> Affine {
-        Affine { c: x, f: y, ..Affine::IDENTITY }
+        Affine {
+            c: x,
+            f: y,
+            ..Affine::IDENTITY
+        }
     }
 
     /// Rotation by `angle` radians, then scaling, then moving to (x, y).
     pub fn placed(x: f64, y: f64, angle: f64, sx: f64, sy: f64) -> Affine {
         let (sin, cos) = angle.sin_cos();
-        Affine { a: cos * sx, b: -sin * sy, c: x, d: sin * sx, e: cos * sy, f: y }
+        Affine {
+            a: cos * sx,
+            b: -sin * sy,
+            c: x,
+            d: sin * sx,
+            e: cos * sy,
+            f: y,
+        }
     }
 
     /// The plane part of an object coordinate system: where a 2D object with this normal lies in the world.
@@ -42,7 +60,14 @@ impl Affine {
             return Affine::IDENTITY;
         }
         let m = Matrix3::arbitrary_axis(normal).m;
-        Affine { a: m[0][0], b: m[0][1], c: 0.0, d: m[1][0], e: m[1][1], f: 0.0 }
+        Affine {
+            a: m[0][0],
+            b: m[0][1],
+            c: 0.0,
+            d: m[1][0],
+            e: m[1][1],
+            f: 0.0,
+        }
     }
 
     /// `inner` first, then this one.
@@ -58,7 +83,10 @@ impl Affine {
     }
 
     pub fn apply(&self, p: [f64; 2]) -> [f64; 2] {
-        [self.a * p[0] + self.b * p[1] + self.c, self.d * p[0] + self.e * p[1] + self.f]
+        [
+            self.a * p[0] + self.b * p[1] + self.c,
+            self.d * p[0] + self.e * p[1] + self.f,
+        ]
     }
 
     pub fn det(&self) -> f64 {
@@ -94,19 +122,42 @@ pub struct Shape {
 
 impl Shape {
     fn chain(points: Vec<[f64; 2]>, length: f64, area: f64, closed: bool, curved: bool) -> Shape {
-        Shape { parts: vec![points], length, area, closed, curved, approximate: false }
+        Shape {
+            parts: vec![points],
+            length,
+            area,
+            closed,
+            curved,
+            approximate: false,
+        }
     }
 
     /// The same shape moved into the space around it. Lengths scale exactly under a transform that keeps shapes;
     /// otherwise a curve's length comes from its transformed points. Areas always scale by the determinant.
     pub fn transformed(self, xf: &Affine) -> Shape {
-        let parts: Vec<Vec<[f64; 2]>> = self.parts.iter().map(|part| part.iter().map(|&p| xf.apply(p)).collect()).collect();
+        let parts: Vec<Vec<[f64; 2]>> = self
+            .parts
+            .iter()
+            .map(|part| part.iter().map(|&p| xf.apply(p)).collect())
+            .collect();
         let (length, approximate) = match xf.uniform() {
             Some(scale) => (self.length * scale, self.approximate),
-            None if !self.curved => (parts.iter().map(|p| chain_length(p, self.closed)).sum(), self.approximate),
-            None => (parts.iter().map(|p| chain_length(p, self.closed)).sum(), true),
+            None if !self.curved => (
+                parts.iter().map(|p| chain_length(p, self.closed)).sum(),
+                self.approximate,
+            ),
+            None => (
+                parts.iter().map(|p| chain_length(p, self.closed)).sum(),
+                true,
+            ),
         };
-        Shape { parts, length, area: self.area * xf.det().abs(), approximate, ..self }
+        Shape {
+            parts,
+            length,
+            area: self.area * xf.det().abs(),
+            approximate,
+            ..self
+        }
     }
 
     pub fn bbox(&self) -> Option<[f64; 4]> {
@@ -121,14 +172,24 @@ impl Shape {
 pub fn grow(bbox: Option<[f64; 4]>, p: [f64; 2]) -> [f64; 4] {
     match bbox {
         None => [p[0], p[1], p[0], p[1]],
-        Some(b) => [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])],
+        Some(b) => [
+            b[0].min(p[0]),
+            b[1].min(p[1]),
+            b[2].max(p[0]),
+            b[3].max(p[1]),
+        ],
     }
 }
 
 pub fn union(a: Option<[f64; 4]>, b: [f64; 4]) -> [f64; 4] {
     match a {
         None => b,
-        Some(a) => [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])],
+        Some(a) => [
+            a[0].min(b[0]),
+            a[1].min(b[1]),
+            a[2].max(b[2]),
+            a[3].max(b[3]),
+        ],
     }
 }
 
@@ -191,24 +252,48 @@ fn arc_points(centre: [f64; 2], radius: f64, start: f64, sweep: f64) -> Vec<[f64
 
 /// A circular arc running counter-clockwise from `start` to `end` (radians).
 pub fn arc(centre: [f64; 2], radius: f64, start: f64, end: f64) -> Shape {
-    let curve = Curve::Arc(Arc { centre, radius, start_angle: start, end_angle: end });
+    let curve = Curve::Arc(Arc {
+        centre,
+        radius,
+        start_angle: start,
+        end_angle: end,
+    });
     let mut sweep = (end - start).rem_euclid(TAU);
     if sweep < 1e-12 {
         sweep = TAU;
     }
-    Shape::chain(arc_points(centre, radius, start, sweep), curve.length(), 0.0, false, true)
+    Shape::chain(
+        arc_points(centre, radius, start, sweep),
+        curve.length(),
+        0.0,
+        false,
+        true,
+    )
 }
 
 pub fn circle(centre: [f64; 2], radius: f64) -> Shape {
     let curve = Curve::Circle(Circle { centre, radius });
     let mut points = arc_points(centre, radius, 0.0, TAU);
     points.pop(); // the ring closes itself
-    Shape::chain(points, curve.length(), curve.enclosed_area().abs(), true, true)
+    Shape::chain(
+        points,
+        curve.length(),
+        curve.enclosed_area().abs(),
+        true,
+        true,
+    )
 }
 
 /// An ellipse or part of one: centre, the end of its major axis from the centre, the minor axis's share of the
 /// major, and the parameters it runs between. The normal's sign says which way the minor axis points.
-pub fn ellipse(centre: [f64; 2], major: [f64; 2], ratio: f64, start: f64, end: f64, clockwise_normal: bool) -> Shape {
+pub fn ellipse(
+    centre: [f64; 2],
+    major: [f64; 2],
+    ratio: f64,
+    start: f64,
+    end: f64,
+    clockwise_normal: bool,
+) -> Shape {
     let side = if clockwise_normal { -1.0 } else { 1.0 };
     let minor = [-major[1] * ratio * side, major[0] * ratio * side];
     let mut sweep = (end - start).rem_euclid(TAU);
@@ -221,7 +306,10 @@ pub fn ellipse(centre: [f64; 2], major: [f64; 2], ratio: f64, start: f64, end: f
         .map(|i| {
             let t = start + sweep * i as f64 / n as f64;
             let (s, c) = t.sin_cos();
-            [centre[0] + c * major[0] + s * minor[0], centre[1] + c * major[1] + s * minor[1]]
+            [
+                centre[0] + c * major[0] + s * minor[0],
+                centre[1] + c * major[1] + s * minor[1],
+            ]
         })
         .collect();
     let length = chain_length(&points, false);
@@ -229,9 +317,23 @@ pub fn ellipse(centre: [f64; 2], major: [f64; 2], ratio: f64, start: f64, end: f
         points.pop();
         let a = major[0].hypot(major[1]);
         let area = std::f64::consts::PI * a * a * ratio.abs();
-        return Shape { parts: vec![points], length, area, closed: true, curved: true, approximate: true };
+        return Shape {
+            parts: vec![points],
+            length,
+            area,
+            closed: true,
+            curved: true,
+            approximate: true,
+        };
     }
-    Shape { parts: vec![points], length, area: 0.0, closed: false, curved: true, approximate: true }
+    Shape {
+        parts: vec![points],
+        length,
+        area: 0.0,
+        closed: false,
+        curved: true,
+        approximate: true,
+    }
 }
 
 /// A chain of straight and arc segments: each vertex with the bulge of the segment that leaves it.
@@ -240,7 +342,10 @@ pub fn polyline(vertices: &[([f64; 2], f64)], closed: bool) -> Shape {
         return Shape::default();
     }
     let curve = Curve::Polyline(Polyline {
-        vertices: vertices.iter().map(|&(position, bulge)| PolylineVertex { position, bulge }).collect(),
+        vertices: vertices
+            .iter()
+            .map(|&(position, bulge)| PolylineVertex { position, bulge })
+            .collect(),
         closed,
     });
     let count = vertices.len();
@@ -260,7 +365,11 @@ pub fn polyline(vertices: &[([f64; 2], f64)], closed: bool) -> Shape {
     if closed && points.len() > 1 && points[points.len() - 1] == points[0] {
         points.pop();
     }
-    let area = if closed { curve.enclosed_area().abs() } else { 0.0 };
+    let area = if closed {
+        curve.enclosed_area().abs()
+    } else {
+        0.0
+    };
     Shape::chain(points, curve.length(), area, closed, curved)
 }
 
@@ -268,7 +377,10 @@ fn bulge_points(p0: [f64; 2], p1: [f64; 2], bulge: f64) -> Vec<[f64; 2]> {
     let sweep = 4.0 * bulge.atan();
     let (dx, dy) = (p1[0] - p0[0], p1[1] - p0[1]);
     let k = (1.0 - bulge * bulge) / (4.0 * bulge);
-    let centre = [(p0[0] + p1[0]) / 2.0 - k * dy, (p0[1] + p1[1]) / 2.0 + k * dx];
+    let centre = [
+        (p0[0] + p1[0]) / 2.0 - k * dy,
+        (p0[1] + p1[1]) / 2.0 + k * dx,
+    ];
     let radius = dist(centre, p0);
     let start = (p0[1] - centre[1]).atan2(p0[0] - centre[0]);
     let mut points = arc_points(centre, radius, start, sweep);
@@ -300,13 +412,24 @@ pub fn spline(
             (curve.tessellate_within(size * 1e-4), curve.length())
         }
         _ => {
-            let points = if fit.len() >= 2 { fit.to_vec() } else { control.to_vec() };
+            let points = if fit.len() >= 2 {
+                fit.to_vec()
+            } else {
+                control.to_vec()
+            };
             let length = chain_length(&points, false);
             (points, length)
         }
     };
     let area = if closed { ring_area(&points) } else { 0.0 };
-    Shape { parts: vec![points], length, area, closed, curved: true, approximate: true }
+    Shape {
+        parts: vec![points],
+        length,
+        area,
+        closed,
+        curved: true,
+        approximate: true,
+    }
 }
 
 fn bbox_size(points: &[[f64; 2]]) -> f64 {
@@ -314,7 +437,9 @@ fn bbox_size(points: &[[f64; 2]]) -> f64 {
     for p in points {
         b = Some(grow(b, *p));
     }
-    b.map(|b| (b[2] - b[0]).hypot(b[3] - b[1])).unwrap_or(1.0).max(1e-9)
+    b.map(|b| (b[2] - b[0]).hypot(b[3] - b[1]))
+        .unwrap_or(1.0)
+        .max(1e-9)
 }
 
 /// A filled area bounded by rings: the outer rings count, the islands inside them come off, and islands within
@@ -324,28 +449,59 @@ pub fn rings(parts: Vec<Vec<[f64; 2]>>, curved: bool) -> Shape {
     let mut area = 0.0;
     let mut length = 0.0;
     for (i, part) in parts.iter().enumerate() {
-        let depth = parts.iter().enumerate().filter(|(j, other)| *j != i && inside(other, part[0])).count();
+        let depth = parts
+            .iter()
+            .enumerate()
+            .filter(|(j, other)| *j != i && inside(other, part[0]))
+            .count();
         let a = ring_area(part);
         area += if depth % 2 == 0 { a } else { -a };
         length += chain_length(part, true);
     }
-    Shape { parts, length, area: area.max(0.0), closed: true, curved, approximate: curved }
+    Shape {
+        parts,
+        length,
+        area: area.max(0.0),
+        closed: true,
+        curved,
+        approximate: curved,
+    }
 }
 
 /// Straight segments of a hatch boundary edge, running the way the edge runs.
-pub fn arc_edge(centre: [f64; 2], radius: f64, start: f64, end: f64, counter_clockwise: bool) -> Vec<[f64; 2]> {
+pub fn arc_edge(
+    centre: [f64; 2],
+    radius: f64,
+    start: f64,
+    end: f64,
+    counter_clockwise: bool,
+) -> Vec<[f64; 2]> {
     if counter_clockwise {
         let sweep = (end - start).rem_euclid(TAU);
-        return arc_points(centre, radius, start, if sweep < 1e-12 { TAU } else { sweep });
+        return arc_points(
+            centre,
+            radius,
+            start,
+            if sweep < 1e-12 { TAU } else { sweep },
+        );
     }
     // A clockwise edge keeps its angles as seen from below: mirror them back.
     let (start, end) = (-start, -end);
     let sweep = (start - end).rem_euclid(TAU);
-    arc_points(centre, radius, start, -(if sweep < 1e-12 { TAU } else { sweep }))
+    arc_points(
+        centre,
+        radius,
+        start,
+        -(if sweep < 1e-12 { TAU } else { sweep }),
+    )
 }
 
 pub fn bulge_chain(vertices: &[([f64; 2], f64)], closed: bool) -> Vec<[f64; 2]> {
-    polyline(vertices, closed).parts.into_iter().next().unwrap_or_default()
+    polyline(vertices, closed)
+        .parts
+        .into_iter()
+        .next()
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -358,7 +514,12 @@ mod tests {
 
     #[test]
     fn a_bulged_polyline_is_measured_exactly() {
-        let square = [([0.0, 0.0], 0.0), ([10.0, 0.0], 0.0), ([10.0, 10.0], 1.0), ([0.0, 10.0], 0.0)];
+        let square = [
+            ([0.0, 0.0], 0.0),
+            ([10.0, 0.0], 0.0),
+            ([10.0, 10.0], 1.0),
+            ([0.0, 10.0], 0.0),
+        ];
         let shape = polyline(&square, true);
         assert!(close(shape.area, 100.0 + std::f64::consts::PI * 12.5));
         assert!(close(shape.length, 30.0 + std::f64::consts::PI * 5.0));
@@ -366,7 +527,15 @@ mod tests {
 
     #[test]
     fn a_placed_block_scales_lengths_and_areas() {
-        let square = polyline(&[([0.0, 0.0], 0.0), ([1.0, 0.0], 0.0), ([1.0, 1.0], 0.0), ([0.0, 1.0], 0.0)], true);
+        let square = polyline(
+            &[
+                ([0.0, 0.0], 0.0),
+                ([1.0, 0.0], 0.0),
+                ([1.0, 1.0], 0.0),
+                ([0.0, 1.0], 0.0),
+            ],
+            true,
+        );
         let xf = Affine::placed(100.0, 50.0, std::f64::consts::FRAC_PI_2, 2.0, 2.0);
         let placed = square.transformed(&xf);
         assert!(close(placed.area, 4.0) && close(placed.length, 8.0));
@@ -383,6 +552,9 @@ mod tests {
 
     #[test]
     fn a_circle_encloses_pi_r_squared() {
-        assert!(close(circle([5.0e5, 5.0e5], 2.0).area, std::f64::consts::PI * 4.0));
+        assert!(close(
+            circle([5.0e5, 5.0e5], 2.0).area,
+            std::f64::consts::PI * 4.0
+        ));
     }
 }

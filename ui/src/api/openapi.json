@@ -1064,7 +1064,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PageOut"
+                  "$ref": "#/components/schemas/quantix__api__documents__PageOut"
                 }
               }
             }
@@ -1912,7 +1912,7 @@
           "takeoff"
         ],
         "summary": "Get Sheet",
-        "description": "Any PDF page as a sheet the engineer can measure on.",
+        "description": "Any PDF page, or any page of a CAD drawing, as a sheet the engineer can measure on.",
         "operationId": "get_sheet_documents__document_id__pages__number__sheet_get",
         "parameters": [
           {
@@ -2313,6 +2313,687 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{document_id}/drawing": {
+      "get": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Get Drawing",
+        "description": "What a drawing holds: its pages, units, what couldn't be read, and one page's layers and blocks.",
+        "operationId": "get_drawing_documents__document_id__drawing_get",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DrawingOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{document_id}/pages/{number}/screen": {
+      "get": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Screen Copy",
+        "description": "A page of a drawing for the Takeoff screen to draw: its segments, objects and texts, packed.",
+        "operationId": "screen_copy_documents__document_id__pages__number__screen_get",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Number"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{document_id}/pages/{number}/choose": {
+      "post": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Choose",
+        "description": "What Quantix measures of the objects chosen: how many, their length and closed area.",
+        "operationId": "choose_documents__document_id__pages__number__choose_post",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Number"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/quantix__api__drawings__Choice"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Chosen"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{document_id}/rooms": {
+      "get": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Rooms",
+        "description": "The rooms Quantix finds in model space from the layer map.",
+        "operationId": "rooms_documents__document_id__rooms_get",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RoomOut"
+                  },
+                  "title": "Response Rooms Documents  Document Id  Rooms Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenders/{tender_id}/units": {
+      "post": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Set Units",
+        "description": "The engineer sets a drawing's units.",
+        "operationId": "set_units_tenders__tender_id__units_post",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnitsIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnitsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenders/{tender_id}/drawing-measurements": {
+      "post": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Add Drawing Measurement",
+        "description": "The engineer measures objects they chose on the Takeoff screen, or by a rule.",
+        "operationId": "add_drawing_measurement_tenders__tender_id__drawing_measurements_post",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DrawingMeasurementIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Add Drawing Measurement Tenders  Tender Id  Drawing Measurements Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenders/{tender_id}/checks": {
+      "get": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Checks",
+        "description": "What Quantix's own checks find: in one drawing, or in the BOQ and across the drawings.",
+        "operationId": "checks_tenders__tender_id__checks_get",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProblemOut"
+                  },
+                  "title": "Response Checks Tenders  Tender Id  Checks Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenders/{tender_id}/layer-maps": {
+      "get": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Layer Maps",
+        "operationId": "layer_maps_tenders__tender_id__layer_maps_get",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LayerMapOut"
+                  },
+                  "title": "Response Layer Maps Tenders  Tender Id  Layer Maps Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/layer-maps/{map_id}/decision": {
+      "post": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Decide Layer Map",
+        "operationId": "decide_layer_map_layer_maps__map_id__decision_post",
+        "parameters": [
+          {
+            "name": "map_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Map Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenders/{tender_id}/queries": {
+      "get": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Tender Queries",
+        "description": "The tender queries the office raised, and the engineer's decisions on them.",
+        "operationId": "tender_queries_tenders__tender_id__queries_get",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/QueryOut"
+                  },
+                  "title": "Response Tender Queries Tenders  Tender Id  Queries Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/queries/{query_id}/decision": {
+      "post": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Decide Query",
+        "operationId": "decide_query_queries__query_id__decision_post",
+        "parameters": [
+          {
+            "name": "query_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Query Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -2843,7 +3524,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Choice"
+                "$ref": "#/components/schemas/quantix__api__subcontract__Choice"
               }
             }
           }
@@ -4295,6 +4976,36 @@
         ],
         "title": "Approved"
       },
+      "BlockOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "copies": {
+            "type": "integer",
+            "title": "Copies"
+          },
+          "meaning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meaning"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "copies",
+          "meaning"
+        ],
+        "title": "BlockOut"
+      },
       "Body_add_documents_tenders__tender_id__documents_post": {
         "properties": {
           "files": {
@@ -4378,18 +5089,58 @@
         ],
         "title": "CheckRequest"
       },
-      "Choice": {
+      "Chosen": {
         "properties": {
-          "quote_id": {
-            "type": "string",
-            "title": "Quote Id"
+          "objects": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Objects"
+          },
+          "keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Keys"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "length_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Length M"
+          },
+          "area_m2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Area M2"
           }
         },
         "type": "object",
         "required": [
-          "quote_id"
+          "objects",
+          "keys",
+          "count",
+          "length_m",
+          "area_m2"
         ],
-        "title": "Choice"
+        "title": "Chosen"
       },
       "ColumnsOut": {
         "properties": {
@@ -5107,6 +5858,163 @@
         ],
         "title": "DraftOut"
       },
+      "DrawingMeasurementIn": {
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "length",
+              "area",
+              "count"
+            ],
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "choice": {
+            "$ref": "#/components/schemas/quantix__api__drawings__Choice"
+          },
+          "multiplier": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Multiplier"
+          },
+          "boq_item": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boq Item"
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_id",
+          "kind",
+          "label",
+          "unit",
+          "choice"
+        ],
+        "title": "DrawingMeasurementIn"
+      },
+      "DrawingOut": {
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "stamp": {
+            "type": "string",
+            "title": "Stamp"
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/quantix__api__drawings__PageOut"
+            },
+            "type": "array",
+            "title": "Pages"
+          },
+          "header_units": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Header Units"
+          },
+          "units": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UnitsOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "not_read": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Not Read"
+          },
+          "layers": {
+            "items": {
+              "$ref": "#/components/schemas/LayerOut"
+            },
+            "type": "array",
+            "title": "Layers"
+          },
+          "blocks": {
+            "items": {
+              "$ref": "#/components/schemas/BlockOut"
+            },
+            "type": "array",
+            "title": "Blocks"
+          },
+          "meanings": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Meanings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_id",
+          "name",
+          "stamp",
+          "pages",
+          "header_units",
+          "units",
+          "evidence",
+          "not_read",
+          "layers",
+          "blocks",
+          "meanings"
+        ],
+        "title": "DrawingOut"
+      },
       "DueSource": {
         "properties": {
           "basis": {
@@ -5467,7 +6375,7 @@
           },
           "refs": {
             "items": {
-              "$ref": "#/components/schemas/SourceOut"
+              "$ref": "#/components/schemas/quantix__api__review__SourceOut"
             },
             "type": "array",
             "title": "Refs"
@@ -5523,6 +6431,10 @@
             "type": "integer",
             "title": "Takeoff"
           },
+          "drawings": {
+            "type": "integer",
+            "title": "Drawings"
+          },
           "pricing": {
             "type": "integer",
             "title": "Pricing"
@@ -5542,6 +6454,7 @@
           "boq",
           "facts",
           "takeoff",
+          "drawings",
           "pricing",
           "subcontract",
           "submission"
@@ -5663,6 +6576,127 @@
           "source"
         ],
         "title": "ItemOut"
+      },
+      "LayerMapOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "document_name": {
+            "type": "string",
+            "title": "Document Name"
+          },
+          "layers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Layers"
+          },
+          "blocks": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Blocks"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "proposed_by": {
+            "type": "string",
+            "title": "Proposed By"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "document_id",
+          "document_name",
+          "layers",
+          "blocks",
+          "note",
+          "status",
+          "proposed_by",
+          "reviewed_by",
+          "review_note"
+        ],
+        "title": "LayerMapOut"
+      },
+      "LayerOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "objects": {
+            "type": "integer",
+            "title": "Objects"
+          },
+          "types": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Types"
+          },
+          "prints": {
+            "type": "boolean",
+            "title": "Prints"
+          },
+          "meaning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meaning"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "objects",
+          "types",
+          "prints",
+          "meaning"
+        ],
+        "title": "LayerOut"
       },
       "LessonDecision": {
         "properties": {
@@ -6145,6 +7179,43 @@
               }
             ],
             "title": "Review Note"
+          },
+          "rule": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule"
+          },
+          "object_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Count"
+          },
+          "objects": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objects"
           }
         },
         "type": "object",
@@ -6574,29 +7645,6 @@
         ],
         "title": "PackageOut"
       },
-      "PageOut": {
-        "properties": {
-          "number": {
-            "type": "integer",
-            "title": "Number"
-          },
-          "text": {
-            "type": "string",
-            "title": "Text"
-          },
-          "has_text": {
-            "type": "boolean",
-            "title": "Has Text"
-          }
-        },
-        "type": "object",
-        "required": [
-          "number",
-          "text",
-          "has_text"
-        ],
-        "title": "PageOut"
-      },
       "PreliminaryOut": {
         "properties": {
           "item": {
@@ -6715,6 +7763,49 @@
         ],
         "title": "PricedItem"
       },
+      "ProblemOut": {
+        "properties": {
+          "severity": {
+            "type": "string",
+            "title": "Severity"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "objects": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Objects"
+          }
+        },
+        "type": "object",
+        "required": [
+          "severity",
+          "message",
+          "document_id",
+          "page",
+          "objects"
+        ],
+        "title": "ProblemOut"
+      },
       "ProfileIn": {
         "properties": {
           "name": {
@@ -6783,6 +7874,118 @@
           "has_logo"
         ],
         "title": "ProfileOut"
+      },
+      "QueryOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "kind_label": {
+            "type": "string",
+            "title": "Kind Label"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "wording": {
+            "type": "string",
+            "title": "Wording"
+          },
+          "governs": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Governs"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/quantix__api__drawings__SourceOut"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "boq_item": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boq Item"
+          },
+          "figures": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Figures"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "proposed_by": {
+            "type": "string",
+            "title": "Proposed By"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "kind_label",
+          "title",
+          "detail",
+          "wording",
+          "governs",
+          "sources",
+          "boq_item",
+          "figures",
+          "status",
+          "proposed_by",
+          "reviewed_by",
+          "review_note"
+        ],
+        "title": "QueryOut"
       },
       "QuoteOut": {
         "properties": {
@@ -7304,6 +8507,176 @@
         ],
         "title": "RequirementOut"
       },
+      "RoomOut": {
+        "properties": {
+          "number": {
+            "type": "integer",
+            "title": "Number"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "area_m2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Area M2"
+          },
+          "perimeter_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Perimeter M"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "ring": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Ring"
+          }
+        },
+        "type": "object",
+        "required": [
+          "number",
+          "name",
+          "area_m2",
+          "perimeter_m",
+          "source",
+          "ring"
+        ],
+        "title": "RoomOut"
+      },
+      "Rule": {
+        "properties": {
+          "layers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Layers",
+            "description": "Layer names; \"A-WALL*\" takes every layer starting A-WALL",
+            "default": []
+          },
+          "blocks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Blocks",
+            "description": "Block names: their placed references, wherever they sit",
+            "default": []
+          },
+          "types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Types",
+            "description": "Object types: Line, Arc, Circle, Ellipse, Polyline, Spline, Hatch, Solid, Point, Insert, Text, MText, Attribute, Dimension, MLine",
+            "default": []
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text",
+            "description": "Words in the object's text or block attributes"
+          },
+          "attributes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Attributes",
+            "description": "Block attributes by tag, e.g. {'TYPE': 'D1'}",
+            "default": {}
+          },
+          "closed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closed",
+            "description": "Only closed outlines (true) or only open ones (false)"
+          },
+          "hatch_pattern": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hatch Pattern",
+            "description": "Only hatches with this pattern"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region",
+            "description": "[left, bottom, right, top] in drawing units"
+          },
+          "rooms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rooms",
+            "description": "Only objects inside these rooms, by name as query_drawing lists them; with types ['Room'], the rooms themselves (a room's length is its perimeter)",
+            "default": []
+          },
+          "keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Keys",
+            "description": "Exact objects by key, as query_drawing lists them",
+            "default": []
+          }
+        },
+        "type": "object",
+        "title": "Rule",
+        "description": "Which objects of a drawing space to take: every condition given must hold, and within a list any one will do.\nAnnotation (the drawing of dimensions, leaders and tables) is never taken."
+      },
       "RuleIn": {
         "properties": {
           "topic": {
@@ -7629,6 +9002,22 @@
                 "type": "null"
               }
             ]
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "default": "pdf"
+          },
+          "units": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Units"
           }
         },
         "type": "object",
@@ -7669,43 +9058,6 @@
           "quote"
         ],
         "title": "Source"
-      },
-      "SourceOut": {
-        "properties": {
-          "label": {
-            "type": "string",
-            "title": "Label"
-          },
-          "document_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Document Id"
-          },
-          "page": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Page"
-          }
-        },
-        "type": "object",
-        "required": [
-          "label",
-          "document_id",
-          "page"
-        ],
-        "title": "SourceOut"
       },
       "StaffOut": {
         "properties": {
@@ -8120,6 +9472,57 @@
         ],
         "title": "TenderUsage"
       },
+      "UnitsIn": {
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "units": {
+            "type": "string",
+            "title": "Units"
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_id",
+          "units"
+        ],
+        "title": "UnitsIn"
+      },
+      "UnitsOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "metres": {
+            "type": "number",
+            "title": "Metres"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "metres",
+          "status",
+          "note"
+        ],
+        "title": "UnitsOut"
+      },
       "Usage": {
         "properties": {
           "models": {
@@ -8287,6 +9690,197 @@
           "read_at"
         ],
         "title": "WebSource"
+      },
+      "quantix__api__documents__PageOut": {
+        "properties": {
+          "number": {
+            "type": "integer",
+            "title": "Number"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "has_text": {
+            "type": "boolean",
+            "title": "Has Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "number",
+          "text",
+          "has_text"
+        ],
+        "title": "PageOut"
+      },
+      "quantix__api__drawings__Choice": {
+        "properties": {
+          "stamp": {
+            "type": "string",
+            "title": "Stamp"
+          },
+          "objects": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Objects",
+            "default": []
+          },
+          "rule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Rule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "stamp"
+        ],
+        "title": "Choice",
+        "description": "Objects of a drawing page: by their numbers on the Takeoff screen, or by a rule."
+      },
+      "quantix__api__drawings__PageOut": {
+        "properties": {
+          "number": {
+            "type": "integer",
+            "title": "Number"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "extents": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extents"
+          },
+          "objects": {
+            "type": "integer",
+            "title": "Objects"
+          }
+        },
+        "type": "object",
+        "required": [
+          "number",
+          "name",
+          "kind",
+          "extents",
+          "objects"
+        ],
+        "title": "PageOut"
+      },
+      "quantix__api__drawings__SourceOut": {
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "document_name": {
+            "type": "string",
+            "title": "Document Name"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote"
+          },
+          "objects": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Objects"
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_id",
+          "document_name",
+          "page",
+          "quote",
+          "objects"
+        ],
+        "title": "SourceOut"
+      },
+      "quantix__api__review__SourceOut": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "document_id",
+          "page"
+        ],
+        "title": "SourceOut"
+      },
+      "quantix__api__subcontract__Choice": {
+        "properties": {
+          "quote_id": {
+            "type": "string",
+            "title": "Quote Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "quote_id"
+        ],
+        "title": "Choice"
       }
     }
   }

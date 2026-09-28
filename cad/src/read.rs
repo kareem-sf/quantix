@@ -143,41 +143,65 @@ pub fn run(drawing: &str, folder: &str) -> Result<(), Failure> {
     // Pages are numbered in order with no gaps: renumber after skipping empty layouts.
     let mut renumber = HashMap::new();
     for (page, space) in spaces.iter_mut().enumerate() {
-        renumber.insert(space["number"].as_u64().unwrap_or(0) as u32, page as u32 + 1);
+        renumber.insert(
+            space["number"].as_u64().unwrap_or(0) as u32,
+            page as u32 + 1,
+        );
         space["number"] = json!(page + 1);
     }
     for row in walker.index.iter_mut() {
         row[0] = renumber.get(&row[0]).copied().unwrap_or(0);
     }
+    if walker.keys.is_empty()
+        && outcome.stats.decoded_source_records == 0
+        && outcome.stats.recovered_errors > 0
+    {
+        // the failsafe reader gave back an empty document: nothing of the file could be read
+        return Err(Failure::Unreadable(
+            "This drawing can't be opened: nothing in it could be read.".into(),
+        ));
+    }
     walker.write(Path::new(folder), &outcome, spaces)
 }
 
 fn open(path: &Path) -> Result<ReadOutcome, Failure> {
-    let is_dxf = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("dxf"));
+    let is_dxf = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("dxf"));
     let result = if is_dxf {
         DxfReader::from_file(path).and_then(|reader| reader.read_with_stats())
     } else {
-        DwgReader::from_file_with_options(path, DwgReadOptions::failsafe()).and_then(|mut reader| reader.read_with_stats())
+        DwgReader::from_file_with_options(path, DwgReadOptions::failsafe())
+            .and_then(|mut reader| reader.read_with_stats())
     };
     result.map_err(|error| Failure::Unreadable(format!("This drawing can't be opened: {error}")))
 }
 
 /// Model space, then each paper layout in tab order: (name, block, kind).
 fn spaces_of(doc: &CadDocument) -> Vec<(String, String, &'static str)> {
-    let names: HashMap<u64, String> = doc.block_records.iter().map(|b| (b.handle.value(), b.name.clone())).collect();
+    let names: HashMap<u64, String> = doc
+        .block_records
+        .iter()
+        .map(|b| (b.handle.value(), b.name.clone()))
+        .collect();
     let mut layouts: Vec<(i16, String, String)> = doc
         .objects
         .values()
         .filter_map(|o| match o {
-            ObjectType::Layout(layout) if !layout.name.eq_ignore_ascii_case("model") => {
-                names.get(&layout.block_record.value()).map(|block| (layout.tab_order, layout.name.clone(), block.clone()))
-            }
+            ObjectType::Layout(layout) if !layout.name.eq_ignore_ascii_case("model") => names
+                .get(&layout.block_record.value())
+                .map(|block| (layout.tab_order, layout.name.clone(), block.clone())),
             _ => None,
         })
         .collect();
     layouts.sort();
     let mut found = vec![("Model".to_string(), "*Model_Space".to_string(), "model")];
-    found.extend(layouts.into_iter().map(|(_, name, block)| (name, block, "paper")));
+    found.extend(
+        layouts
+            .into_iter()
+            .map(|(_, name, block)| (name, block, "paper")),
+    );
     found
 }
 
@@ -230,16 +254,35 @@ fn mtext_plain(raw: &str) -> String {
 }
 
 /// Where a text lies: its anchor, height, rotation, and how much of the box sits left of and below the anchor.
-fn text_box(anchor: [f64; 2], text: &str, height: f64, width: f64, rotation: f64, shift: (f64, f64)) -> [f64; 4] {
+fn text_box(
+    anchor: [f64; 2],
+    text: &str,
+    height: f64,
+    width: f64,
+    rotation: f64,
+    shift: (f64, f64),
+) -> [f64; 4] {
     let lines = text.lines().count().max(1) as f64;
-    let chars = text.lines().map(|l| l.chars().count()).max().unwrap_or(0).max(1) as f64;
-    let w = if width > 0.0 { width } else { height * 0.8 * chars }; // no font metrics: an estimate
+    let chars = text
+        .lines()
+        .map(|l| l.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(1) as f64;
+    let w = if width > 0.0 {
+        width
+    } else {
+        height * 0.8 * chars
+    }; // no font metrics: an estimate
     let h = height * if lines > 1.0 { lines * 1.67 } else { 1.0 };
     let (sin, cos) = rotation.sin_cos();
     let mut bbox = None;
     for (x, y) in [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)] {
         let (x, y) = (x - shift.0 * w, y - shift.1 * h);
-        bbox = Some(g::grow(bbox, [anchor[0] + x * cos - y * sin, anchor[1] + x * sin + y * cos]));
+        bbox = Some(g::grow(
+            bbox,
+            [anchor[0] + x * cos - y * sin, anchor[1] + x * sin + y * cos],
+        ));
     }
     bbox.unwrap_or([anchor[0], anchor[1], anchor[0], anchor[1]])
 }
@@ -248,7 +291,11 @@ impl<'a> Walker<'a> {
     fn new(doc: &'a CadDocument) -> Walker<'a> {
         let mut walker = Walker {
             doc,
-            block_names: doc.block_records.iter().map(|b| (b.handle.value(), b.name.clone())).collect(),
+            block_names: doc
+                .block_records
+                .iter()
+                .map(|b| (b.handle.value(), b.name.clone()))
+                .collect(),
             layers: vec![],
             layer_index: HashMap::new(),
             blocks: vec![],
@@ -364,23 +411,54 @@ impl<'a> Walker<'a> {
         let layer = self.layer(layer);
         let block = block.map(|b| self.block_id(b) + 1).unwrap_or(0);
         let parent = place.parent.map(|p| p as u32 + 1).unwrap_or(0);
-        self.index.push([place.space, kind as u32, layer, block, start, count, flags, parent]);
+        self.index.push([
+            place.space,
+            kind as u32,
+            layer,
+            block,
+            start,
+            count,
+            flags,
+            parent,
+        ]);
         let e = extent.unwrap_or([f64::NAN; 4]);
-        self.num.push([e[0], e[1], e[2], e[3], round(length), round(area)]);
+        self.num
+            .push([e[0], e[1], e[2], e[3], round(length), round(area)]);
         i
     }
 
-    fn shape(&mut self, place: &Place, handle: u64, kind: usize, layer: &str, shape: Shape) -> usize {
+    fn shape(
+        &mut self,
+        place: &Place,
+        handle: u64,
+        kind: usize,
+        layer: &str,
+        shape: Shape,
+    ) -> usize {
         let placed = shape.transformed(&place.xf);
         self.push(place, handle, kind, layer, None, Some(&placed), None, 0)
     }
 
-    fn text(&mut self, place: &Place, handle: u64, kind: usize, layer: &str, found: TextFound) -> usize {
+    fn text(
+        &mut self,
+        place: &Place,
+        handle: u64,
+        kind: usize,
+        layer: &str,
+        found: TextFound,
+    ) -> usize {
         let anchor = place.xf.apply(found.anchor);
         let scale = place.xf.det().abs().sqrt();
         let height = found.height * scale;
         let rotation = found.rotation + place.xf.angle();
-        let bbox = text_box(anchor, &found.plain, height, found.width * scale, rotation, found.shift);
+        let bbox = text_box(
+            anchor,
+            &found.plain,
+            height,
+            found.width * scale,
+            rotation,
+            found.shift,
+        );
         let i = self.push(place, handle, kind, layer, None, None, Some(bbox), 0);
         self.texts.push(json!([
             i,
@@ -412,7 +490,8 @@ impl<'a> Walker<'a> {
                 self.shape(place, handle, LINE, layer, shape);
             }
             EntityType::Arc(e) => {
-                let shape = g::arc(v2(e.center), e.radius, e.start_angle, e.end_angle).transformed(&Affine::ocs(e.normal));
+                let shape = g::arc(v2(e.center), e.radius, e.start_angle, e.end_angle)
+                    .transformed(&Affine::ocs(e.normal));
                 self.shape(place, handle, ARC, layer, shape);
             }
             EntityType::Circle(e) => {
@@ -431,7 +510,11 @@ impl<'a> Walker<'a> {
                 self.shape(place, handle, ELLIPSE, layer, shape);
             }
             EntityType::LwPolyline(e) => {
-                let vertices: Vec<([f64; 2], f64)> = e.vertices.iter().map(|v| ([v.location.x, v.location.y], v.bulge)).collect();
+                let vertices: Vec<([f64; 2], f64)> = e
+                    .vertices
+                    .iter()
+                    .map(|v| ([v.location.x, v.location.y], v.bulge))
+                    .collect();
                 let shape = g::polyline(&vertices, e.is_closed).transformed(&Affine::ocs(e.normal));
                 self.shape(place, handle, POLYLINE, layer, shape);
             }
@@ -447,23 +530,55 @@ impl<'a> Walker<'a> {
                 self.shape(place, handle, POLYLINE, layer, shape);
             }
             EntityType::Polyline(e) => {
-                let vertices: Vec<([f64; 2], f64)> = e.vertices.iter().map(|v| ([v.location.x, v.location.y], 0.0)).collect();
+                let vertices: Vec<([f64; 2], f64)> = e
+                    .vertices
+                    .iter()
+                    .map(|v| ([v.location.x, v.location.y], 0.0))
+                    .collect();
                 let closed = e.flags.is_closed();
-                self.shape(place, handle, POLYLINE, layer, g::polyline(&vertices, closed));
+                self.shape(
+                    place,
+                    handle,
+                    POLYLINE,
+                    layer,
+                    g::polyline(&vertices, closed),
+                );
             }
             EntityType::Polyline3D(e) => {
-                let vertices: Vec<([f64; 2], f64)> = e.vertices.iter().map(|v| ([v.position.x, v.position.y], 0.0)).collect();
-                self.shape(place, handle, POLYLINE, layer, g::polyline(&vertices, e.is_closed()));
+                let vertices: Vec<([f64; 2], f64)> = e
+                    .vertices
+                    .iter()
+                    .map(|v| ([v.position.x, v.position.y], 0.0))
+                    .collect();
+                self.shape(
+                    place,
+                    handle,
+                    POLYLINE,
+                    layer,
+                    g::polyline(&vertices, e.is_closed()),
+                );
             }
             EntityType::Spline(e) => {
                 let control: Vec<[f64; 2]> = e.control_points.iter().map(|p| v2(*p)).collect();
                 let fit: Vec<[f64; 2]> = e.fit_points.iter().map(|p| v2(*p)).collect();
-                let shape = g::spline(e.degree.max(1) as usize, &control, &e.knots, &e.weights, &fit, e.flags.closed);
+                let shape = g::spline(
+                    e.degree.max(1) as usize,
+                    &control,
+                    &e.knots,
+                    &e.weights,
+                    &fit,
+                    e.flags.closed,
+                );
                 self.shape(place, handle, SPLINE, layer, shape);
             }
             EntityType::Hatch(e) => self.hatch(e, place, handle, layer),
             EntityType::Solid(e) => {
-                let corners = [e.first_corner, e.second_corner, e.fourth_corner, e.third_corner];
+                let corners = [
+                    e.first_corner,
+                    e.second_corner,
+                    e.fourth_corner,
+                    e.third_corner,
+                ];
                 let mut ring: Vec<[f64; 2]> = corners.iter().map(|c| v2(*c)).collect();
                 ring.dedup();
                 let shape = g::rings(vec![ring], false).transformed(&Affine::ocs(e.normal));
@@ -471,7 +586,10 @@ impl<'a> Walker<'a> {
             }
             EntityType::Point(e) => {
                 let p = v2(e.location);
-                let shape = Shape { parts: vec![vec![p]], ..Shape::default() };
+                let shape = Shape {
+                    parts: vec![vec![p]],
+                    ..Shape::default()
+                };
                 self.shape(place, handle, POINT, layer, shape);
             }
             EntityType::Insert(e) => self.insert(e, place, handle, layer),
@@ -509,15 +627,45 @@ impl<'a> Walker<'a> {
             }
             EntityType::Dimension(e) => self.dimension(e, place, handle, layer),
             EntityType::Leader(e) => {
-                let vertices: Vec<([f64; 2], f64)> = e.vertices.iter().map(|v| (v2(*v), 0.0)).collect();
+                let vertices: Vec<([f64; 2], f64)> =
+                    e.vertices.iter().map(|v| (v2(*v), 0.0)).collect();
                 let shape = g::polyline(&vertices, false).transformed(&place.xf);
-                self.push(place, handle, LEADER, layer, None, Some(&shape), None, ANNOTATION);
+                self.push(
+                    place,
+                    handle,
+                    LEADER,
+                    layer,
+                    None,
+                    Some(&shape),
+                    None,
+                    ANNOTATION,
+                );
             }
             EntityType::MultiLeader(e) => {
-                let i = self.push(place, handle, MULTILEADER, layer, None, None, None, ANNOTATION);
-                let inner = Place { path: format!("{}{:X}/", place.path, handle), parent: Some(i), flags: place.flags | ANNOTATION, ..place.clone() };
+                let i = self.push(
+                    place,
+                    handle,
+                    MULTILEADER,
+                    layer,
+                    None,
+                    None,
+                    None,
+                    ANNOTATION,
+                );
+                let inner = Place {
+                    path: format!("{}{:X}/", place.path, handle),
+                    parent: Some(i),
+                    flags: place.flags | ANNOTATION,
+                    ..place.clone()
+                };
                 for part in entity.explode() {
-                    self.entity(&part, &Place { layer: Some(layer.to_string()), ..inner.clone() });
+                    self.entity(
+                        &part,
+                        &Place {
+                            layer: Some(layer.to_string()),
+                            ..inner.clone()
+                        },
+                    );
                 }
                 self.close_extent(i);
                 let _ = e;
@@ -525,12 +673,26 @@ impl<'a> Walker<'a> {
             EntityType::Table(e) => {
                 let mut rows = vec![];
                 for r in 0..e.row_count() {
-                    let row: Vec<String> =
-                        (0..e.column_count()).map(|c| e.cell(r, c).map(|cell| mtext_plain(cell.text_value())).unwrap_or_default()).collect();
+                    let row: Vec<String> = (0..e.column_count())
+                        .map(|c| {
+                            e.cell(r, c)
+                                .map(|cell| mtext_plain(cell.text_value()))
+                                .unwrap_or_default()
+                        })
+                        .collect();
                     rows.push(row);
                 }
                 let at = place.xf.apply(v2(e.insertion_point));
-                let i = self.push(place, handle, TABLE, layer, None, None, Some([at[0], at[1], at[0], at[1]]), 0);
+                let i = self.push(
+                    place,
+                    handle,
+                    TABLE,
+                    layer,
+                    None,
+                    None,
+                    Some([at[0], at[1], at[0], at[1]]),
+                    0,
+                );
                 self.tables.push(json!([i, rows]));
                 if !e.block_name.is_empty() && self.doc.block_records.get(&e.block_name).is_some() {
                     let inner = Place {
@@ -550,10 +712,32 @@ impl<'a> Walker<'a> {
                     return;
                 }
                 let (cx, cy, w, h) = (e.center.x, e.center.y, e.width, e.height);
-                let ring = vec![[cx - w / 2.0, cy - h / 2.0], [cx + w / 2.0, cy - h / 2.0], [cx + w / 2.0, cy + h / 2.0], [cx - w / 2.0, cy + h / 2.0]];
-                let shape = Shape { parts: vec![ring], closed: true, ..Shape::default() };
-                let i = self.push(place, handle, VIEWPORT, layer, None, Some(&shape), None, ANNOTATION);
-                let scale = if e.view_height.abs() > 1e-12 { e.height / e.view_height } else { 0.0 };
+                let ring = vec![
+                    [cx - w / 2.0, cy - h / 2.0],
+                    [cx + w / 2.0, cy - h / 2.0],
+                    [cx + w / 2.0, cy + h / 2.0],
+                    [cx - w / 2.0, cy + h / 2.0],
+                ];
+                let shape = Shape {
+                    parts: vec![ring],
+                    closed: true,
+                    ..Shape::default()
+                };
+                let i = self.push(
+                    place,
+                    handle,
+                    VIEWPORT,
+                    layer,
+                    None,
+                    Some(&shape),
+                    None,
+                    ANNOTATION,
+                );
+                let scale = if e.view_height.abs() > 1e-12 {
+                    e.height / e.view_height
+                } else {
+                    0.0
+                };
                 self.viewports.push(json!([
                     i,
                     round(cx),
@@ -569,23 +753,41 @@ impl<'a> Walker<'a> {
                 ]));
             }
             EntityType::MLine(e) => {
-                let vertices: Vec<([f64; 2], f64)> = e.vertices.iter().map(|v| (v2(v.position), 0.0)).collect();
-                let closed = format!("{:?}", e.flags).contains("CLOSED") || format!("{:?}", e.flags).contains("closed: true");
+                let vertices: Vec<([f64; 2], f64)> =
+                    e.vertices.iter().map(|v| (v2(v.position), 0.0)).collect();
+                let closed = format!("{:?}", e.flags).contains("CLOSED")
+                    || format!("{:?}", e.flags).contains("closed: true");
                 let i = self.shape(place, handle, MLINE, layer, g::polyline(&vertices, closed));
-                let inner = Place { path: format!("{}{:X}/", place.path, handle), parent: Some(i), flags: place.flags | DERIVED, ..place.clone() };
+                let inner = Place {
+                    path: format!("{}{:X}/", place.path, handle),
+                    parent: Some(i),
+                    flags: place.flags | DERIVED,
+                    ..place.clone()
+                };
                 for part in entity.explode() {
-                    self.entity(&part, &Place { layer: Some(layer.to_string()), ..inner.clone() });
+                    self.entity(
+                        &part,
+                        &Place {
+                            layer: Some(layer.to_string()),
+                            ..inner.clone()
+                        },
+                    );
                 }
             }
             EntityType::Face3D(_) => self.skipped("3D faces"),
-            EntityType::Solid3D(_) | EntityType::Region(_) | EntityType::Body(_) | EntityType::Surface(_) => {
-                self.skipped("3D solids and surfaces")
+            EntityType::Solid3D(_)
+            | EntityType::Region(_)
+            | EntityType::Body(_)
+            | EntityType::Surface(_) => self.skipped("3D solids and surfaces"),
+            EntityType::Mesh(_) | EntityType::PolyfaceMesh(_) | EntityType::PolygonMesh(_) => {
+                self.skipped("3D meshes")
             }
-            EntityType::Mesh(_) | EntityType::PolyfaceMesh(_) | EntityType::PolygonMesh(_) => self.skipped("3D meshes"),
             EntityType::RasterImage(_) | EntityType::Underlay(_) | EntityType::Ole2Frame(_) => {
                 self.skipped("images, underlays and embedded objects")
             }
-            EntityType::Unknown(_) | EntityType::Extended(_) => self.skipped("objects of kinds Quantix can't read"),
+            EntityType::Unknown(_) | EntityType::Extended(_) => {
+                self.skipped("objects of kinds Quantix can't read")
+            }
             EntityType::Ray(_) | EntityType::XLine(_) => self.skipped("construction lines"),
             _ => {} // block markers, attribute definitions, wipeouts, shapes and other things with nothing to measure
         }
@@ -601,7 +803,11 @@ impl<'a> Walker<'a> {
         }
         if let Some(e) = found {
             let own = self.num[i];
-            let e = if own[0].is_finite() { g::union(Some([own[0], own[1], own[2], own[3]]), e) } else { e };
+            let e = if own[0].is_finite() {
+                g::union(Some([own[0], own[1], own[2], own[3]]), e)
+            } else {
+                e
+            };
             self.num[i][..4].copy_from_slice(&e);
         }
     }
@@ -616,12 +822,29 @@ impl<'a> Walker<'a> {
                     BoundaryEdge::Line(l) => vec![[l.start.x, l.start.y], [l.end.x, l.end.y]],
                     BoundaryEdge::CircularArc(a) => {
                         curved = true;
-                        g::arc_edge([a.center.x, a.center.y], a.radius, a.start_angle, a.end_angle, a.counter_clockwise)
+                        g::arc_edge(
+                            [a.center.x, a.center.y],
+                            a.radius,
+                            a.start_angle,
+                            a.end_angle,
+                            a.counter_clockwise,
+                        )
                     }
                     BoundaryEdge::EllipticArc(a) => {
                         curved = true;
-                        let (start, end) = if a.counter_clockwise { (a.start_angle, a.end_angle) } else { (-a.end_angle, -a.start_angle) };
-                        let s = g::ellipse([a.center.x, a.center.y], [a.major_axis_endpoint.x, a.major_axis_endpoint.y], a.minor_axis_ratio, start, end, false);
+                        let (start, end) = if a.counter_clockwise {
+                            (a.start_angle, a.end_angle)
+                        } else {
+                            (-a.end_angle, -a.start_angle)
+                        };
+                        let s = g::ellipse(
+                            [a.center.x, a.center.y],
+                            [a.major_axis_endpoint.x, a.major_axis_endpoint.y],
+                            a.minor_axis_ratio,
+                            start,
+                            end,
+                            false,
+                        );
                         let mut points = s.parts.into_iter().next().unwrap_or_default();
                         if !a.counter_clockwise {
                             points.reverse();
@@ -630,13 +853,30 @@ impl<'a> Walker<'a> {
                     }
                     BoundaryEdge::Spline(s) => {
                         curved = true;
-                        let control: Vec<[f64; 2]> = s.control_points.iter().map(|p| [p.x, p.y]).collect();
-                        let weights: Vec<f64> = if s.rational { s.control_points.iter().map(|p| p.z).collect() } else { vec![] };
+                        let control: Vec<[f64; 2]> =
+                            s.control_points.iter().map(|p| [p.x, p.y]).collect();
+                        let weights: Vec<f64> = if s.rational {
+                            s.control_points.iter().map(|p| p.z).collect()
+                        } else {
+                            vec![]
+                        };
                         let fit: Vec<[f64; 2]> = s.fit_points.iter().map(|p| [p.x, p.y]).collect();
-                        g::spline(s.degree.max(1) as usize, &control, &s.knots, &weights, &fit, false).parts.into_iter().next().unwrap_or_default()
+                        g::spline(
+                            s.degree.max(1) as usize,
+                            &control,
+                            &s.knots,
+                            &weights,
+                            &fit,
+                            false,
+                        )
+                        .parts
+                        .into_iter()
+                        .next()
+                        .unwrap_or_default()
                     }
                     BoundaryEdge::Polyline(p) => {
-                        let vertices: Vec<([f64; 2], f64)> = p.vertices.iter().map(|v| ([v.x, v.y], v.z)).collect();
+                        let vertices: Vec<([f64; 2], f64)> =
+                            p.vertices.iter().map(|v| ([v.x, v.y], v.z)).collect();
                         curved |= vertices.iter().any(|v| v.1 != 0.0);
                         g::bulge_chain(&vertices, p.is_closed)
                     }
@@ -662,20 +902,50 @@ impl<'a> Walker<'a> {
         self.hatches.push(json!([i, e.pattern.name, e.is_solid]));
     }
 
-    fn dimension(&mut self, e: &opencadcodec::entities::Dimension, place: &Place, handle: u64, layer: &str) {
+    fn dimension(
+        &mut self,
+        e: &opencadcodec::entities::Dimension,
+        place: &Place,
+        handle: u64,
+        layer: &str,
+    ) {
         let base = e.base();
         let measured = e.measurement();
-        let override_text = base.text_override().filter(|t| !t.is_empty() && *t != "<>").map(|t| t.to_string());
+        let override_text = base
+            .text_override()
+            .filter(|t| !t.is_empty() && *t != "<>")
+            .map(|t| t.to_string());
         let shown = match &override_text {
             None => printed(measured),
             Some(t) if t.contains("<>") => mtext_plain(&t.replace("<>", &printed(measured))),
             Some(t) => mtext_plain(t),
         };
         let at = place.xf.apply(v2(base.text_middle_point));
-        let i = self.push(place, handle, DIMENSION, layer, None, None, Some([at[0], at[1], at[0], at[1]]), 0);
+        let i = self.push(
+            place,
+            handle,
+            DIMENSION,
+            layer,
+            None,
+            None,
+            Some([at[0], at[1], at[0], at[1]]),
+            0,
+        );
         let kind = format!("{:?}", base.dimension_type);
-        self.dims.push(json!([i, round(measured), shown, override_text, round(base.actual_measurement), round(at[0]), round(at[1]), kind]));
-        if !base.block_name.is_empty() && place.depth < MAX_DEPTH && self.doc.block_records.get(&base.block_name).is_some() {
+        self.dims.push(json!([
+            i,
+            round(measured),
+            shown,
+            override_text,
+            round(base.actual_measurement),
+            round(at[0]),
+            round(at[1]),
+            kind
+        ]));
+        if !base.block_name.is_empty()
+            && place.depth < MAX_DEPTH
+            && self.doc.block_records.get(&base.block_name).is_some()
+        {
             let inner = Place {
                 path: format!("{}{:X}/", place.path, handle),
                 parent: Some(i),
@@ -701,18 +971,45 @@ impl<'a> Walker<'a> {
             .and_then(|h| self.block_names.get(&h.value()).cloned())
             .filter(|n| !n.starts_with('*'))
             .unwrap_or_else(|| e.block_name.clone());
-        let is_xref = record.flags.is_xref || record.flags.is_xref_overlay || !record.xref_path.is_empty();
+        let is_xref =
+            record.flags.is_xref || record.flags.is_xref_overlay || !record.xref_path.is_empty();
         if is_xref {
             let loaded = !record.entity_handles.is_empty();
-            self.xrefs.insert(name.clone(), json!({"name": name, "path": record.xref_path, "loaded": loaded}));
+            self.xrefs.insert(
+                name.clone(),
+                json!({"name": name, "path": record.xref_path, "loaded": loaded}),
+            );
         }
-        let instances = if e.is_minsert() { e.instance_count().max(1) } else { 1 };
+        let instances = if e.is_minsert() {
+            e.instance_count().max(1)
+        } else {
+            1
+        };
         let ocs = Affine::ocs(e.normal);
         let base = Affine::translate(-record.base_point.x, -record.base_point.y);
         let at = ocs.apply(v2(e.insert_point));
-        let own = place.xf.then(&ocs).then(&Affine::placed(e.insert_point.x, e.insert_point.y, e.rotation, e.x_scale(), e.y_scale())).then(&base);
+        let own = place
+            .xf
+            .then(&ocs)
+            .then(&Affine::placed(
+                e.insert_point.x,
+                e.insert_point.y,
+                e.rotation,
+                e.x_scale(),
+                e.y_scale(),
+            ))
+            .then(&base);
         let world = place.xf.apply(at);
-        let i = self.push(place, handle, INSERT, layer, Some(&name), None, Some([world[0], world[1], world[0], world[1]]), 0);
+        let i = self.push(
+            place,
+            handle,
+            INSERT,
+            layer,
+            Some(&name),
+            None,
+            Some([world[0], world[1], world[0], world[1]]),
+            0,
+        );
         let mut attributes = serde_json::Map::new();
         for attribute in &e.attributes {
             if attribute.common.invisible {
@@ -730,14 +1027,24 @@ impl<'a> Walker<'a> {
                 plain: value,
                 tag: Some(attribute.tag.clone()),
             };
-            let attribute_layer = if attribute.common.layer == "0" { layer.to_string() } else { attribute.common.layer.clone() };
+            let attribute_layer = if attribute.common.layer == "0" {
+                layer.to_string()
+            } else {
+                attribute.common.layer.clone()
+            };
             let inner = Place {
                 path: format!("{}{:X}/", place.path, handle),
                 parent: Some(i),
                 flags: place.flags | IN_BLOCK,
                 ..place.clone()
             };
-            self.text(&inner, attribute.common.handle.value(), ATTRIBUTE, &attribute_layer, found);
+            self.text(
+                &inner,
+                attribute.common.handle.value(),
+                ATTRIBUTE,
+                &attribute_layer,
+                found,
+            );
         }
         self.inserts.push(json!([
             i,
@@ -755,7 +1062,11 @@ impl<'a> Walker<'a> {
             self.skipped("blocks nested too deep to place");
             return;
         }
-        let (rows, columns) = if instances > 1 { (e.row_count.max(1), e.column_count.max(1)) } else { (1, 1) };
+        let (rows, columns) = if instances > 1 {
+            (e.row_count.max(1), e.column_count.max(1))
+        } else {
+            (1, 1)
+        };
         let block_name = e.block_name.clone();
         for row in 0..rows {
             for column in 0..columns {
@@ -763,12 +1074,28 @@ impl<'a> Walker<'a> {
                     let (sin, cos) = e.rotation.sin_cos();
                     let (dx, dy) = (column as f64 * e.column_spacing, row as f64 * e.row_spacing);
                     let shift = Affine::translate(dx * cos - dy * sin, dx * sin + dy * cos);
-                    place.xf.then(&ocs).then(&shift).then(&Affine::placed(e.insert_point.x, e.insert_point.y, e.rotation, e.x_scale(), e.y_scale())).then(&base)
+                    place
+                        .xf
+                        .then(&ocs)
+                        .then(&shift)
+                        .then(&Affine::placed(
+                            e.insert_point.x,
+                            e.insert_point.y,
+                            e.rotation,
+                            e.x_scale(),
+                            e.y_scale(),
+                        ))
+                        .then(&base)
                 } else {
                     own
                 };
                 let path = if instances > 1 {
-                    format!("{}{:X}#{}/", place.path, handle, row as usize * columns as usize + column as usize)
+                    format!(
+                        "{}{:X}#{}/",
+                        place.path,
+                        handle,
+                        row as usize * columns as usize + column as usize
+                    )
                 } else {
                     format!("{}{:X}/", place.path, handle)
                 };
@@ -787,7 +1114,12 @@ impl<'a> Walker<'a> {
         self.close_extent(i);
     }
 
-    fn write(self, folder: &Path, outcome: &ReadOutcome, spaces: Vec<Value>) -> Result<(), Failure> {
+    fn write(
+        self,
+        folder: &Path,
+        outcome: &ReadOutcome,
+        spaces: Vec<Value>,
+    ) -> Result<(), Failure> {
         let doc = &outcome.document;
         let staging = folder.with_extension("reading");
         let _ = fs::remove_dir_all(&staging);
@@ -808,9 +1140,18 @@ impl<'a> Walker<'a> {
                 None => json!({"name": name, "anonymous": name.starts_with('*'), "xref": false, "description": "", "units": 0}),
             })
             .collect();
-        let clipped = doc.objects.values().filter(|o| matches!(o, ObjectType::SpatialFilter(_))).count();
+        let clipped = doc
+            .objects
+            .values()
+            .filter(|o| matches!(o, ObjectType::SpatialFilter(_)))
+            .count();
         let stats = &outcome.stats;
-        let diagnostics: Vec<String> = stats.diagnostics.iter().take(20).map(|d| d.message.chars().take(300).collect()).collect();
+        let diagnostics: Vec<String> = stats
+            .diagnostics
+            .iter()
+            .take(20)
+            .map(|d| d.message.chars().take(300).collect())
+            .collect();
         let drawing = json!({
             "format": FORMAT,
             "reader": READER,
@@ -846,21 +1187,24 @@ impl<'a> Walker<'a> {
         });
         write_json(&staging.join("drawing.json"), &drawing)?;
         write_json(&staging.join("objects.json"), &objects)?;
-        let mut index = BufWriter::new(fs::File::create(staging.join("index.bin")).map_err(Failure::io)?);
+        let mut index =
+            BufWriter::new(fs::File::create(staging.join("index.bin")).map_err(Failure::io)?);
         for row in &self.index {
             for v in row {
                 index.write_all(&v.to_le_bytes()).map_err(Failure::io)?;
             }
         }
         index.flush().map_err(Failure::io)?;
-        let mut num = BufWriter::new(fs::File::create(staging.join("num.bin")).map_err(Failure::io)?);
+        let mut num =
+            BufWriter::new(fs::File::create(staging.join("num.bin")).map_err(Failure::io)?);
         for row in &self.num {
             for v in row {
                 num.write_all(&v.to_le_bytes()).map_err(Failure::io)?;
             }
         }
         num.flush().map_err(Failure::io)?;
-        let mut coords = BufWriter::new(fs::File::create(staging.join("coords.bin")).map_err(Failure::io)?);
+        let mut coords =
+            BufWriter::new(fs::File::create(staging.join("coords.bin")).map_err(Failure::io)?);
         for v in &self.coords {
             coords.write_all(&v.to_le_bytes()).map_err(Failure::io)?;
         }
@@ -886,8 +1230,20 @@ struct TextFound {
 
 fn attachment(point: AttachmentPoint) -> (f64, f64) {
     let name = format!("{point:?}");
-    let x = if name.ends_with("Center") { 0.5 } else if name.ends_with("Right") { 1.0 } else { 0.0 };
-    let y = if name.starts_with("Top") { 1.0 } else if name.starts_with("Middle") { 0.5 } else { 0.0 };
+    let x = if name.ends_with("Center") {
+        0.5
+    } else if name.ends_with("Right") {
+        1.0
+    } else {
+        0.0
+    };
+    let y = if name.starts_with("Top") {
+        1.0
+    } else if name.starts_with("Middle") {
+        0.5
+    } else {
+        0.0
+    };
     (x, y)
 }
 

@@ -506,7 +506,7 @@ export interface paths {
         };
         /**
          * Get Sheet
-         * @description Any PDF page as a sheet the engineer can measure on.
+         * @description Any PDF page, or any page of a CAD drawing, as a sheet the engineer can measure on.
          */
         get: operations["get_sheet_documents__document_id__pages__number__sheet_get"];
         put?: never;
@@ -620,6 +620,217 @@ export interface paths {
          * @description The engineer removes a measurement to redo it. It is kept as rejected, not erased.
          */
         delete: operations["delete_measurement_measurements__measurement_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{document_id}/drawing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Drawing
+         * @description What a drawing holds: its pages, units, what couldn't be read, and one page's layers and blocks.
+         */
+        get: operations["get_drawing_documents__document_id__drawing_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{document_id}/pages/{number}/screen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Screen Copy
+         * @description A page of a drawing for the Takeoff screen to draw: its segments, objects and texts, packed.
+         */
+        get: operations["screen_copy_documents__document_id__pages__number__screen_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{document_id}/pages/{number}/choose": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Choose
+         * @description What Quantix measures of the objects chosen: how many, their length and closed area.
+         */
+        post: operations["choose_documents__document_id__pages__number__choose_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{document_id}/rooms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Rooms
+         * @description The rooms Quantix finds in model space from the layer map.
+         */
+        get: operations["rooms_documents__document_id__rooms_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tenders/{tender_id}/units": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Units
+         * @description The engineer sets a drawing's units.
+         */
+        post: operations["set_units_tenders__tender_id__units_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tenders/{tender_id}/drawing-measurements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add Drawing Measurement
+         * @description The engineer measures objects they chose on the Takeoff screen, or by a rule.
+         */
+        post: operations["add_drawing_measurement_tenders__tender_id__drawing_measurements_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tenders/{tender_id}/checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Checks
+         * @description What Quantix's own checks find: in one drawing, or in the BOQ and across the drawings.
+         */
+        get: operations["checks_tenders__tender_id__checks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tenders/{tender_id}/layer-maps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Layer Maps */
+        get: operations["layer_maps_tenders__tender_id__layer_maps_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/layer-maps/{map_id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide Layer Map */
+        post: operations["decide_layer_map_layer_maps__map_id__decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tenders/{tender_id}/queries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tender Queries
+         * @description The tender queries the office raised, and the engineer's decisions on them.
+         */
+        get: operations["tender_queries_tenders__tender_id__queries_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/queries/{query_id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide Query */
+        post: operations["decide_query_queries__query_id__decision_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1197,6 +1408,15 @@ export interface components {
             /** Approved */
             approved: number;
         };
+        /** BlockOut */
+        BlockOut: {
+            /** Name */
+            name: string;
+            /** Copies */
+            copies: number;
+            /** Meaning */
+            meaning: string | null;
+        };
         /** Body_add_documents_tenders__tender_id__documents_post */
         Body_add_documents_tenders__tender_id__documents_post: {
             /** Files */
@@ -1224,10 +1444,18 @@ export interface components {
             /** Model */
             model: string;
         };
-        /** Choice */
-        Choice: {
-            /** Quote Id */
-            quote_id: string;
+        /** Chosen */
+        Chosen: {
+            /** Objects */
+            objects: number[];
+            /** Keys */
+            keys: string[];
+            /** Count */
+            count: number;
+            /** Length M */
+            length_m: number | null;
+            /** Area M2 */
+            area_m2: number | null;
         };
         /** ColumnsOut */
         ColumnsOut: {
@@ -1448,6 +1676,53 @@ export interface components {
             /** Review Note */
             review_note: string | null;
         };
+        /** DrawingMeasurementIn */
+        DrawingMeasurementIn: {
+            /** Document Id */
+            document_id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "length" | "area" | "count";
+            /** Label */
+            label: string;
+            /** Unit */
+            unit: string;
+            choice: components["schemas"]["quantix__api__drawings__Choice"];
+            /** Multiplier */
+            multiplier?: number | string | null;
+            /** Boq Item */
+            boq_item?: string | null;
+        };
+        /** DrawingOut */
+        DrawingOut: {
+            /** Document Id */
+            document_id: string;
+            /** Name */
+            name: string;
+            /** Stamp */
+            stamp: string;
+            /** Pages */
+            pages: components["schemas"]["quantix__api__drawings__PageOut"][];
+            /** Header Units */
+            header_units: string | null;
+            units: components["schemas"]["UnitsOut"] | null;
+            /** Evidence */
+            evidence: string[];
+            /** Not Read */
+            not_read: {
+                [key: string]: number;
+            };
+            /** Layers */
+            layers: components["schemas"]["LayerOut"][];
+            /** Blocks */
+            blocks: components["schemas"]["BlockOut"][];
+            /** Meanings */
+            meanings: {
+                [key: string]: string;
+            };
+        };
         /**
          * DueSource
          * @description Where the due date comes from, shown with it.
@@ -1567,7 +1842,7 @@ export interface components {
             /** Message */
             message: string;
             /** Refs */
-            refs: components["schemas"]["SourceOut"][];
+            refs: components["schemas"]["quantix__api__review__SourceOut"][];
             /** Accepted By */
             accepted_by: string | null;
             /** Reason */
@@ -1583,6 +1858,8 @@ export interface components {
             facts: number;
             /** Takeoff */
             takeoff: number;
+            /** Drawings */
+            drawings: number;
             /** Pricing */
             pricing: number;
             /** Subcontract */
@@ -1620,6 +1897,48 @@ export interface components {
             /** Review Note */
             review_note: string | null;
             source: components["schemas"]["Source"];
+        };
+        /** LayerMapOut */
+        LayerMapOut: {
+            /** Id */
+            id: string;
+            /** Document Id */
+            document_id: string;
+            /** Document Name */
+            document_name: string;
+            /** Layers */
+            layers: {
+                [key: string]: string;
+            };
+            /** Blocks */
+            blocks: {
+                [key: string]: string;
+            };
+            /** Note */
+            note: string;
+            /** Status */
+            status: string;
+            /** Proposed By */
+            proposed_by: string;
+            /** Reviewed By */
+            reviewed_by: string | null;
+            /** Review Note */
+            review_note: string | null;
+        };
+        /** LayerOut */
+        LayerOut: {
+            /** Name */
+            name: string;
+            /** Objects */
+            objects: number;
+            /** Types */
+            types: {
+                [key: string]: number;
+            };
+            /** Prints */
+            prints: boolean;
+            /** Meaning */
+            meaning: string | null;
         };
         /** LessonDecision */
         LessonDecision: {
@@ -1787,6 +2106,14 @@ export interface components {
             reviewed_by: string | null;
             /** Review Note */
             review_note: string | null;
+            /** Rule */
+            rule?: {
+                [key: string]: unknown;
+            } | null;
+            /** Object Count */
+            object_count?: number | null;
+            /** Objects */
+            objects?: number[] | null;
         };
         /** Merge */
         Merge: {
@@ -1923,15 +2250,6 @@ export interface components {
             /** Created By */
             created_by: string;
         };
-        /** PageOut */
-        PageOut: {
-            /** Number */
-            number: number;
-            /** Text */
-            text: string;
-            /** Has Text */
-            has_text: boolean;
-        };
         /** PreliminaryOut */
         PreliminaryOut: {
             /** Item */
@@ -1965,6 +2283,19 @@ export interface components {
             /** Amount */
             amount: string | null;
         };
+        /** ProblemOut */
+        ProblemOut: {
+            /** Severity */
+            severity: string;
+            /** Message */
+            message: string;
+            /** Document Id */
+            document_id: string | null;
+            /** Page */
+            page: number;
+            /** Objects */
+            objects: string[];
+        };
         /** ProfileIn */
         ProfileIn: {
             /** Name */
@@ -1988,6 +2319,37 @@ export interface components {
             vat_number: string;
             /** Has Logo */
             has_logo: boolean;
+        };
+        /** QueryOut */
+        QueryOut: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Kind Label */
+            kind_label: string;
+            /** Title */
+            title: string;
+            /** Detail */
+            detail: string;
+            /** Wording */
+            wording: string;
+            /** Governs */
+            governs: string | null;
+            /** Sources */
+            sources: components["schemas"]["quantix__api__drawings__SourceOut"][];
+            /** Boq Item */
+            boq_item: string | null;
+            /** Figures */
+            figures: string[];
+            /** Status */
+            status: string;
+            /** Proposed By */
+            proposed_by: string;
+            /** Reviewed By */
+            reviewed_by: string | null;
+            /** Review Note */
+            review_note: string | null;
         };
         /** QuoteOut */
         QuoteOut: {
@@ -2125,6 +2487,86 @@ export interface components {
             /** File Name */
             file_name: string | null;
         };
+        /** RoomOut */
+        RoomOut: {
+            /** Number */
+            number: number;
+            /** Name */
+            name: string;
+            /** Area M2 */
+            area_m2: number | null;
+            /** Perimeter M */
+            perimeter_m: number | null;
+            /** Source */
+            source: string;
+            /** Ring */
+            ring: number[][];
+        };
+        /**
+         * Rule
+         * @description Which objects of a drawing space to take: every condition given must hold, and within a list any one will do.
+         *     Annotation (the drawing of dimensions, leaders and tables) is never taken.
+         */
+        Rule: {
+            /**
+             * Layers
+             * @description Layer names; "A-WALL*" takes every layer starting A-WALL
+             * @default []
+             */
+            layers: string[];
+            /**
+             * Blocks
+             * @description Block names: their placed references, wherever they sit
+             * @default []
+             */
+            blocks: string[];
+            /**
+             * Types
+             * @description Object types: Line, Arc, Circle, Ellipse, Polyline, Spline, Hatch, Solid, Point, Insert, Text, MText, Attribute, Dimension, MLine
+             * @default []
+             */
+            types: string[];
+            /**
+             * Text
+             * @description Words in the object's text or block attributes
+             */
+            text?: string | null;
+            /**
+             * Attributes
+             * @description Block attributes by tag, e.g. {'TYPE': 'D1'}
+             * @default {}
+             */
+            attributes: {
+                [key: string]: string;
+            };
+            /**
+             * Closed
+             * @description Only closed outlines (true) or only open ones (false)
+             */
+            closed?: boolean | null;
+            /**
+             * Hatch Pattern
+             * @description Only hatches with this pattern
+             */
+            hatch_pattern?: string | null;
+            /**
+             * Region
+             * @description [left, bottom, right, top] in drawing units
+             */
+            region?: number[] | null;
+            /**
+             * Rooms
+             * @description Only objects inside these rooms, by name as query_drawing lists them; with types ['Room'], the rooms themselves (a room's length is its perimeter)
+             * @default []
+             */
+            rooms: string[];
+            /**
+             * Keys
+             * @description Exact objects by key, as query_drawing lists them
+             * @default []
+             */
+            keys: string[];
+        };
         /** RuleIn */
         RuleIn: {
             /** Topic */
@@ -2230,6 +2672,13 @@ export interface components {
             /** Height */
             height: number;
             scale: components["schemas"]["ScaleOut"] | null;
+            /**
+             * Kind
+             * @default pdf
+             */
+            kind: string;
+            /** Units */
+            units?: string | null;
         };
         /** Source */
         Source: {
@@ -2241,15 +2690,6 @@ export interface components {
             page: number;
             /** Quote */
             quote: string;
-        };
-        /** SourceOut */
-        SourceOut: {
-            /** Label */
-            label: string;
-            /** Document Id */
-            document_id: string | null;
-            /** Page */
-            page: number | null;
         };
         /** StaffOut */
         StaffOut: {
@@ -2383,6 +2823,26 @@ export interface components {
             /** Tokens */
             tokens: number;
         };
+        /** UnitsIn */
+        UnitsIn: {
+            /** Document Id */
+            document_id: string;
+            /** Units */
+            units: string;
+        };
+        /** UnitsOut */
+        UnitsOut: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Metres */
+            metres: number;
+            /** Status */
+            status: string;
+            /** Note */
+            note: string;
+        };
         /** Usage */
         Usage: {
             /** Models */
@@ -2442,6 +2902,69 @@ export interface components {
              * Format: date-time
              */
             read_at: string;
+        };
+        /** PageOut */
+        quantix__api__documents__PageOut: {
+            /** Number */
+            number: number;
+            /** Text */
+            text: string;
+            /** Has Text */
+            has_text: boolean;
+        };
+        /**
+         * Choice
+         * @description Objects of a drawing page: by their numbers on the Takeoff screen, or by a rule.
+         */
+        quantix__api__drawings__Choice: {
+            /** Stamp */
+            stamp: string;
+            /**
+             * Objects
+             * @default []
+             */
+            objects: number[];
+            rule?: components["schemas"]["Rule"] | null;
+        };
+        /** PageOut */
+        quantix__api__drawings__PageOut: {
+            /** Number */
+            number: number;
+            /** Name */
+            name: string;
+            /** Kind */
+            kind: string;
+            /** Extents */
+            extents: number[] | null;
+            /** Objects */
+            objects: number;
+        };
+        /** SourceOut */
+        quantix__api__drawings__SourceOut: {
+            /** Document Id */
+            document_id: string;
+            /** Document Name */
+            document_name: string;
+            /** Page */
+            page: number;
+            /** Quote */
+            quote: string | null;
+            /** Objects */
+            objects: string[];
+        };
+        /** SourceOut */
+        quantix__api__review__SourceOut: {
+            /** Label */
+            label: string;
+            /** Document Id */
+            document_id: string | null;
+            /** Page */
+            page: number | null;
+        };
+        /** Choice */
+        quantix__api__subcontract__Choice: {
+            /** Quote Id */
+            quote_id: string;
         };
     };
     responses: never;
@@ -3129,7 +3652,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PageOut"];
+                    "application/json": components["schemas"]["quantix__api__documents__PageOut"];
                 };
             };
             /** @description Validation Error */
@@ -3898,6 +4421,395 @@ export interface operations {
             };
         };
     };
+    get_drawing_documents__document_id__drawing_get: {
+        parameters: {
+            query?: {
+                page?: number;
+            };
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DrawingOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    screen_copy_documents__document_id__pages__number__screen_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                document_id: string;
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    choose_documents__document_id__pages__number__choose_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                document_id: string;
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["quantix__api__drawings__Choice"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Chosen"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rooms_documents__document_id__rooms_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoomOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_units_tenders__tender_id__units_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UnitsIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnitsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_drawing_measurement_tenders__tender_id__drawing_measurements_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DrawingMeasurementIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    checks_tenders__tender_id__checks_get: {
+        parameters: {
+            query?: {
+                document_id?: string | null;
+            };
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    layer_maps_tenders__tender_id__layer_maps_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LayerMapOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_layer_map_layer_maps__map_id__decision_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                map_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecisionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tender_queries_tenders__tender_id__queries_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueryOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_query_queries__query_id__decision_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                query_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecisionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_estimate_tenders__tender_id__estimate_get: {
         parameters: {
             query?: never;
@@ -4216,7 +5128,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["Choice"];
+                "application/json": components["schemas"]["quantix__api__subcontract__Choice"];
             };
         };
         responses: {

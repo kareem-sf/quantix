@@ -39,6 +39,12 @@ export function Overview() {
       text: "Scales and measurements the team drew on the drawings",
       to: `/tenders/${tenderId}/takeoff`,
     },
+    gates.data?.drawings && {
+      key: "drawings",
+      title: `${gates.data.drawings} ${gates.data.drawings === 1 ? "query or layer map" : "queries and layer maps"} to decide`,
+      text: "Tender queries for the client, and what the drawings’ layers are",
+      to: `/tenders/${tenderId}/queries`,
+    },
     gates.data?.pricing && {
       key: "pricing",
       title: `${gates.data.pricing} ${gates.data.pricing === 1 ? "price" : "prices"} to approve`,

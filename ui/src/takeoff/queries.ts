@@ -139,7 +139,8 @@ export const RESULTS: Record<string, string> = {
   unit_differs: "Unit differs",
   no_boq_quantity: "BOQ has no quantity",
   not_in_boq: "Missing from the BOQ",
-  no_scale: "Needs a scale",
+  not_on_drawings: "Not on the drawings",
+  no_scale: "Needs a scale or units",
 };
 
 export function percent(value: string | null | undefined) {

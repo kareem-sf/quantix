@@ -8,6 +8,7 @@ import type { SearchHit, TenderDocument } from "../documents/queries";
 import type { BoqItem, Fact, LibraryEntry, Markups, Priced, Summary } from "../estimate/queries";
 import type { Decision, Message, Staff, Task } from "../office/queries";
 import type { Comparison, Measurement, Sheet } from "../takeoff/queries";
+import type { DrawingInfo, LayerMap, Problem, TenderQuery } from "../takeoff/cad";
 import type { Connection, OfficeSettings, Usage, WebKeys } from "../settings/queries";
 import type { Profile, Rule } from "../company/queries";
 import type { Company, Package } from "../subcontract/queries";
@@ -62,6 +63,14 @@ export interface FakeState {
   webKeys: WebKeys;
   /** Answer the next POST to this path with this error detail. */
   fail: Record<string, string>;
+  /** A CAD drawing: what it holds, its packed screen copy, and what the engineer set and measured on it. */
+  drawing: DrawingInfo | null;
+  screen: ArrayBuffer | null;
+  units: unknown[];
+  measured: unknown[];
+  queries: TenderQuery[];
+  layerMaps: LayerMap[];
+  checks: Problem[];
 }
 
 /** An in-memory stand-in for the local service at the fetch boundary, following the same contract. */
@@ -104,6 +113,13 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     usage: { models: [], tenders: [] },
     webKeys: { firecrawl: null, tinyfish: null },
     fail: {},
+    drawing: null,
+    screen: null,
+    units: [],
+    measured: [],
+    queries: [],
+    layerMaps: [],
+    checks: [],
     ...initial,
   };
   const fetch = vi.fn(async (input: Request | string, init?: RequestInit) => {
@@ -276,6 +292,30 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     }
     if (path.match(/^\/tenders\/\w+\/takeoff$/))
       return json({ sheets: state.sheets, measurements: state.measurements, comparison: state.comparison });
+    if (path.match(/^\/documents\/\w+\/pages\/\d+\/screen$/) && state.screen)
+      return new Response(state.screen, { headers: { "Content-Type": "application/octet-stream" } });
+    if (path.match(/^\/documents\/\w+\/drawing$/) && state.drawing) return json(state.drawing);
+    if (path.match(/^\/documents\/\w+\/rooms$/)) return json([]);
+    if (path.match(/^\/documents\/\w+\/pages\/\d+\/choose$/))
+      return json({ objects: body.objects, keys: body.objects.map((o: number) => `K${o}`), count: body.objects.length, length_m: 20, area_m2: null });
+    if (path.match(/^\/tenders\/\w+\/units$/)) {
+      state.units.push(body);
+      return json({ id: "u1", name: body.units, metres: 0.001, status: "approved", note: body.units }, 201);
+    }
+    if (path.match(/^\/tenders\/\w+\/drawing-measurements$/)) {
+      state.measured.push(body);
+      return json({ id: "m9", quantity: "20.000" }, 201);
+    }
+    if (path.match(/^\/tenders\/\w+\/queries$/)) return json(state.queries);
+    if (path.match(/^\/tenders\/\w+\/layer-maps$/)) return json(state.layerMaps);
+    if (path.match(/^\/tenders\/\w+\/checks$/)) return json(state.checks);
+    const queried = path.match(/^\/(queries|layer-maps)\/(\w+)\/decision$/);
+    if (queried) {
+      state.decided.push({ id: queried[2], ...body });
+      const record = [...state.queries, ...state.layerMaps].find((r) => r.id === queried[2]);
+      if (record) record.status = body.approve ? "approved" : "rejected";
+      return json(null);
+    }
     if (path.match(/^\/documents\/\w+\/pages\/\d+\/vertices$/)) return json([[101, 101]]);
     const sheet = path.match(/^\/documents\/(\w+)\/pages\/(\d+)\/sheet$/);
     if (sheet) return json(state.sheets.find((s) => s.document_id === sheet[1] && s.page === Number(sheet[2])));
@@ -303,7 +343,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     if (path.match(/^\/tenders\/\w+\/gates$/)) {
       const count = (list: { status: string }[], status = "reviewed") => list.filter((r) => r.status === status).length;
       const manager = [state.items, state.facts, state.measurements].reduce((n, list) => n + count(list, "proposed"), 0);
-      return json({ manager, boq: count(state.items), facts: count(state.facts), takeoff: count(state.measurements), pricing: 0, subcontract: 0, submission: 0 });
+      return json({ manager, boq: count(state.items), facts: count(state.facts), takeoff: count(state.measurements), drawings: 0, pricing: 0, subcontract: 0, submission: 0 });
     }
     if (path.match(/^\/tenders\/\w+\/review$/)) return json([]);
     if (path.match(/^\/tenders\/\w+\/audit$/)) return json(state.audit);

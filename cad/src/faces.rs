@@ -20,13 +20,19 @@ struct Request {
 
 pub fn run() -> Result<(), Failure> {
     let mut input = String::new();
-    std::io::stdin().read_to_string(&mut input).map_err(Failure::io)?;
-    let request: Request = serde_json::from_str(&input).map_err(|e| Failure::Other(format!("Bad request: {e}")))?;
+    std::io::stdin()
+        .read_to_string(&mut input)
+        .map_err(Failure::io)?;
+    let request: Request =
+        serde_json::from_str(&input).map_err(|e| Failure::Other(format!("Bad request: {e}")))?;
     let lines: Vec<Line> = request
         .segments
         .iter()
         .filter(|s| s.iter().all(|v| v.is_finite()) && (s[0] != s[2] || s[1] != s[3]))
-        .map(|s| Line { start: [s[0], s[1]], end: [s[2], s[3]] })
+        .map(|s| Line {
+            start: [s[0], s[1]],
+            end: [s[2], s[3]],
+        })
         .collect();
     let faces = bounded_faces(&lines, Tolerance::new(request.tolerance.max(1e-9)));
     println!("{}", json!({ "faces": faces }));

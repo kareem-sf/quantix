@@ -14,8 +14,8 @@
 use std::fs;
 
 use opencadcodec::entities::{
-    Arc, AttributeEntity, BoundaryEdge, BoundaryPath, Circle, Dimension, DimensionAligned, EntityType, Hatch, Insert, Line,
-    LwPolyline, MText, PolylineEdge, Text, Viewport,
+    Arc, AttributeEntity, BoundaryEdge, BoundaryPath, Circle, Dimension, DimensionAligned,
+    EntityType, Hatch, Insert, Line, LwPolyline, MText, PolylineEdge, Text, Viewport,
 };
 use opencadcodec::tables::{BlockRecord, Layer};
 use opencadcodec::types::{DxfVersion, Vector2, Vector3};
@@ -26,10 +26,16 @@ use crate::Failure;
 
 pub fn run(spec: &str, out: &str) -> Result<(), Failure> {
     let text = fs::read_to_string(spec).map_err(Failure::io)?;
-    let spec: Value = serde_json::from_str(&text).map_err(|e| Failure::Other(format!("Bad spec: {e}")))?;
+    let spec: Value =
+        serde_json::from_str(&text).map_err(|e| Failure::Other(format!("Bad spec: {e}")))?;
     let mut doc = CadDocument::with_version(DxfVersion::AC1024);
     doc.header.insertion_units = spec["insunits"].as_i64().unwrap_or(4) as i16;
-    for name in spec["layers"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+    for name in spec["layers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
         if doc.layers.get(name).is_none() {
             let mut layer = Layer::new(name);
             layer.handle = doc.allocate_handle();
@@ -49,7 +55,9 @@ pub fn run(spec: &str, out: &str) -> Result<(), Failure> {
         for item in block["entities"].as_array().into_iter().flatten() {
             let mut entity = build(item)?;
             entity.common_mut().owner_handle = owner;
-            let handle = doc.add_entity(entity).map_err(|e| Failure::Other(e.to_string()))?;
+            let handle = doc
+                .add_entity(entity)
+                .map_err(|e| Failure::Other(e.to_string()))?;
             if let Some(record) = doc.block_records.get_mut(name) {
                 if !record.entity_handles.contains(&handle) {
                     record.entity_handles.push(handle);
@@ -58,7 +66,8 @@ pub fn run(spec: &str, out: &str) -> Result<(), Failure> {
         }
     }
     for item in spec["entities"].as_array().into_iter().flatten() {
-        doc.add_entity(build(item)?).map_err(|e| Failure::Other(e.to_string()))?;
+        doc.add_entity(build(item)?)
+            .map_err(|e| Failure::Other(e.to_string()))?;
     }
     for layout in spec["layouts"].as_array().into_iter().flatten() {
         let name = layout["name"].as_str().unwrap_or("Layout");
@@ -66,7 +75,8 @@ pub fn run(spec: &str, out: &str) -> Result<(), Failure> {
             // The document's first layout already exists: use it.
         }
         for item in layout["entities"].as_array().into_iter().flatten() {
-            doc.add_entity_to_layout(build(item)?, name).map_err(|e| Failure::Other(e.to_string()))?;
+            doc.add_entity_to_layout(build(item)?, name)
+                .map_err(|e| Failure::Other(e.to_string()))?;
         }
     }
     let written = if out.to_ascii_lowercase().ends_with(".dxf") {
@@ -78,7 +88,10 @@ pub fn run(spec: &str, out: &str) -> Result<(), Failure> {
 }
 
 fn point(value: &Value) -> [f64; 2] {
-    [value[0].as_f64().unwrap_or(0.0), value[1].as_f64().unwrap_or(0.0)]
+    [
+        value[0].as_f64().unwrap_or(0.0),
+        value[1].as_f64().unwrap_or(0.0),
+    ]
 }
 
 fn v3(value: &Value) -> Vector3 {
@@ -101,14 +114,20 @@ fn build(item: &Value) -> Result<EntityType, Failure> {
             let mut polyline = LwPolyline::new();
             let bulges = item["bulges"].as_array();
             for (i, p) in item["points"].as_array().into_iter().flatten().enumerate() {
-                let bulge = bulges.and_then(|b| b.get(i)).and_then(Value::as_f64).unwrap_or(0.0);
+                let bulge = bulges
+                    .and_then(|b| b.get(i))
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0);
                 let p = point(p);
                 polyline.add_point_with_bulge(Vector2::new(p[0], p[1]), bulge);
             }
             polyline.is_closed = item["closed"].as_bool().unwrap_or(false);
             EntityType::LwPolyline(polyline)
         }
-        "circle" => EntityType::Circle(Circle::from_center_radius(v3(&item["centre"]), number(&item["radius"], 1.0))),
+        "circle" => EntityType::Circle(Circle::from_center_radius(
+            v3(&item["centre"]),
+            number(&item["radius"], 1.0),
+        )),
         "arc" => {
             let mut arc = Arc::new();
             arc.center = v3(&item["centre"]);
@@ -118,20 +137,28 @@ fn build(item: &Value) -> Result<EntityType, Failure> {
             EntityType::Arc(arc)
         }
         "text" => EntityType::Text(
-            Text::with_value(item["value"].as_str().unwrap_or(""), v3(&item["at"])).with_height(number(&item["height"], 250.0)),
+            Text::with_value(item["value"].as_str().unwrap_or(""), v3(&item["at"]))
+                .with_height(number(&item["height"], 250.0)),
         ),
         "mtext" => EntityType::MText(
-            MText::with_value(item["value"].as_str().unwrap_or(""), v3(&item["at"])).with_height(number(&item["height"], 250.0)),
+            MText::with_value(item["value"].as_str().unwrap_or(""), v3(&item["at"]))
+                .with_height(number(&item["height"], 250.0)),
         ),
         "insert" => {
             let scale = &item["scale"];
-            let (sx, sy) = if scale.is_array() { (number(&scale[0], 1.0), number(&scale[1], 1.0)) } else { (number(scale, 1.0), number(scale, 1.0)) };
-            let mut insert = Insert::new(item["block"].as_str().unwrap_or("BLOCK"), v3(&item["at"]))
-                .with_scale(sx, sy, 1.0)
-                .with_rotation(number(&item["rotation"], 0.0).to_radians());
+            let (sx, sy) = if scale.is_array() {
+                (number(&scale[0], 1.0), number(&scale[1], 1.0))
+            } else {
+                (number(scale, 1.0), number(scale, 1.0))
+            };
+            let mut insert =
+                Insert::new(item["block"].as_str().unwrap_or("BLOCK"), v3(&item["at"]))
+                    .with_scale(sx, sy, 1.0)
+                    .with_rotation(number(&item["rotation"], 0.0).to_radians());
             if let Some(attributes) = item["attributes"].as_object() {
                 for (tag, value) in attributes {
-                    let mut attribute = AttributeEntity::new(tag.clone(), value.as_str().unwrap_or("").to_string());
+                    let mut attribute =
+                        AttributeEntity::new(tag.clone(), value.as_str().unwrap_or("").to_string());
                     attribute.set_position(v3(&item["at"]));
                     attribute.set_height(200.0);
                     insert.attributes.push(attribute);
@@ -142,13 +169,19 @@ fn build(item: &Value) -> Result<EntityType, Failure> {
         "hatch" => {
             let mut hatch = Hatch::default();
             for ring in item["loops"].as_array().into_iter().flatten() {
-                let points: Vec<Vector2> = ring.as_array().into_iter().flatten().map(|p| {
-                    let p = point(p);
-                    Vector2::new(p[0], p[1])
-                }).collect();
+                let points: Vec<Vector2> = ring
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|p| {
+                        let p = point(p);
+                        Vector2::new(p[0], p[1])
+                    })
+                    .collect();
                 let mut path = BoundaryPath::new();
                 path.flags.set_polyline(true);
-                path.edges.push(BoundaryEdge::Polyline(PolylineEdge::new(points, true)));
+                path.edges
+                    .push(BoundaryEdge::Polyline(PolylineEdge::new(points, true)));
                 hatch.paths.push(path);
             }
             let pattern = item["pattern"].as_str().unwrap_or("SOLID");
@@ -162,12 +195,17 @@ fn build(item: &Value) -> Result<EntityType, Failure> {
                 dimension.base.set_text_override(Some(text.to_string()));
             }
             let (a, b) = (point(&item["from"]), point(&item["to"]));
-            dimension.base.text_middle_point = Vector3::new((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0 + 300.0, 0.0);
+            dimension.base.text_middle_point =
+                Vector3::new((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0 + 300.0, 0.0);
             EntityType::Dimension(Dimension::Aligned(dimension))
         }
         "viewport" => {
             let size = &item["size"];
-            let mut viewport = Viewport::with_size(v3(&item["centre"]), number(&size[0], 400.0), number(&size[1], 280.0));
+            let mut viewport = Viewport::with_size(
+                v3(&item["centre"]),
+                number(&size[0], 400.0),
+                number(&size[1], 280.0),
+            );
             viewport.view_center = v3(&item["view_centre"]);
             let scale = number(&item["scale"], 0.01);
             viewport.view_height = viewport.height / scale;

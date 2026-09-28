@@ -370,7 +370,8 @@ def test_an_ai_that_cannot_read_images_is_not_shown_drawings(client, office):
     client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Look at the conditions."})
     wait_for(lambda o: o["staff"] and seen, client, tender_id)
     assert "read_page" in seen and not {"view_page", "find_on_page", "set_scale", "measure"} & set(seen)
-    assert "The office's AI can't read images, so you can't look at drawings or measure on them." in seen[-1]
+    assert "The office's AI can't read images, so you can't look at PDF drawings or measure on them." in seen[-1]
+    assert "CAD drawings (DWG and DXF) need no looking" in seen[-1] and "view_drawing" not in seen
     assert document_id  # the conditions are there to read as text
 
 
