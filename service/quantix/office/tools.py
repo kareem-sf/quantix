@@ -388,8 +388,8 @@ def message_engineer(
     steps = [s.strip() for s in next_steps or [] if s.strip()]
     if len(steps) > 3:
         raise ModelRetry("Give at most 3 next steps: the ones you will do yourself next.")
-    if not sources:
-        text, sources = _written_sources(text)
+    text, written = _written_sources(text)  # the sources show under the message, so the line never does
+    sources = sources or written
     with _working(ctx) as (session, me):
         try:
             cited = [lookup.cited(session, ctx.deps.tender_id, me.id, s) for s in sources or [] if s.strip()]
@@ -679,7 +679,8 @@ def find_records(ctx: RunContext[Turn], words: str = "", kind: str | None = None
     measurements, packages, quotes and the markups. kind narrows it to one of boq, fact, checklist, draft,
     measurement, package, quote or markups; with a kind and no words it lists them all. Each line starts with the
     reference to open it with open_record."""
-    with _working(ctx, f"Looking through the office's records for “{words}”") as (session, _):
+    doing = f"Looking through the office's records for “{words}”" if words.strip() else "Listing the office's records"
+    with _working(ctx, doing + (f" ({kind})" if kind and not words.strip() else "")) as (session, _):
         found = lookup.search(session, ctx.deps.tender_id, words, kind)
     if not found:
         return "No record matches. Try fewer or other words, or the Arabic or English term."

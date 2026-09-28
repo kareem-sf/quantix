@@ -369,6 +369,11 @@ def test_sources_written_as_the_last_line_are_taken_as_the_sources(client, tende
     answer = client.get(f"/tenders/{tender_id}/messages", params={"channel": rania_id}).json()[-1]
     assert answer["text"] == "Built up from a gang."
     assert [s["label"] for s in answer["sources"]] == ["The rate for BOQ item 4.3"]
+    # given and written both, as Salem did next: the line still doesn't show
+    tools.message_engineer(ctx, f"Wire is 1%.\n\nSources: rate {rate_id[:8]}", sources=[f"rate {rate_id[:8]}"])
+    assert (
+        client.get(f"/tenders/{tender_id}/messages", params={"channel": rania_id}).json()[-1]["text"] == "Wire is 1%."
+    )
 
 
 def test_a_refused_answer_names_what_it_may_rest_on(client, tender, tmp_path):
