@@ -12,6 +12,7 @@ import { Face } from "../office/Face";
 import { firstName, useOffice } from "../office/queries";
 import { dueShort, dueSource } from "../tenders/due";
 import { useTenders } from "../tenders/queries";
+import { Logo } from "./Logo";
 
 const STAGES = [
   ["Overview", ""],
@@ -39,7 +40,8 @@ export function Rail() {
   return (
     <nav aria-label="Quantix" className="flex w-60 shrink-0 flex-col border-r border-line bg-rail py-[18px]">
       <div className="flex items-center justify-between px-5 pb-4">
-        <Link to="/" className="text-[15px] font-semibold">
+        <Link to="/" className="flex items-center gap-2 text-[15px] font-semibold">
+          <Logo className="h-3.5" />
           Quantix
         </Link>
         <Link
