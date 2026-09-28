@@ -861,3 +861,26 @@ find missing items and conflicts.
 - **Checks:** 13 new service tests with synthetic drawings written by `qx-dwg sample` (a two-room flat with a door,
   windows, a hatch with an island, a hand-written dimension and a pipe through a fire-rated wall), 4 Rust tests and
   6 new interface tests.
+
+## 28 September 2026: clipped blocks, xrefs, loose symbols and 3D solids
+
+The engineer asked for the whole of the DWG work in one go, so what the first round left for later is done.
+
+- **Clipped blocks.** A block reference clipped with XCLIP shows only what lies inside its clip boundary: lines are
+  cut where they leave it, a closed shape keeps the area and the part of its outline inside it, and what lies wholly
+  outside is left out. The real flooring plans and washroom elevations have 33 clipped references between them. On
+  the ground floor plan the five clipped expansion-joint arrays went from 1,104 objects to 1,016 and now stop at the
+  building edge. On the washroom elevations the 120 × 60 cm tile grid stops at the wall face instead of running
+  past it and above the ceiling line.
+- **Xrefs.** A drawing that refers to another is given it from the package, matched by file name, and qx-dwg places
+  it where it is referred to, with its layers named `XREF|LAYER`. The warning that it is missing then goes, and a
+  newer copy of either file reads it again. None of the real drawings uses one, so this is tested with synthetic
+  drawings only.
+- **Loose symbols.** A new check finds copies of counted blocks (doors, windows, columns, sanitary fittings,
+  fixtures) drawn as loose lines, by the types and lengths of their parts and their size. On the real elevations
+  drawing it found two WCs and two washbasins drawn as lines in the washroom plan.
+- **3D solids and regions.** They are lifted into opencadkernel's B-rep and meshed. Solids take off by volume, in
+  m3, or by weight with a density. On the real sewage drawing the two steel ladders read as 162 solids (R20 rungs,
+  UNP100 channels, plates), and the flooring plan's 200 plaster regions now have areas.
+- **Checks:** 4 new service tests, 3 new Rust tests and 1 new interface test; 202 service tests, 79 interface
+  tests, typecheck, ruff and clippy pass.
