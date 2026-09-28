@@ -126,6 +126,15 @@ def test_the_audit_finds_what_keeps_the_tender_from_release(client, tender):
     assert built["not_ready"] == [found[0].message, found[1].message]  # the engineer sees the blockers
 
 
+def test_what_waits_for_the_engineer_is_counted_in_plain_english(client, tender, monkeypatch):
+    tender_id, _, _ = tender
+    monkeypatch.setattr(audit.estimate, "waiting", lambda session, tender_id: 1)
+    monkeypatch.setattr(audit.takeoff, "waiting", lambda session, tender_id: 2)
+    with client.app.state.sessions() as session:
+        found = audit.open_findings(session, client.app.state.home, tender_id)
+    assert "Waiting for the engineer's approval: 2 takeoff marks, 1 price." in [f.message for f in found]
+
+
 def test_the_manager_accepts_a_warning_with_his_reason_and_the_engineer_sees_it(client, tender):
     tender_id, rania_id, _ = tender
     reason = "The KMZ only shows the site's location; the drawings cover the works."

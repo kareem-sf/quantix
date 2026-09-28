@@ -82,9 +82,15 @@ export function Estimate() {
           <div className="flex flex-col gap-1">
             <h1 className="text-[22px] font-semibold tracking-tight">Estimate</h1>
             <span className="text-ink-2">
-              {summary?.priced ?? 0} of {items.length} {items.length === 1 ? "item" : "items"} priced
-              {needsYou > 0 && ` · ${needsYou} need${needsYou === 1 ? "s" : ""} you`}
-              {withManager > 0 && ` · ${withManager} with the Manager`}
+              {boq.data && estimate.data ? (
+                <>
+                  {summary?.priced ?? 0} of {items.length} {items.length === 1 ? "item" : "items"} priced
+                  {needsYou > 0 && ` · ${needsYou} need${needsYou === 1 ? "s" : ""} you`}
+                  {withManager > 0 && ` · ${withManager} with the Manager`}
+                </>
+              ) : (
+                " " // keeps the header's height while the BOQ arrives
+              )}
             </span>
           </div>
           <div className="flex items-center gap-3">
@@ -152,7 +158,7 @@ export function Estimate() {
             <span className="font-medium underline underline-offset-4">Open them</span>
           </button>
         )}
-        {items.length === 0 ? (
+        {!boq.data ? null : items.length === 0 ? (
           <p className="pt-6 text-ink-2">
             No BOQ yet. Ask the office to enter the client’s BOQ, for example: “Enter the BOQ from the package.”
           </p>

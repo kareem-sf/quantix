@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { BoqItem } from "../estimate/queries";
@@ -389,5 +389,29 @@ describe("Office", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Stop the office" }));
     await waitFor(() => expect(service.state.officeState).toBe("paused"));
+  });
+
+  it("opens a profile only when asked, and closes it or goes to that person's chat", async () => {
+    fakeService({ tenders: [tender], settings: ready, staff: [rania, omar] });
+    const router = openApp("/tenders/t1/office?with=s1");
+
+    await screen.findByRole("heading", { name: "Rania Farouk" });
+    expect(screen.queryByRole("complementary", { name: "Rania Farouk" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "About Rania" }));
+    const card = await screen.findByRole("complementary", { name: "Rania Farouk" });
+    expect(within(card).queryByRole("button", { name: "Message Rania" })).not.toBeInTheDocument(); // already her chat
+    await userEvent.click(within(card).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("complementary", { name: "Rania Farouk" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "About Rania" }));
+    await screen.findByRole("complementary", { name: "Rania Farouk" });
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("complementary", { name: "Rania Farouk" })).not.toBeInTheDocument();
+
+    await act(() => router.navigate("/tenders/t1/office?with=s1&person=s2"));
+    const omarCard = await screen.findByRole("complementary", { name: "Omar Haddad" });
+    await userEvent.click(within(omarCard).getByRole("button", { name: "Message Omar" }));
+    expect(await screen.findByRole("heading", { name: "Omar Haddad" })).toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "Omar Haddad" })).not.toBeInTheDocument();
   });
 });

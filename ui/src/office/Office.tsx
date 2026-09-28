@@ -30,8 +30,7 @@ export function Office() {
   const office = useOffice(tenderId);
   const staff = office.data?.staff ?? [];
   const channel = params.get("with") ?? TEAM;
-  const asked = params.get("person"); // a profile the engineer opened; in a direct chat it shows beside the chat
-  const person = staff.find((m) => m.id === (asked ?? (channel === TEAM ? undefined : channel)));
+  const person = staff.find((m) => m.id === params.get("person")); // a profile the engineer opened, until closed
   const active = staff.filter((m) => m.status === "active");
 
   return (
@@ -45,7 +44,7 @@ export function Office() {
         {active.map((m) => (
           <Thread key={m.id} label={m.name} member={m} on={channel === m.id} onClick={() => setParams({ with: m.id })} />
         ))}
-        {active.length === 0 && (
+        {office.data && active.length === 0 && (
           <p className="px-2 pt-3 leading-normal text-ink-3">
             The Tender Manager joins when you first write to the office, and hires the team the tender needs.
           </p>
@@ -70,8 +69,7 @@ export function Office() {
         <Profile
           tenderId={tenderId}
           member={person}
-          overlay={Boolean(asked)}
-          onMessage={() => setParams({ with: person.id })}
+          onMessage={channel === person.id ? undefined : () => setParams({ with: person.id })}
           onClose={() => setParams(channel === TEAM ? {} : { with: channel })}
         />
       )}
@@ -147,9 +145,16 @@ export function Conversation(props: {
         <div className="flex flex-col gap-1">
           <h2 className="text-[17px] font-semibold">{props.title}</h2>
           <span className="text-ink-3">
-            {props.channel === TEAM
-              ? "Everything the team says to each other. Only real messages appear here."
-              : "Your direct conversation."}
+            {props.channel === TEAM ? (
+              "Everything the team says to each other. Only real messages appear here."
+            ) : (
+              <>
+                Your direct conversation ·{" "}
+                <button onClick={() => props.onPerson(props.channel)} className="text-ink-2 hover:text-ink">
+                  About {props.title.split(" ")[0]}
+                </button>
+              </>
+            )}
           </span>
         </div>
         {props.working && (
@@ -159,7 +164,7 @@ export function Conversation(props: {
         )}
       </div>
       <div className="flex min-h-0 grow flex-col gap-[18px] overflow-y-auto px-8 py-5">
-        {count === 0 && <p className="text-ink-3">No messages yet.</p>}
+        {count === 0 && messages.data && turns.data && <p className="text-ink-3">No messages yet.</p>}
         {groups.map((group) =>
           group.author === null ? (
             <Aside key={keyOf(group.items[0])} message={(group.items[0] as { message: Message }).message} />
@@ -370,25 +375,26 @@ function WaitingForYou({ tenderId }: { tenderId: string }) {
   );
 }
 
+/** Who someone is, over the chat until the engineer closes it (Close or Esc) or messages them. */
 function Profile(props: {
   tenderId: string;
   member: Staff;
-  overlay: boolean;
-  onMessage: () => void;
+  onMessage?: () => void; // none when this is already their chat
   onClose: () => void;
 }) {
-  const { tenderId, member, onMessage } = props;
+  const { tenderId, member, onMessage, onClose } = props;
   const tasks = useTasks(tenderId);
   const mine = (tasks.data ?? []).filter((t) => t.staff_id === member.id);
   const p = member.profile as Record<string, string | number | undefined>;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
   return (
     <aside
       aria-label={member.name}
-      className={`flex w-[340px] shrink-0 flex-col gap-5 overflow-y-auto border-l border-line bg-white px-6 pt-7 pb-6 ${
-        props.overlay
-          ? "max-[1400px]:absolute max-[1400px]:inset-y-0 max-[1400px]:right-0 max-[1400px]:z-10 max-[1400px]:shadow-[-8px_0_24px_rgba(0,0,0,0.08)]"
-          : "max-[1400px]:hidden"
-      }`}
+      className="absolute inset-y-0 right-0 z-10 flex w-[340px] flex-col gap-5 overflow-y-auto border-l border-line bg-white px-6 pt-7 pb-6 shadow-[-8px_0_24px_rgba(0,0,0,0.08)]"
     >
       <div className="flex items-center gap-3.5">
         <Face id={member.id} size={56} />
@@ -427,12 +433,12 @@ function Profile(props: {
         </div>
       )}
       <div className="grow" />
-      {member.status === "active" && (
+      {member.status === "active" && onMessage && (
         <button onClick={onMessage} className="h-[38px] shrink-0 rounded-lg bg-ink text-sm text-white">
           Message {firstName(member)}
         </button>
       )}
-      <button onClick={props.onClose} className="shrink-0 text-center text-ink-3 hover:text-ink">
+      <button onClick={onClose} className="shrink-0 text-center text-ink-3 hover:text-ink">
         Close
       </button>
     </aside>
