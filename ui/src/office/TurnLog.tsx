@@ -11,25 +11,26 @@ function duration(turn: Turn): string {
   return seconds % 60 ? `${minutes} min ${seconds % 60} s` : `${minutes} min`;
 }
 
-/** The folded line: who worked, for how long, and how it ended, in words. */
-function headline(turn: Turn, name: string): string {
+/** The folded line, under the person's name: for how long, what they last did, and how it ended, in words. */
+function headline(turn: Turn): string {
   const took = duration(turn);
-  if (turn.running) return `${name} is working${turn.doing ? ` · ${turn.doing}` : ""}`;
+  const did = turn.doing ? ` · ${turn.doing}` : "";
+  if (turn.running) return `Working${did}`;
   switch (turn.ended) {
     case "done":
-      return `${name} worked for ${took}`;
+      return `Worked for ${took}${did}`;
     case "out_of_steps":
-      return `${name} worked for ${took} and ran out of steps; carries on by itself`;
+      return `Worked for ${took} and ran out of steps; carries on by itself`;
     case "tool_failed":
-      return `${name} worked for ${took}; one step kept failing`;
+      return `Worked for ${took}; one step kept failing`;
     case "ai_failed":
-      return `${name} stopped after ${took}: ${turn.note ?? "the AI service failed."}`;
+      return `Stopped after ${took}: ${turn.note ?? "the AI service failed."}`;
     case "stopped":
-      return `${name} was stopped by you after ${took}`;
+      return `Stopped by you after ${took}`;
     case "failed":
-      return `${name} stopped after ${took}: Quantix hit a problem of its own`;
+      return `Stopped after ${took}: Quantix hit a problem of its own`;
     default:
-      return `${name} was cut off when Quantix closed`;
+      return "Cut off when Quantix closed";
   }
 }
 
@@ -113,14 +114,14 @@ export function TurnLog(props: { turn: Turn; name: string; technical: boolean; o
   const shown = log.filter((s) => technical || s.kind !== "brief");
 
   return (
-    <div className="flex flex-col gap-2 pl-10">
+    <div className="flex flex-col gap-2">
       <button
         onClick={() => setOpen(!open)}
         aria-expanded={open}
         className={`flex items-center gap-1.5 self-start text-left text-[13px] ${trouble ? "text-attention" : "text-ink-3"} hover:text-ink`}
       >
         {turn.running && <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-ink-2" />}
-        <span dir="auto">{headline(turn, name)}</span>
+        <span dir="auto">{headline(turn)}</span>
         <IconChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? "rotate-90" : ""}`} stroke={1.75} />
       </button>
       {open && (

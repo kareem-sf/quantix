@@ -233,7 +233,9 @@ def test_find_records_and_the_priced_boq(client, tender):
         zero, six = Decimal(0), Decimal("0.06")
         filed = estimate.propose_markups(session, tender_id, priya_id, [site], six, zero, zero, "Four months of staff.")
         [markups] = lookup.search(session, tender_id, "site support allowance")
-        assert markups.startswith("markups · preliminaries priced item by item (1 items: Site support allowance)")
+        assert markups.startswith(
+            f"markups {filed.id[:8]} · preliminaries priced item by item (1 items: Site support allowance)"
+        )
         assert "overheads 6.0% and profit 0.0% of cost, adjustment 0.00 as a lump sum" in markups
         assert lookup.search(session, tender_id, "markup") == [markups]
         assert lookup.search(session, tender_id, "", "markups") == [markups]
@@ -250,6 +252,10 @@ def test_find_records_and_the_priced_boq(client, tender):
         duplicate = estimate.propose_markups(session, tender_id, priya_id, [site], six, zero, zero, "Again.")
         duplicate.status, duplicate.decided_at = "rejected", filed.decided_at - timedelta(days=1)
         assert lookup.find(session, tender_id, "markups") == ("markups", filed)
+        # a redo the Manager sent back after that is dated by his review: it once sent Rashid to the older set
+        redo = estimate.propose_markups(session, tender_id, priya_id, [site], six, zero, zero, "72 days.")
+        redo.status, redo.reviewed_at = "rejected", filed.decided_at + timedelta(minutes=30)
+        assert lookup.find(session, tender_id, "markups") == ("markups", redo)
 
         text = lookup.priced(session, tender_id)
         head, *rows, foot = text.splitlines()

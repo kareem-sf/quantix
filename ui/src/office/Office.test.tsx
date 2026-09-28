@@ -148,7 +148,7 @@ describe("Office", () => {
     const room = await screen.findByRole("region", { name: "Conversation" });
     expect(await within(room).findByText("Check the tender security, please.")).toBeInTheDocument();
     expect(within(room).getByText("Rania asked Omar to find the tender security clause")).toBeInTheDocument();
-    expect(within(room).getByText("· raised a concern")).toBeInTheDocument();
+    expect(within(room).getByText("Raised a concern")).toBeInTheDocument();
     expect(within(screen.getByRole("navigation", { name: "Quantix" })).getByText("Reviewing Omar's result")).toBeInTheDocument();
 
     await userEvent.click(within(room).getByRole("button", { name: "About Omar Haddad" }));
@@ -242,7 +242,7 @@ describe("Office", () => {
     openApp("/tenders/t1/office?with=s1");
 
     const room = await screen.findByRole("region", { name: "Conversation" });
-    const line = await within(room).findByRole("button", { name: /Rania worked for 32 s/ });
+    const line = await within(room).findByRole("button", { name: "Worked for 32 s · Opening the markups" });
     expect(line).toHaveAttribute("aria-expanded", "false");
     await userEvent.click(line);
 
@@ -259,6 +259,54 @@ describe("Office", () => {
     expect(within(room).getByText("Markups: none proposed yet.")).toBeInTheDocument();
     expect(within(room).getByText(/"kind": "markups"/)).toBeInTheDocument();
     expect(within(room).getByText("What Rania was told at the start")).toBeInTheDocument();
+  });
+
+  it("puts a turn and its reply under the person who did them, and takes an answer to their question", async () => {
+    // on the real tender Salem's turns showed under the engineer's message, as if the engineer had done them, and
+    // his question to the engineer showed nowhere in the chat
+    const turn = {
+      id: 9,
+      staff_id: "s1",
+      started_at: "2026-09-23T10:43:00Z",
+      ended_at: "2026-09-23T10:43:12Z",
+      running: false,
+      ended: "done",
+      note: null,
+      doing: "Briefing Omar",
+      steps: 0,
+      log: [],
+    };
+    const asked: Decision = { ...question, status: "waiting", answer: null, created_at: "2026-09-23T10:43:10Z" };
+    const service = fakeService({
+      tenders: [tender],
+      settings: ready,
+      staff: [rania, omar],
+      messages: [
+        { ...said(1, "engineer", "s1", "Get the markups redone."), created_at: "2026-09-23T10:42:00Z" },
+        {
+          ...said(2, "s1", "s1", "Omar is redoing them.\n\nSources: markups e8d6e257"),
+          created_at: "2026-09-23T10:43:11Z",
+          sources: [{ label: "The markups" }],
+        },
+      ],
+      turns: [turn],
+      decisions: [asked],
+    });
+    openApp("/tenders/t1/office?with=s1");
+
+    const room = await screen.findByRole("region", { name: "Conversation" });
+    const line = await within(room).findByRole("button", { name: "Worked for 12 s · Briefing Omar" });
+    const heading = within(room).getByRole("button", { name: "About Rania Farouk" }).parentElement!;
+    expect(heading).toContainElement(line);
+    expect(heading).toContainElement(within(room).getByText("Omar is redoing them."));
+    expect(within(room).queryByText(/Sources: markups/)).not.toBeInTheDocument(); // the link under it says it
+
+    const card = within(room).getByRole("group", { name: "Tender security wording" });
+    expect(heading).toContainElement(card);
+    expect(within(card).getByText("Needs your decision")).toBeInTheDocument();
+    await userEvent.click(within(card).getByRole("button", { name: "Yes, 1%" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Send answer" }));
+    await waitFor(() => expect(service.state.decisions[0]).toMatchObject({ status: "answered", answer: "Yes, 1%" }));
   });
 
   it("says in the chat why a turn stopped, and above the message box why the office is stopped", async () => {
@@ -287,7 +335,7 @@ describe("Office", () => {
 
     const room = await screen.findByRole("region", { name: "Conversation" });
     expect(
-      await within(room).findByText("Rania stopped after 6 min 40 s: Couldn't reach the service. Check the internet connection and the address."),
+      await within(room).findByText("Stopped after 6 min 40 s: Couldn't reach the service. Check the internet connection and the address."),
     ).toBeInTheDocument();
     expect(within(room).getByText("The office stopped: Couldn't reach the service. Send a message to try again.")).toBeInTheDocument();
   });

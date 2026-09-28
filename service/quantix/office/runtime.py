@@ -26,6 +26,12 @@ log = logging.getLogger("quantix.office")
 
 TURN_BUDGET = 40  # turns without hearing from the engineer before the office pauses
 CARRY_ON = "Your last turn was cut short. Carry on from where you stopped, and report what you have."
+NOT_REPLIED = (
+    "The engineer wrote to you in your chat and you haven't written back. Tell them now with message_engineer what "
+    "you did about it and what happens next, giving what it rests on as sources."
+)
+# what answers the engineer: writing back in their chat, or filing the work they asked for, which reaches them
+REPLIES = {"message_engineer", "escalate"} | {tool.__name__ for work in packs.WORK.values() for tool in work.produces}
 RETRIES = 4  # turns cut short by a passing AI failure that are tried again before the office pauses
 RETRY_WAIT = 5.0  # seconds before the first retry; each further one waits three times longer, over 3 minutes in all
 ALLOWANCE_USED = (
@@ -67,6 +73,10 @@ class Office:
         # what the person had read before a run of failed turns: if the office gives up, what was new for them is
         # new again, so the engineer's question is answered when the office carries on rather than left as read
         self._read_before: dict[str, tuple[str, int]] = {}  # staff id: (tender id, last message read)
+        # people the engineer wrote to who ended a turn without writing back, woken once more to reply: the real
+        # tender's Manager gave out and reviewed the work the engineer asked for, all in the team room, and the
+        # engineer's chat stayed silent
+        self._owed: set[str] = set()
 
     # The engineer's side -------------------------------------------------------------------------------------
 
@@ -199,9 +209,12 @@ class Office:
                 or revisions.news(session, tender_id, member.reviewed_up_to)
                 or bool(unseen)
             )
+            wrote = any(m.sender == ENGINEER and m.channel == staff_id for m in new)
+            owed = staff_id in self._owed
             if (
                 not new
                 and not to_review
+                and not owed
                 and not records.unfinished(session, staff_id)
                 and not records.new_task(session, member)
             ):
@@ -212,6 +225,8 @@ class Office:
                 records.note_opened(session, tender_id, staff_id, "finding", finding.key[:80])
             if history is not None:
                 prompt = f"{CARRY_ON}\n\n{prompt}"
+            if owed:
+                prompt = f"{NOT_REPLIED}\n\n{prompt}"
             self._read_before.setdefault(staff_id, (tender_id, member.last_read))
             records.mark_read(session, member)
             if member.is_manager:  # the briefing showed him his queue
@@ -241,6 +256,11 @@ class Office:
                 return True
             self._failures.pop(tender_id, None)
             self._read_before.pop(staff_id, None)
+            replied = any(c["tool"] in REPLIES and c["sent_back"] is None for c in trace.calls)
+            if wrote and not replied and not owed:
+                self._owed.add(staff_id)
+            else:
+                self._owed.discard(staff_id)  # they replied, or were reminded once already
             if conversation is not None and history is None:
                 self._carry[staff_id] = conversation  # one continuation in a row; after that, from the records
         except Stopped:

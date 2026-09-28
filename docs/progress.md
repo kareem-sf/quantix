@@ -939,3 +939,22 @@ was already marked as read, so it would not have come back as new.
   tasks. So the redo was no one's. Now, when the maker is the Manager or has been released, the Manager gets
   "Give out: Redo …" with the reason, to hand to someone with assign_task. He can complete it only once someone
   else has a task from after it.
+- **Salem's work under Salem, and a reply to the engineer (evening).** The engineer saw Salem's turns under their
+  own message, and no reply to "give the redo to someone". His turn logs showed four causes, all fixed:
+  - **Sent back last.** The Manager's send-back is dated `reviewed_at`, not `decided_at`. The "sent back last"
+    ordering read only `decided_at`, so Rashid was sent to correct the engineer's older 4-month set instead of his
+    own 72-day redo, and refiled it at 4 months. It now orders by either date, and the markups search line carries
+    the set's reference (`markups 2795b746 · …`).
+  - **The engineer's decision stands.** Salem accepted Quantix's warning (4 months against 72 working days) as "a
+    conservative allowance", against the engineer's answer. A warning on work whose earlier version the engineer
+    corrected can no longer be accepted: the Manager sends it back with their decision, or escalates.
+  - **A reply is owed.** Salem gave out and reviewed the work, all in the team room, and never wrote back. Someone
+    the engineer wrote to directly who ends a turn with no message to them, no escalation and no work filed is woken
+    once more, to tell the engineer what they did.
+  - **Questions show in the chat.** His question to the engineer went to the Overview only, and a second one was
+    refused because the first was still waiting. A direct chat now shows the person's questions as cards: pick an
+    option and send it, or answer in your own words.
+- **Chat layout.** Each run of one person's turns, messages and questions sits under their face and name, as a
+  chatbot shows its thinking above its reply. A turn's folded line says what they last did ("Worked for 12 s ·
+  Briefing Rashid"). Tools that don't describe themselves get plain words ("Wrote to you", "Gave the review"). A
+  written "Sources:" line is hidden when the sources show as links.

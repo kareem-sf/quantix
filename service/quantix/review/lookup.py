@@ -6,7 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from quantix.boq import records as boq
@@ -124,11 +124,14 @@ def find(session: Session, tender_id: str, ref: str) -> tuple[str, Any]:
 
 def returned_markups(session: Session, tender_id: str) -> Markups | None:
     """The markups sent back last, when nothing has replaced them: what to correct. Sent back last, not made last:
-    reopening approved markups sends back an older set than a duplicate turned down the day before."""
+    reopening approved markups sends back an older set than a duplicate turned down the day before. The engineer's
+    send-back is dated decided_at, the Manager's reviewed_at; the Manager's alone once sent Rashid back to the
+    engineer's older set."""
     if estimate.current_markups(session, tender_id) is not None:
         return None
     query = select(Markups).where(Markups.tender_id == tender_id, Markups.status == "rejected")
-    return session.scalars(query.order_by(Markups.decided_at.desc())).first()
+    sent_back = func.coalesce(Markups.decided_at, Markups.reviewed_at, Markups.created_at)
+    return session.scalars(query.order_by(sent_back.desc())).first()
 
 
 def returned_draft(session: Session, requirement: Requirement) -> Draft | None:
@@ -412,7 +415,8 @@ def search(session: Session, tender_id: str, words: str, kind: str | None = None
         heads = ", ".join(i["item"] for i in markups.preliminary_items)
         add(
             f"markups markup preliminaries overheads profit adjustment {heads} {markups.note}",
-            f"markups · preliminaries priced item by item ({len(markups.preliminary_items)} items: {heads or 'none'}), "
+            f"markups {markups.id[:8]} · preliminaries priced item by item "
+            f"({len(markups.preliminary_items)} items: {heads or 'none'}), "
             f"overheads {markups.overheads:.1%} and profit {markups.profit:.1%} of cost, adjustment "
             f"{markups.adjustment:.2f} as a lump sum · {STATES.get(markups.status, markups.status)}",
         )

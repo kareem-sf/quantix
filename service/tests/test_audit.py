@@ -274,6 +274,28 @@ def test_the_manager_puts_a_problem_in_approved_work_to_the_engineer_who_decides
         [redo] = [t for t in office.all_tasks(session, tender_id) if t.status == "open"]
         assert (redo.title, redo.brief) == ("Redo the markups", correction)
 
+        # on the real tender the redo came back at 4 months again, and Salem accepted Quantix's warning about it
+        # as "a conservative programme allowance", against the engineer's answer
+        layla = next(m for m in office.team(session, tender_id) if m.first_name == "Layla")
+        staff = [
+            estimate.PreliminaryIn(item=item, quantity=4, unit="month", rate=Decimal("9000"))
+            for item in ("Site engineer", "Foreman")
+        ]
+        zero = Decimal(0)
+        again = estimate.propose_markups(session, tender_id, layla.id, staff, zero, zero, zero, "Four months kept.")
+        verdict = reviews.Verdict(
+            record=f"markups {again.id[:8]}",
+            accept=True,
+            note="Checked the heads and the rates.",
+            warnings_reason="A conservative programme allowance for site support.",
+        )
+        report = reviews.review(
+            session, client.app.state.home, tender_id, session.get(Staff, rania_id), [verdict], False
+        )
+        assert report.startswith("Accepted 0 (waiting for the engineer). Sent back 0.")
+        assert f"The engineer already decided on this work: “{correction}”" in report
+        assert again.status == "proposed"
+
 
 def test_keeping_approved_work_as_it_is_changes_nothing(client, tender):
     tender_id, rania_id, docs = tender

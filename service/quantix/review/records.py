@@ -440,6 +440,13 @@ def _accept(
         raise ValueError(
             "Quantix's checks stop it: " + " ".join(blockers) + " Send it back saying exactly what to correct."
         )
+    decided = engineer_correction(session, tender_id, p) if found else None
+    if decided is not None:  # on the real tender he accepted 4 months of site support against the engineer's 72 days
+        raise ValueError(
+            "Quantix warns: " + " ".join(f.message for f in found) + f" The engineer already decided on this work: "
+            f"“{decided.answer}” You can't accept a warning against their decision: send it back with their decision "
+            "as the correction, or escalate it if the office can't meet it."
+        )
     reason = (verdict.warnings_reason or "").strip()
     if found and len(reason.split()) < 3:
         raise ValueError(
@@ -458,6 +465,22 @@ def _accept(
             r.status = REVIEWED
     elif p.kind == "recommendation" and autonomous:
         subcontract.select_quote(session, r, session.get(Quote, r.recommended_quote_id), status="office_approved")
+
+
+def engineer_correction(session: Session, tender_id: str, p: Pending) -> Decision | None:
+    """The engineer's latest answer on this work or an earlier version of it, when it chose a correction."""
+    if p.kind not in REVIEWED_KINDS:
+        return None
+    model = REVIEWED_KINDS[p.kind][0]
+    versions = select(model.id).where(model.tender_id == tender_id, same_work(p.kind, p.record))
+    query = select(Decision).where(
+        Decision.tender_id == tender_id,
+        Decision.subject_kind == p.kind,
+        Decision.subject_id.in_(versions),
+        Decision.status == "answered",
+    )
+    latest = session.scalars(query.order_by(Decision.decided_at.desc())).first()
+    return latest if latest is not None and (latest.answer or "").strip() != KEEP_APPROVED else None
 
 
 def same_work(kind: str, record: Any) -> Any:

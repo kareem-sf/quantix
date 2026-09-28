@@ -146,10 +146,29 @@ def office(tender_id: str, session: DB, request: Request) -> OfficeOut:
     )
 
 
+# what a step did, for tools that don't say it themselves while they work
+DID = {
+    "message_engineer": "Wrote to you",
+    "ask_engineer": "Asked you to decide",
+    "escalate": "Brought a problem to you",
+    "post_to_team": "Wrote to the team room",
+    "raise_concern": "Raised a concern",
+    "review": "Gave the review",
+    "complete_task": "Finished a task",
+}
+
+
+def _in_words(step: dict[str, Any]) -> dict[str, Any]:
+    if step["kind"] != "tool" or step["doing"]:
+        return step
+    return step | {"doing": DID.get(step["tool"], step["tool"].replace("_", " ").capitalize())}
+
+
 def _turn_out(turn: TurnRecord, running: bool) -> dict[str, Any]:
     steps = turn.steps or []
-    calls = [s for s in steps if s["kind"] == "tool"]
-    last = calls[-1] if calls else None
+    calls = [_in_words(s) for s in steps if s["kind"] == "tool"]
+    done = [s for s in calls if not s["sent_back"]] or calls  # what went through says what the turn did
+    last = done[-1] if done else None
     return {
         "id": turn.id,
         "staff_id": turn.staff_id,
@@ -159,7 +178,7 @@ def _turn_out(turn: TurnRecord, running: bool) -> dict[str, Any]:
         "ended": turn.ended,
         "note": turn.note,
         "steps": len(steps),
-        "doing": last and (last["doing"] or last["tool"].replace("_", " ").capitalize()),
+        "doing": last and last["doing"],
     }
 
 
@@ -184,7 +203,7 @@ def turn_detail(turn_id: int, session: DB, request: Request) -> TurnDetail:
     if turn is None or tenders.get_tender(session, turn.tender_id) is None:
         raise HTTPException(status_code=404, detail="Turn not found.")
     running = _running(session, request, turn.tender_id) == turn.id
-    return TurnDetail(**_turn_out(turn, running), log=[TurnStep(**s) for s in turn.steps or []])
+    return TurnDetail(**_turn_out(turn, running), log=[TurnStep(**_in_words(s)) for s in turn.steps or []])
 
 
 @router.get("/tenders/{tender_id}/messages")

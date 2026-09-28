@@ -962,3 +962,33 @@ def test_the_office_pauses_once_the_tender_has_used_its_ai_allowance(client, off
     client.patch("/settings", json={"tender_allowance": 2000})  # raised: the next message carries on
     client.post(f"/tenders/{tender_id}/messages", json={"channel": TEAM, "text": "Carry on."})
     wait_for(lambda o: asked, client, tender_id)
+
+
+def test_someone_the_engineer_wrote_to_is_woken_once_to_reply(client, office):
+    """The real tender: the engineer asked Salem to give out the markups redo. He gave it out and reviewed it, all in
+    the team room, and the engineer's chat stayed silent."""
+    from quantix.office import records as office_records
+
+    tender_id, use = office
+    with client.app.state.sessions() as session:
+        rania_id = office_records.hire(session, tender_id, "Rania Farouk", "Tender Manager", {}, is_manager=True).id
+        session.commit()
+    told = []
+
+    def silent_then_replies(messages, info):
+        prompt = prompt_of(messages)
+        if not returns(messages):
+            told.append(prompt)
+            if runtime.NOT_REPLIED in prompt:
+                return call("message_engineer", text="I gave the redo to Omar.", next_steps=["review Omar's redo"])
+            return call("post_to_team", text="Omar, redo the markups for 72 days.")
+        return DONE
+
+    use(silent_then_replies)
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": rania_id, "text": "Get the markups redone."})
+    wait_for(lambda o: len(told) >= 2, client, tender_id)
+    time.sleep(0.3)
+    assert runtime.NOT_REPLIED not in told[0] and told[1].startswith(runtime.NOT_REPLIED)
+    assert sum(runtime.NOT_REPLIED in t for t in told) == 1  # reminded once, not again after replying
+    chat = client.get(f"/tenders/{tender_id}/messages", params={"channel": rania_id}).json()
+    assert [m["text"] for m in chat][-1] == "I gave the redo to Omar."
