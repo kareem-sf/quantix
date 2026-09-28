@@ -884,3 +884,16 @@ The engineer asked for the whole of the DWG work in one go, so what the first ro
   UNP100 channels, plates), and the flooring plan's 200 plaster regions now have areas.
 - **Checks:** 4 new service tests, 3 new Rust tests and 1 new interface test; 202 service tests, 79 interface
   tests, typecheck, ruff and clippy pass.
+
+## 28 September 2026: the Quantix brand
+
+Quantix takes its identity from the QS Mind house, whose tender stage it is.
+
+- **Mark.** Weave: an X whose second stroke passes under the first, a copper ribbon with one ink or ivory accent
+  piece. The kit is in `brand/`: SVG masters, icons, colours, the guidelines and the founder's signature.
+- **Desktop and browser.** Every desktop icon is regenerated from `brand/icons/app-icon-1024.png` at its old sizes,
+  and the interface has the favicon.
+- **Interface.** The sidebar draws the mark beside the name in the text colour, so the one warm accent still means
+  "needs you". Settings ends with About Quantix: the mark in its colours, "Part of QS Mind", and "Founded & developed
+  by Kareem Safwat" with his K, linking to kareemsafwat.com.
+- **Checks:** 1 new interface test; 80 interface tests and typecheck pass.
