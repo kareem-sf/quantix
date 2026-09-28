@@ -781,3 +781,24 @@ the claim.
   none states it. A date the engineer gave stands: a document date can't replace it, and the Manager tells the
   engineer instead. His briefing says which kind of date it is, so the office never passes the engineer's date off
   as the tender's. Dates entered before this are recorded as the engineer's, with no time.
+
+## 28 September 2026: what the demo of every upgrade found
+
+Going through each screen on the real tender and asking the office live found five faults, now fixed:
+
+- **Arabic lam-alef read backwards.** The specification stores each lam-alef ligature as its two letters in one box,
+  alef first, so "خلال" read "خالل" and "الأعمال" read "األعمال"; the rebuild had lost the old fix. A box holding
+  exactly a lam and an alef now reads lam first; a word whose letters all share one box keeps its stored order.
+  502 of the tender's 4,284 Arabic text pages were read again (a same-letter reorder in every case) and their
+  meaning passages rebuilt.
+- **Characters beyond U+FFFF** came from PDFium as two halves on Arabic pages, which couldn't be saved: a new file
+  with them would have shown as unreadable. The halves are joined.
+- **Markups priced for longer than the programme stayed hidden.** They were approved before the programme was
+  settled at 72 working days, and the audit showed only blockers for approved work. A warning comparing work with
+  something settled after its approval now reaches the audit, and the time-related items are named in one finding.
+- **Premium rates showed as 0.00.** The price summary rounded 0.003 to "0.00"; rates show every decimal they have.
+- **A refused answer didn't say what to cite.** Salem opened the rate, answered without sources three times and
+  stopped; the refusal now lists what he opened since the question, written as sources are.
+
+Also dropped, as the engineer: two lessons that had led to wrong redrafts.
+- **Checks:** 5 new service tests and 1 interface test. 182 service tests and 72 interface tests pass.

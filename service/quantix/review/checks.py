@@ -6,6 +6,7 @@ import re
 import statistics
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -63,6 +64,8 @@ class Finding:
     severity: str
     message: str
     refs: list[Ref] = field(default_factory=list)
+    # when what the record is compared with was settled: approving the record before then didn't see this warning
+    since: datetime | None = None
 
 
 def for_record(session: Session, home: Path, kind: str, record: Any, blockers_only: bool = False) -> list[Finding]:
@@ -339,21 +342,27 @@ def _markups(session: Session, home: Path, markups: Markups) -> list[Finding]:
     schedule = _schedule(session, markups.tender_id)
     if schedule is not None:
         overall = schedule.schedule["overall_days"]
+        apart: dict[tuple[str, str, str], list[str]] = {}  # items priced for the same time, named together
         for i in markups.preliminary_items:
             period = next((p for p in WORKING_DAYS if p in i["unit"].lower()), None)
             if period is None:
                 continue
             priced = Decimal(str(i["quantity"])) * WORKING_DAYS[period]
             if abs(priced - overall) > WORKING_DAYS["month"]:
-                found.append(
-                    Finding(
-                        f"time-related:{markups.id}:{i['item']}:{overall}",
-                        WARNING,
-                        f"{i['item']}: {i['quantity']} {i['unit']} is about {_qty(priced)} working days at "
-                        f"{WORKING_DAYS[period]} a {period}; the work schedule is {overall} working days.",
-                        [Ref(f"the work schedule “{schedule.title}”")],
-                    )
+                apart.setdefault((period, str(i["quantity"]), i["unit"]), []).append(i["item"])
+        for (period, quantity, unit), items in apart.items():
+            priced = Decimal(quantity) * WORKING_DAYS[period]
+            names = items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
+            found.append(
+                Finding(
+                    f"time-related:{markups.id}:{quantity}:{unit}:{overall}",
+                    WARNING,
+                    f"{names}: {quantity} {unit} is about {_qty(priced)} working days at {WORKING_DAYS[period]} a "
+                    f"{period}; the work schedule is {overall} working days.",
+                    [Ref(f"the work schedule “{schedule.title}”")],
+                    since=schedule.decided_at or schedule.created_at,
                 )
+            )
     return found
 
 

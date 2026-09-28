@@ -7,6 +7,7 @@ import { Findings, Reopen, ReviewNote, SendBack, WITH_MANAGER } from "../review/
 import {
   money,
   quantity,
+  exact,
   statusDot,
   statusLabel,
   useApproveAll,
@@ -326,7 +327,7 @@ function ItemPanel(props: { tenderId: string; item: BoqItem; priced?: Priced; pe
                 <span>{line.resource}</span>
                 <span className="text-xs text-ink-3">
                   {quantity(line.quantity)} {line.unit}
-                  {Number(line.wastage) > 0 && ` incl. ${Number(line.wastage) * 100}% waste`} × {money(line.rate)}
+                  {Number(line.wastage) > 0 && ` incl. ${Number(line.wastage) * 100}% waste`} × {exact(line.rate)}
                 </span>
               </span>
               <span>{money(line.cost)}</span>
@@ -505,7 +506,7 @@ function SummaryPanel(props: {
               {markups.preliminary_items.map((p) => (
                 <li key={p.item} className="flex justify-between gap-3">
                   <span className="min-w-0 text-ink-2">
-                    {p.item} · {Number(p.quantity).toLocaleString("en-US")} {p.unit} × {money(p.rate)}
+                    {p.item} · {Number(p.quantity).toLocaleString("en-US")} {p.unit} × {exact(p.rate)}
                   </span>
                   <span className="shrink-0">{money(p.cost)}</span>
                 </li>

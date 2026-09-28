@@ -320,3 +320,36 @@ def test_a_question_gets_one_set_of_next_steps_then_an_answer(client, tender):
     assert tools.message_engineer(ctx, "Built up from a gang, rebar and wire.", sources=[f"rate {rate_id[:8]}"]) == (
         "Sent. It replaces your last message, which the engineer hadn't answered."
     )
+
+
+def test_a_refused_answer_names_what_it_may_rest_on(client, tender, tmp_path):
+    """On the real tender the Manager opened the rate, answered without sources three times and gave up: the refusal
+    now names what he opened since the question, as sources are written."""
+    tender_id, priya_id, _ = tender
+    rania_id, rate_id, _ = priced_after_a_send_back(client, tender_id, priya_id)
+    settings.save(tmp_path, office_ai={"connection_id": "scripted", "model": "brain"})
+    seen: dict[str, list[str]] = {}
+
+    def brain(messages, info):
+        if "You are Rania Farouk" not in info.instructions:
+            return DONE
+        done, refused = returned(messages), sent_back(messages)
+        seen["refused"] = refused
+        steps = [
+            call("open_record", references=[f"rate {rate_id[:8]}"]),
+            call("message_engineer", text="Built up from a fixing gang and rebar with wastage."),
+            call("message_engineer", text="Built up from a fixing gang.", sources=[f"rate {rate_id[:8]}"]),
+        ]
+        step = len(done) + len(refused)
+        return steps[step] if step < len(steps) else DONE
+
+    client.app.state.office.model = lambda: scripted(brain)
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": rania_id, "text": QUESTION})
+    chat = f"/tenders/{tender_id}/messages?channel={rania_id}"
+    wait_for(lambda o: len(client.get(chat).json()) == 2, client, tender_id)
+
+    [refusal] = seen["refused"]
+    assert refusal.startswith("The engineer asked you something: answer it now.")
+    opened = refusal.split("Since the engineer wrote, you opened: ")[1].rstrip(".").split("; ")
+    assert f"rate {rate_id[:8]}" in opened and any(o.startswith("boq ") for o in opened)  # the rate and its line
+    assert client.get(chat).json()[-1]["text"] == "Built up from a fixing gang."

@@ -183,6 +183,7 @@ describe("Pricing", () => {
         preliminary_items: [
           { item: "Site engineer", quantity: "3", unit: "month", rate: "2500.00", cost: "7500.00" },
           { item: "Plant mobilisation", quantity: "1", unit: "sum", rate: "341.02", cost: "341.02" },
+          { item: "Third-party liability", quantity: "3600000", unit: "SAR insured", rate: "0.003", cost: "10800.00" },
         ],
         overheads: "0.05",
         profit: "0.07",
@@ -201,6 +202,8 @@ describe("Pricing", () => {
     const items = within(panel).getByRole("list", { name: "Preliminaries" });
     expect(within(items).getByText("Site engineer · 3 month × 2,500.00")).toBeInTheDocument();
     expect(within(items).getByText("7,500.00")).toBeInTheDocument();
+    // a premium's rate shows as entered, not rounded to 0.00
+    expect(within(items).getByText("Third-party liability · 3,600,000 SAR insured × 0.003")).toBeInTheDocument();
     expect(within(panel).getByText("SAR 118,927.17")).toBeInTheDocument();
     expect(within(panel).getByText("SAR 136,766.25")).toBeInTheDocument();
     expect(within(panel).getByText("The total includes 1 rate waiting for you.")).toBeInTheDocument();

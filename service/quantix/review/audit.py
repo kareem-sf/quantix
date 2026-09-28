@@ -243,13 +243,19 @@ def _documents(session: Session, tender_id: str) -> list[Finding]:
 
 
 def _records(session: Session, home: Path, tender_id: str) -> list[Finding]:
-    """What the checks find on work already past the Manager's review. The engineer's own approval settles a
-    warning; a blocker stands whoever approved the work."""
+    """What the checks find on work already past the Manager's review. The engineer's own approval settles the
+    warnings they saw when approving; one that compares the work with something settled after it, such as markups
+    with a programme approved later, is new to them. A blocker stands whoever approved the work."""
     found = []
     for kind, (model, module) in reviews.REVIEWED_KINDS.items():
         query = select(model).where(model.tender_id == tender_id, model.status.in_((REVIEWED, *APPROVED)))
         for record in session.scalars(query):
-            for f in checks.for_record(session, home, kind, record, blockers_only=record.status == "approved"):
+            approved = record.decided_at if record.status == "approved" else None
+            # reading a drawing only ever warns, and never about anything settled after the measurement
+            quick = bool(approved) and kind == "measurement"
+            for f in checks.for_record(session, home, kind, record, blockers_only=quick):
+                if approved and f.severity != BLOCKER and not (f.since and f.since > approved):
+                    continue
                 label = module.label(session, record)
                 found.append(Finding(f.key, f.severity, f"{label[0].upper()}{label[1:]}: {f.message}", f.refs))
     return found

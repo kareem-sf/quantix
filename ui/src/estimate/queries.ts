@@ -148,6 +148,12 @@ export function money(value: string | null | undefined) {
   return Number(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+/** A rate as it was entered: at least two decimals, and every one it has, so 0.003 never shows as 0.00. */
+export function exact(value: string | null | undefined) {
+  if (value === null || value === undefined) return "";
+  return Number(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 });
+}
+
 export function statusLabel(status: string) {
   return (
     {

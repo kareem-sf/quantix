@@ -104,8 +104,15 @@ def _pdf_page_text(textpage: pdfium.PdfTextPage) -> str:
     if not has_arabic(plain):
         return plain.replace("\r\n", "\n").strip()
     chars = []
+    high = None  # a character beyond U+FFFF comes as two UTF-16 halves: the first waits for the second
     for index in range(textpage.count_chars()):
         code = pdfium_raw.FPDFText_GetUnicode(textpage.raw, index)
+        if 0xD800 <= code <= 0xDBFF:
+            high = code
+            continue
+        if 0xDC00 <= code <= 0xDFFF:
+            code = 0x10000 + ((high - 0xD800) << 10) + (code - 0xDC00) if high else 0
+        high = None
         if not code:
             continue
         left, bottom, right, top = textpage.get_charbox(index, loose=True)  # font boxes: one height per line

@@ -17,6 +17,7 @@ from quantix.estimate.models import LibraryResource
 from quantix.office import records as office
 from quantix.office.models import ENGINEER
 from quantix.review import audit
+from quantix.review import records as reviews
 from quantix.submission import records as submission
 
 CONDITIONS = make_pdf(
@@ -184,3 +185,44 @@ def test_the_manager_audits_through_his_tool(client, tender, tmp_path):
         'Accept a warning only with your reason, as accept_warnings=[{"finding": "<short name>", "reason": "why it '
         'needs no correction"}].'
     )
+
+
+def test_markups_approved_before_the_programme_are_checked_against_it(client, tender):
+    """The engineer's approval settles the warnings they saw. Markups priced for longer than a programme approved
+    after them is news, so the audit shows it until the markups are approved again, or redone."""
+    tender_id, _, docs = tender
+    with client.app.state.sessions() as session:
+        layla = next(m for m in office.team(session, tender_id) if m.first_name == "Layla")
+        earlier = estimate.current_markups(session, tender_id)
+        reviews.reopen(session, "markups", earlier.id, "Price the site staff by the month.")
+        zero = Decimal(0)
+        staff = [
+            estimate.PreliminaryIn(item=item, quantity=4, unit="month", rate=Decimal("9000"))
+            for item in ("Site engineer", "Foreman")
+        ]
+        markups = estimate.propose_markups(session, tender_id, layla.id, staff, zero, zero, zero, "Four months.")
+        estimate.approve(session, markups)
+        quote = "7.9 The tenderer shall submit a programme."
+        wanted = submission.RequirementIn(
+            section="Technical", title="Work schedule", document_id=docs["Conditions.pdf"], page=1, quote=quote
+        )
+        submission.add_requirements(session, tender_id, ENGINEER, [wanted])
+        rows = submission.durations(session, tender_id, [submission.ActivityIn(boq_item="3.1", output=31, crews=1)])
+        requirement = submission.find_requirement(session, tender_id, "Work schedule")
+        record = submission.schedule_record(rows, 40)
+        submission.draft(session, requirement, layla.id, "Work schedule", "Excavate first.", "approved", record)
+        session.commit()
+
+    def audited() -> list[str]:
+        with client.app.state.sessions() as session:
+            return [f.message for f in audit.open_findings(session, client.app.state.home, tender_id)]
+
+    news = (
+        "The markups: Site engineer and Foreman: 4 month is about 104 working days at 26 a month; the work schedule "
+        "is 40 working days."
+    )
+    assert news in audited()  # one finding for both, not one each
+    with client.app.state.sessions() as session:
+        estimate.approve(session, session.get(type(markups), markups.id))  # approved again, with the programme known
+        session.commit()
+    assert news not in audited()

@@ -18,7 +18,7 @@ from quantix.documents.models import Document, WebPage
 from quantix.estimate import records as estimate
 from quantix.estimate.models import Markups, Rate
 from quantix.office import records as office
-from quantix.office.models import ENGINEER, Task
+from quantix.office.models import ENGINEER, Opened, Task
 from quantix.review import records as reviews
 from quantix.subcontract import records as subcontract
 from quantix.subcontract.models import Company, Enquiry, Package, Quote
@@ -498,6 +498,33 @@ def cited(session: Session, tender_id: str, staff_id: str, text: str) -> dict[st
     if not office.has_opened(session, staff_id, kind, record.id):
         raise ValueError(f"You haven't opened {wanted}. Open it with open_record first.")
     return _link(session, kind, record)
+
+
+def citable(session: Session, tender_id: str, staff_id: str, limit: int = 8) -> list[str]:
+    """What the person opened since the engineer last wrote to them, newest first, each written as a source is
+    given: so a refused answer can say exactly what it may rest on."""
+    asked = [m for m in office.messages(session, tender_id, staff_id, limit=20) if m.sender == ENGINEER]
+    query = select(Opened).where(Opened.tender_id == tender_id, Opened.staff_id == staff_id)
+    if asked:
+        query = query.where(Opened.at >= asked[-1].created_at)
+    found: list[str] = []
+    for opened in session.scalars(query.order_by(Opened.at.desc()).limit(limit * 3)):
+        if opened.kind == "summary":
+            source = opened.ref if opened.ref in SUMMARIES else None
+        elif opened.kind == "page":
+            document_id, _, page = opened.ref.partition(":")
+            document = session.get(Document, document_id)
+            source = f"{document.name}, page {page}" if document else None
+        elif opened.kind == "web":
+            web_page = session.get(WebPage, opened.ref)
+            source = web_page.url if web_page else None
+        else:
+            source = f"{opened.kind} {opened.ref[:8]}" if opened.kind in MODELS else None
+        if source and source not in found:
+            found.append(source)
+        if len(found) == limit:
+            break
+    return found
 
 
 def answering(session: Session, tender_id: str, staff_id: str) -> bool:

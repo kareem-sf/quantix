@@ -367,12 +367,18 @@ def message_engineer(
     if len(steps) > 3:
         raise ModelRetry("Give at most 3 next steps: the ones you will do yourself next.")
     with _working(ctx) as (session, me):
-        cited = [lookup.cited(session, ctx.deps.tender_id, me.id, s) for s in sources or [] if s.strip()]
-        answering = lookup.answering(session, ctx.deps.tender_id, me.id)
-        if not cited and answering and lookup.promised(session, ctx.deps.tender_id, me.id):
-            raise ValueError(ANSWER_NOW)
-        if not cited and not steps and answering:
-            raise ValueError(ANSWER_FIRST)
+        try:
+            cited = [lookup.cited(session, ctx.deps.tender_id, me.id, s) for s in sources or [] if s.strip()]
+            answering = lookup.answering(session, ctx.deps.tender_id, me.id)
+            if not cited and answering and lookup.promised(session, ctx.deps.tender_id, me.id):
+                raise ValueError(ANSWER_NOW)
+            if not cited and not steps and answering:
+                raise ValueError(ANSWER_FIRST)
+        except ValueError as refused:  # say exactly what the answer may rest on, as the sources are written
+            opened = lookup.citable(session, ctx.deps.tender_id, me.id)
+            if not opened:
+                raise
+            raise ValueError(f"{refused} Since the engineer wrote, you opened: {'; '.join(opened)}.") from refused
         if steps and (cited or not answering):
             raise ValueError(
                 "Send this without next_steps: they are only for a question the engineer asked that you can't answer "
