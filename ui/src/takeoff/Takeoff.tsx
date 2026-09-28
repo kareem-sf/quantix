@@ -59,6 +59,8 @@ export function Takeoff() {
   const selected = params.get("m");
 
   const isCad = sheet.data?.kind === "cad";
+  // what a check found, shown from the Queries screen
+  const shown = useMemo(() => (params.get("show") ?? "").split(",").filter(Boolean).map(Number), [params]);
   const copy = useScreenCopy(documentId, page, isCad);
   const info = useDrawingInfo(documentId, page, isCad);
   const rooms = useRooms(documentId, isCad && page === 1);
@@ -124,7 +126,7 @@ export function Takeoff() {
                 <CadDrawing
                   copy={copy.data}
                   hiddenLayers={hidden}
-                  marked={onSheet.find((m) => m.id === selected)?.objects ?? []}
+                  marked={onSheet.find((m) => m.id === selected)?.objects ?? shown}
                   chosen={chosen}
                   rooms={rooms.data}
                   onPick={pickObject}

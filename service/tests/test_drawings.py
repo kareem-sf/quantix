@@ -191,7 +191,10 @@ def test_the_drawing_checks_find_what_to_look_at(client, flat):
     client.post(f"/tenders/{tender_id}/units", json={"document_id": drawing, "units": "millimetres"})
     approve_map(client, tender_id, drawing)
     measure(client, tender_id, drawing, {"blocks": ["WIN-1200"]}, kind="count", label="Windows", unit="nr")
-    found = [p["message"] for p in client.get(f"/tenders/{tender_id}/checks?document_id={drawing}").json()]
+    problems = client.get(f"/tenders/{tender_id}/checks?document_id={drawing}").json()
+    found = [p["message"] for p in problems]
+    twice = next(p for p in problems if "on layer A-TEMP" in p["message"])
+    assert len(twice["objects"]) == len(twice["screen_objects"]) == 1  # one click shows it on the drawing
     assert any("“9800” where the drawing measures 10,000" in m for m in found)
     assert any("1 lines on layer A-TEMP" in m for m in found)
     assert any("Services cross fire-rated walls or floors at 1 place in A-101.dwg" in m for m in found)

@@ -175,7 +175,7 @@ function Checks({ tenderId }: { tenderId: string }) {
               <Link
                 to={
                   p.objects.length
-                    ? `/tenders/${tenderId}/takeoff?doc=${p.document_id}&page=${p.page}`
+                    ? `/tenders/${tenderId}/takeoff?doc=${p.document_id}&page=${p.page}&show=${p.screen_objects.join(",")}`
                     : `/tenders/${tenderId}/documents?doc=${p.document_id}&page=${p.page}`
                 }
                 className="text-ink-2 underline underline-offset-4"

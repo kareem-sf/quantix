@@ -7794,6 +7794,13 @@
             },
             "type": "array",
             "title": "Objects"
+          },
+          "screen_objects": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Screen Objects"
           }
         },
         "type": "object",
@@ -7802,7 +7809,8 @@
           "message",
           "document_id",
           "page",
-          "objects"
+          "objects",
+          "screen_objects"
         ],
         "title": "ProblemOut"
       },

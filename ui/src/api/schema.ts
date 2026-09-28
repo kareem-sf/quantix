@@ -2295,6 +2295,8 @@ export interface components {
             page: number;
             /** Objects */
             objects: string[];
+            /** Screen Objects */
+            screen_objects: number[];
         };
         /** ProfileIn */
         ProfileIn: {

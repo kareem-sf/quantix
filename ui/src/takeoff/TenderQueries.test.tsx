@@ -54,7 +54,7 @@ describe("Queries", () => {
     const service = fakeService({
       tenders: [tender],
       layerMaps: [map],
-      checks: [{ severity: "warning", message: "BOQ line 8.3 (Skirting) is billed but the office found nothing of it on the drawings: raise a query.", document_id: null, page: 1, objects: [] }],
+      checks: [{ severity: "warning", message: "BOQ line 8.3 (Skirting) is billed but the office found nothing of it on the drawings: raise a query.", document_id: null, page: 1, objects: [], screen_objects: [] }],
     });
     openApp("/tenders/t1/queries");
 

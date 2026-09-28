@@ -109,6 +109,7 @@ class ProblemOut(BaseModel):
     document_id: str | None
     page: int
     objects: list[str]
+    screen_objects: list[int]  # the same objects by their numbers on the Takeoff screen, to show them
 
 
 class LayerMapOut(BaseModel):
@@ -368,13 +369,21 @@ def add_drawing_measurement(tender_id: str, body: DrawingMeasurementIn, session:
 def checks(tender_id: str, session: DB, home: Home, document_id: str | None = None) -> list[ProblemOut]:
     """What Quantix's own checks find: in one drawing, or in the BOQ and across the drawings."""
     _tender(session, tender_id)
+    document = None
     if document_id:
         document, _ = _drawing(session, home, document_id)
         found = drawings.drawing_problems(session, home, document)
     else:
         found = drawings.boq_problems(session, tender_id) + drawings.grid_problems(session, home, tender_id)
     return [
-        ProblemOut(severity=p.severity, message=p.message, document_id=p.document_id, page=p.page, objects=p.objects)
+        ProblemOut(
+            severity=p.severity,
+            message=p.message,
+            document_id=p.document_id,
+            page=p.page,
+            objects=p.objects,
+            screen_objects=screen_numbers(home, document, p.objects, p.page) if document and p.objects else [],
+        )
         for p in found
     ]
 

@@ -1140,11 +1140,24 @@ impl<'a> Walker<'a> {
                 None => json!({"name": name, "anonymous": name.starts_with('*'), "xref": false, "description": "", "units": 0}),
             })
             .collect();
-        let clipped = doc
-            .objects
-            .values()
-            .filter(|o| matches!(o, ObjectType::SpatialFilter(_)))
-            .count();
+        // Each clip hangs off its block reference through the reference's own dictionaries: find the reference.
+        let mut clipped_inserts: Vec<String> = vec![];
+        let mut clipped = 0;
+        for object in doc.objects.values() {
+            let ObjectType::SpatialFilter(filter) = object else {
+                continue;
+            };
+            clipped += 1;
+            let mut owner = Some(filter.owner);
+            for _ in 0..4 {
+                let Some(h) = owner else { break };
+                if let Some(EntityType::Insert(_)) = doc.get_entity(h) {
+                    clipped_inserts.push(format!("{:X}", h.value()));
+                    break;
+                }
+                owner = doc.object_owner(h);
+            }
+        }
         let stats = &outcome.stats;
         let diagnostics: Vec<String> = stats
             .diagnostics
@@ -1171,6 +1184,7 @@ impl<'a> Walker<'a> {
                 "diagnostics": diagnostics,
                 "not_read": self.not_read,
                 "clipped": clipped,
+                "clipped_inserts": clipped_inserts,
             },
         });
         let objects = json!({
