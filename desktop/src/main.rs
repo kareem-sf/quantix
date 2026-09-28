@@ -54,8 +54,8 @@ fn open_outside(app: &AppHandle, url: &Url) {
     }
 }
 
-/// Quantix is an app, not a web page: no browser keys (reload, print, find, zoom, back) and no link address in the
-/// corner. Keys for editing text still work.
+/// Quantix is an app, not a web page: no browser keys (reload, print, find, zoom, back). Keys for editing text
+/// still work. (wry already hides the link address in the corner.)
 #[cfg(windows)]
 fn quiet(window: &WebviewWindow) {
     use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
@@ -65,7 +65,6 @@ fn quiet(window: &WebviewWindow) {
         let Ok(settings) = webview.controller().CoreWebView2().and_then(|core| core.Settings()) else {
             return;
         };
-        let _ = settings.SetIsStatusBarEnabled(false);
         if let Ok(settings) = settings.cast::<ICoreWebView2Settings3>() {
             let _ = settings.SetAreBrowserAcceleratorKeysEnabled(false);
         }
