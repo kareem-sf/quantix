@@ -8,8 +8,10 @@ from sqlalchemy.orm import Session
 
 from quantix import tenders
 from quantix.api.tenders import DB
-from quantix.documents import library, readers
+from quantix.documents import cad, library, readers
 from quantix.documents.models import Document
+from quantix.review import package
+from quantix.takeoff import drawings
 
 router = APIRouter(tags=["documents"])
 
@@ -34,6 +36,10 @@ class DocumentOut(BaseModel):
     page_count: int | None
     group_name: str | None
     description: str | None
+    # coverage, kept apart: scans Quantix still has to read by OCR, pages the office opened, pages its work cites
+    scans_to_read: int = 0
+    opened: int = 0
+    cited: int = 0
 
 
 class PageOut(BaseModel):
@@ -85,7 +91,15 @@ def add_documents(tender_id: str, files: list[UploadFile], session: DB, home: Ho
 @router.get("/tenders/{tender_id}/documents")
 def list_documents(tender_id: str, session: DB) -> list[DocumentOut]:
     _tender(session, tender_id)
-    return [DocumentOut.model_validate(d) for d in library.documents(session, tender_id)]
+    counts = {c.document.id: c for c in package.coverage(session, tender_id)}
+    return [
+        DocumentOut.model_validate(d).model_copy(
+            update={"scans_to_read": c.ocr_waiting, "opened": c.opened, "cited": c.cited}
+            if (c := counts.get(d.id))
+            else {}
+        )
+        for d in library.documents(session, tender_id)
+    ]
 
 
 @router.get("/tenders/{tender_id}/search")
@@ -109,6 +123,12 @@ def page_image(document_id: str, number: int, session: DB, home: Home) -> Respon
     path = library.stored_file(home, document)
     if document.kind == "image":
         return FileResponse(path)
+    if document.kind == "cad" and document.page_count and 1 <= number <= document.page_count:
+        try:
+            image, _ = cad.render(drawings.open_drawing(home, document), number, width=1400)
+        except (readers.Unreadable, ValueError) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return Response(image, media_type="image/png")
     if document.kind != "pdf" or not document.page_count or not 1 <= number <= document.page_count:
         raise HTTPException(status_code=404, detail="This page has no image.")
     return Response(readers.render_page(path, number), media_type="image/png")

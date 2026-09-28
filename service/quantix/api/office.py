@@ -7,8 +7,11 @@ from sqlalchemy.orm import Session
 
 from quantix import settings, tenders
 from quantix.api.tenders import DB
+from quantix.estimate import records as estimate
+from quantix.estimate.models import Rate
 from quantix.office import records
 from quantix.office.models import ENGINEER, TEAM, Decision, Staff
+from quantix.review import records as reviews
 
 router = APIRouter(tags=["office"])
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8000)]
@@ -26,6 +29,14 @@ class StaffOut(BaseModel):
     now: str | None
 
 
+class DecisionSource(BaseModel):
+    label: str
+    document_id: str | None = None
+    page: int | None = None
+    boq_item_id: str | None = None
+    url: str | None = None  # a web page the office read
+
+
 class MessageOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -34,6 +45,7 @@ class MessageOut(BaseModel):
     channel: str
     kind: str
     text: str
+    sources: list[DecisionSource] | None
     created_at: datetime
 
 
@@ -56,6 +68,10 @@ class DecisionOut(BaseModel):
     title: str
     text: str
     options: list[str]
+    # an escalation: the record the office couldn't settle, and where the problem shows
+    subject_kind: str | None
+    subject_id: str | None
+    sources: list[DecisionSource] | None
     status: str
     answer: str | None
     created_at: datetime
@@ -132,6 +148,11 @@ def answer_decision(decision_id: str, body: AnswerIn, session: DB, request: Requ
     if decision.status != "waiting":
         raise HTTPException(status_code=400, detail="This has already been decided.")
     records.answer(session, decision, body.answer)
+    reviews.apply_answer(session, decision, body.answer)
+    if decision.subject_kind == "library" and body.answer == estimate.KEEP_IN_LIBRARY:
+        rate = session.get(Rate, decision.subject_id)
+        if rate is not None:
+            estimate.save_to_library(session, rate, estimate.summary(session, rate.tender_id).currency or "—")
     session.commit()
     request.app.state.office.engineer_spoke(decision.tender_id)
     return DecisionOut.model_validate(decision)

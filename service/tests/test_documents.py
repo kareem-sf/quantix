@@ -4,6 +4,10 @@ import time
 import docx
 import openpyxl
 import pytest
+from sqlalchemy import exists, func, select
+
+from quantix.documents import library, meaning, readers
+from quantix.documents.models import Document, Page, PageChunk
 
 
 def make_pdf(pages: list[list[str]]) -> bytes:
@@ -82,6 +86,27 @@ def read_all(client, tender_id):
     raise AssertionError("The documents were not read in time.")
 
 
+def indexed(client, tender_id):
+    """Waits until the tender's pages are indexed by meaning."""
+    read_all(client, tender_id)
+    for _ in range(600):
+        with client.app.state.sessions() as session:
+            waiting = session.execute(
+                select(func.count(Page.id))
+                .join(Document, Document.id == Page.document_id)
+                .where(
+                    Document.tender_id == tender_id,
+                    Document.status == "read",
+                    Page.has_text,
+                    ~exists().where(PageChunk.page_id == Page.id),
+                )
+            ).scalar_one()
+        if meaning.loaded() and not waiting:
+            return
+        time.sleep(0.1)
+    raise AssertionError("The pages were not indexed in time.")
+
+
 def test_a_package_is_stored_and_read(client, tender, tmp_path):
     response = upload(
         client,
@@ -98,7 +123,7 @@ def test_a_package_is_stored_and_read(client, tender, tmp_path):
 
     pdf = documents["Package/Conditions.pdf"]
     assert (pdf["status"], pdf["page_count"], pdf["name"]) == ("read", 2, "Conditions.pdf")
-    assert pdf["note"] == "1 of 2 pages are scans without text. The office reads them from the page image."
+    assert pdf["note"] == "1 of 2 pages are scans without text. Quantix reads their words by OCR in the background."
     first = client.get(f"/documents/{pdf['id']}/pages/1").json()
     assert "Tender security of one percent" in first["text"] and first["has_text"] is True
     assert client.get(f"/documents/{pdf['id']}/pages/2").json()["has_text"] is False
@@ -110,14 +135,14 @@ def test_a_package_is_stored_and_read(client, tender, tmp_path):
     assert "one percent of the tender price" in word and "Validity | 120 days" in word
 
     dwg = documents["Package/Drawings/A-101.dwg"]
-    assert dwg["status"] == "unreadable" and dwg["note"].startswith("CAD drawings can't be read yet")
+    assert dwg["status"] == "unreadable" and dwg["note"].startswith("This drawing can't be opened")
     kept = (tmp_path / "tenders" / tender / "files").iterdir()
     assert sorted(f.suffix for f in kept) == [".docx", ".dwg", ".pdf", ".xlsx"]
 
 
 def test_search_finds_pages_in_english_and_arabic(client, tender):
     upload(client, tender, {"Conditions.pdf": PDF, "Bill.xlsx": make_xlsx()})
-    read_all(client, tender)
+    indexed(client, tender)
 
     hits = client.get(f"/tenders/{tender}/search", params={"q": "tender security"}).json()
     assert [(h["name"], h["page"]) for h in hits] == [("Conditions.pdf", 1)]
@@ -151,5 +176,38 @@ def test_page_images_and_originals(client, tender):
     assert client.get(f"/documents/{documents['Conditions.pdf']['id']}/file").content == PDF
 
 
+def test_a_close_up_enlarges_part_of_a_page(tmp_path):
+    from PIL import Image
+
+    path = tmp_path / "sheet.pdf"
+    path.write_bytes(PDF)
+    whole = Image.open(io.BytesIO(readers.render_page(path, 1, width=612)))
+    close = Image.open(io.BytesIO(readers.render_page(path, 1, width=612, region=(72, 60, 225, 90))))
+    assert whole.size == (612, 792)
+    assert close.size == (612, 120)  # 153 x 30 points, four times larger
+    assert close.convert("L").getextrema()[0] < 128  # the title's letters are in it
+
+
 def test_rejects_paths_that_leave_the_package(client, tender):
     assert upload(client, tender, {"../outside.pdf": PDF}).status_code == 400
+
+
+def test_broken_characters_in_pdf_text_are_repaired():
+    split_emoji, lone_half = "😀", "\udc00"  # how some PDFs hand characters over
+    assert readers.clean_text(f"a{split_emoji}b{lone_half}c") == "a\U0001f600b�c"
+
+
+def test_one_file_that_cannot_be_saved_never_stops_the_reader(client, tender, monkeypatch):
+    real = readers.read_file
+
+    def read_file(path, kind):
+        pages = real(path, kind)
+        if "Broken text" in pages[0].text:
+            pages[0].text += " with a lone \udc00 half"  # what crashed the reader on a real package
+        return pages
+
+    monkeypatch.setattr(library.readers, "read_file", read_file)
+    upload(client, tender, {"Bad.pdf": make_pdf([["Broken text"]]), "Good.pdf": make_pdf([["Good text"]])})
+    read_all(client, tender)
+    statuses = {d["name"]: d["status"] for d in client.get(f"/tenders/{tender}/documents").json()}
+    assert statuses == {"Bad.pdf": "failed", "Good.pdf": "read"}

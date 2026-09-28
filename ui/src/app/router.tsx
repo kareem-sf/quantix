@@ -1,8 +1,10 @@
 import { Navigate, Outlet, useRouteError, type RouteObject } from "react-router";
+import { Details } from "../company/Details";
 import { Rules } from "../company/Rules";
 import { Documents } from "../documents/Documents";
 import { Estimate } from "../estimate/Estimate";
 import { Library } from "../library/Library";
+import { TenderQueries } from "../takeoff/TenderQueries";
 import { Takeoff } from "../takeoff/Takeoff";
 import { DecisionPage } from "../office/DecisionPage";
 import { Office } from "../office/Office";
@@ -13,13 +15,14 @@ import { Submission } from "../submission/Submission";
 import { NewTender } from "../tenders/NewTender";
 import { Overview } from "../tenders/Overview";
 import { useTenders } from "../tenders/queries";
+import { Opening } from "./Opening";
 import { Rail } from "./Rail";
 
 function Shell() {
   return (
     <div className="flex h-full">
       <Rail />
-      <main className="flex min-w-0 grow flex-col items-center overflow-y-auto">
+      <main className="flex min-w-0 grow flex-col items-center-safe overflow-y-auto">
         <Outlet />
       </main>
     </div>
@@ -41,7 +44,7 @@ function ScreenError() {
 
 function Home() {
   const tenders = useTenders();
-  if (!tenders.data) return null;
+  if (!tenders.data) return <Opening error={tenders.isError} />;
   if (tenders.data.length > 0) return <Navigate to={`/tenders/${tenders.data[0].id}`} replace />;
   return <Navigate to="/new" replace />;
 }
@@ -57,6 +60,7 @@ export const routes: RouteObject[] = [
       { path: "/tenders/:tenderId/documents", element: <Documents /> },
       { path: "/tenders/:tenderId/office", element: <Office /> },
       { path: "/tenders/:tenderId/takeoff", element: <Takeoff /> },
+      { path: "/tenders/:tenderId/queries", element: <TenderQueries /> },
       { path: "/tenders/:tenderId/estimate", element: <Estimate /> },
       { path: "/tenders/:tenderId/subcontract", element: <Subcontract /> },
       { path: "/tenders/:tenderId/submission", element: <Submission /> },
@@ -65,6 +69,7 @@ export const routes: RouteObject[] = [
       { path: "/library", element: <Library /> },
       { path: "/directory", element: <Directory /> },
       { path: "/rules", element: <Rules /> },
+      { path: "/company", element: <Details /> },
     ],
   },
 ];

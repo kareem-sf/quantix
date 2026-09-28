@@ -72,7 +72,7 @@ export function Library() {
 
 function AddEntry() {
   const add = useAddToLibrary();
-  const blank = { kind: "material" as LibraryEntry["kind"], name: "", unit: "", rate: "", currency: "SAR", source: "" };
+  const blank = { kind: "material" as LibraryEntry["kind"], name: "", unit: "", rate: "", currency: "", source: "" };
   const [entry, setEntry] = useState(blank);
   const field = "h-9 rounded-lg border border-line-strong px-3 outline-none focus:border-ink";
   const set = (key: keyof typeof blank) => (e: { target: { value: string } }) => setEntry({ ...entry, [key]: e.target.value });
@@ -88,7 +88,7 @@ function AddEntry() {
   return (
     <form onSubmit={submit} className="mt-6 flex flex-col gap-2 border-t border-line pt-5">
       <h2 className="font-semibold text-ink-2">Add a rate</h2>
-      <div className="flex flex-wrap gap-2">
+      <div className="grid grid-cols-[150px_minmax(0,1fr)_90px_110px_90px] gap-2">
         <select aria-label="Kind" value={entry.kind} onChange={set("kind")} className={field}>
           {KINDS.map(([k, label]) => (
             <option key={k} value={k}>
@@ -96,11 +96,13 @@ function AddEntry() {
             </option>
           ))}
         </select>
-        <input aria-label="Name" required placeholder="Name" value={entry.name} onChange={set("name")} className={`${field} grow`} />
-        <input aria-label="Unit" required placeholder="Unit" value={entry.unit} onChange={set("unit")} className={`${field} w-20`} />
-        <input aria-label="Rate" required inputMode="decimal" placeholder="Rate" value={entry.rate} onChange={set("rate")} className={`${field} w-28`} />
-        <input aria-label="Currency" required value={entry.currency} onChange={set("currency")} className={`${field} w-20`} />
-        <input aria-label="Source" required placeholder="Where the rate comes from" value={entry.source} onChange={set("source")} className={`${field} grow`} />
+        <input aria-label="Name" required placeholder="Name" value={entry.name} onChange={set("name")} className={field} />
+        <input aria-label="Unit" required placeholder="Unit" value={entry.unit} onChange={set("unit")} className={field} />
+        <input aria-label="Rate" required inputMode="decimal" placeholder="Rate" value={entry.rate} onChange={set("rate")} className={field} />
+        <input aria-label="Currency" required placeholder="Currency" value={entry.currency} onChange={set("currency")} className={field} />
+      </div>
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+        <input aria-label="Source" required placeholder="Where the rate comes from" value={entry.source} onChange={set("source")} className={field} />
         <button className="h-9 rounded-lg bg-ink px-4 text-white">Add</button>
       </div>
       {add.isError && <p className="text-attention">{add.error.message}</p>}

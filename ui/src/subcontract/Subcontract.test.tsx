@@ -52,8 +52,8 @@ const groundworks = (): Package => ({
   name: "Groundworks",
   kind: "subcontract",
   items: [
-    { id: "i1", item: "3.1", description: "Excavation", unit: "m3", quantity: "1240", our_rate: "18.50" },
-    { id: "i2", item: "6.3", description: "Waterproofing", unit: "m2", quantity: "980", our_rate: "38.00" },
+    { id: "i1", section: "8485 · Earthwork", item: "3.1", description: "Excavation", unit: "m3", quantity: "1240", our_rate: "18.50" },
+    { id: "i2", section: "8486 · Earthwork", item: "6.3", description: "Waterproofing", unit: "m2", quantity: "980", our_rate: "38.00" },
   ],
   enquiries: [
     {
@@ -64,12 +64,16 @@ const groundworks = (): Package => ({
       body: "Please price items 3.1 and 6.3.",
       status: "draft",
       created_by: "s2",
+      reviewed_by: "s1",
+      review_note: "Scope and quantities match the package.",
     },
   ],
   quotes: [gulf, najd],
   recommended_quote_id: "q2",
   recommendation: "Lowest after levelling. They left out waterproofing, so I used our rate.",
   recommended_by: "s2",
+  reviewed_by: "s1",
+  review_note: "Levelled correctly; the gap is plugged with our rate.",
   selected_quote_id: null,
   created_by: "s2",
 });
@@ -87,6 +91,7 @@ describe("Subcontract", () => {
     expect(within(table).getByText("57,700.00")).toBeInTheDocument();
     expect(within(table).getByText("Gulf Groundworks excludes dewatering.")).toBeInTheDocument();
     expect(screen.getByText("Omar recommends Najd Contracting")).toBeInTheDocument();
+    expect(within(table).getByText("8486 · Earthwork")).toBeInTheDocument(); // two bills in one package
   });
 
   it("chooses the recommended quote", async () => {
@@ -124,5 +129,53 @@ describe("Directory", () => {
     );
     await userEvent.click(await screen.findByRole("button", { name: "Remove" }));
     await waitFor(() => expect(service.state.directory).toEqual([]));
+  });
+
+  it("links a firm found on the web to its website", async () => {
+    const firm = {
+      id: "co1",
+      name: "Green Concrete Readymix",
+      kind: "supplier" as const,
+      trades: "ready-mixed concrete",
+      email: null,
+      phone: null,
+      website: "https://greenconcrete.example",
+      aliases: [],
+      added_by: "s2",
+    };
+    fakeService({ tenders: [tender], directory: [firm] });
+    openApp("/directory");
+
+    expect(await screen.findByRole("link", { name: "Website" })).toHaveAttribute("href", "https://greenconcrete.example");
+  });
+
+  it("asks before adding a firm that may already be there, and merges one entered twice", async () => {
+    const firm = (id: string, name: string) => ({
+      id,
+      name,
+      kind: "subcontractor" as const,
+      trades: "Earthworks",
+      email: null,
+      phone: null,
+      aliases: [],
+      added_by: "s2",
+    });
+    const directory = [firm("co1", "Gulf Groundworks"), firm("co2", "الخليج للحفريات")];
+    const service = fakeService({ tenders: [tender], directory });
+    openApp("/directory");
+
+    await userEvent.type(await screen.findByLabelText("Company"), "Gulf Groundworks Dammam");
+    await userEvent.type(screen.getByLabelText("Trades"), "Earthworks");
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(await screen.findByText("Gulf Groundworks Dammam may be the same firm as Gulf Groundworks.")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Add as a different firm" }));
+    await waitFor(() => expect(service.state.directory.map((c) => c.name)).toContain("Gulf Groundworks Dammam"));
+
+    const arabic = (await screen.findByText("الخليج للحفريات")).closest(".border-b") as HTMLElement;
+    await userEvent.click(within(arabic).getByRole("button", { name: "Same firm as…" }));
+    await userEvent.selectOptions(within(arabic).getByLabelText("The same firm as"), "Gulf Groundworks");
+    await userEvent.click(within(arabic).getByRole("button", { name: "Merge" }));
+    await waitFor(() => expect(service.state.directory.map((c) => c.name)).not.toContain("الخليج للحفريات"));
+    expect(await screen.findByText("Also الخليج للحفريات")).toBeTruthy();
   });
 });

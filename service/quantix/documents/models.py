@@ -1,10 +1,11 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from quantix.core.db import Base, UTCDateTime
+from quantix.tenders import LOCAL_OWNER
 
 # waiting → reading → read | unreadable | failed; a document later replaced by a newer copy becomes "replaced".
 STATUSES = ("waiting", "reading", "read", "unreadable", "failed", "replaced")
@@ -25,6 +26,7 @@ class Document(Base):
     group_name: Mapped[str | None] = mapped_column(String(200))
     description: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=lambda: datetime.now(UTC))
+    read_at: Mapped[datetime | None] = mapped_column(UTCDateTime)  # when Quantix finished with it, however it went
 
     @property
     def name(self) -> str:
@@ -42,3 +44,41 @@ class Page(Base):
     has_text: Mapped[bool] = mapped_column(Boolean)
     width: Mapped[float | None] = mapped_column(Float)  # PDF page size in points, for takeoff geometry
     height: Mapped[float | None] = mapped_column(Float)
+    # a scan read by OCR: "en" or "ar" (the model that read it), "empty" (no words found) or "failed"
+    ocr: Mapped[str | None] = mapped_column(String(10))
+    ocr_score: Mapped[float | None] = mapped_column(Float)  # the OCR's mean confidence in the words it kept
+
+
+class PageChunk(Base):
+    """One passage of a page in the meaning index. A page with nothing readable gets one row without a digest, so
+    it counts as indexed."""
+
+    __tablename__ = "page_chunks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    page_id: Mapped[int] = mapped_column(ForeignKey("pages.id", ondelete="CASCADE"))
+    start: Mapped[int] = mapped_column(Integer)  # where the passage starts and stops in the page's text
+    stop: Mapped[int] = mapped_column(Integer)
+    digest: Mapped[str | None] = mapped_column(String(64))
+
+
+class WebPage(Base):
+    """A web page the office read, saved as it was then, so what the office cites from it can be checked."""
+
+    __tablename__ = "web_pages"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: uuid.uuid4().hex)
+    owner_id: Mapped[str] = mapped_column(String(64), default=LOCAL_OWNER)
+    url: Mapped[str] = mapped_column(String(2000))
+    title: Mapped[str] = mapped_column(String(300))
+    text: Mapped[str] = mapped_column(Text)
+    read_at: Mapped[datetime] = mapped_column(UTCDateTime, default=lambda: datetime.now(UTC))
+
+
+class Vector(Base):
+    """A text's meaning as the model computes it, kept by the text's digest so the same text is computed once."""
+
+    __tablename__ = "vectors"
+
+    digest: Mapped[str] = mapped_column(String(64), primary_key=True)
+    vector: Mapped[bytes] = mapped_column(LargeBinary)

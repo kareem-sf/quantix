@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { fakeService, openApp } from "../test/app";
-import { folderGroup } from "./Documents";
+import { folderGroup, subfolder } from "./Documents";
 import type { TenderDocument } from "./queries";
 
 const tender = { id: "t1", name: "Synthetic school", due_date: null, created_at: "2026-09-23T10:00:00Z" };
@@ -19,6 +19,9 @@ function doc(id: string, path: string, extra: Partial<TenderDocument> = {}): Ten
     page_count: 1,
     group_name: null,
     description: null,
+    scans_to_read: 0,
+    opened: 0,
+    cited: 0,
     ...extra,
   };
 }
@@ -30,6 +33,13 @@ describe("folder groups", () => {
     expect(folderGroup("Pkg/Drawings/A-101.pdf", all)).toBe("Drawings");
     const loose = [doc("c", "Conditions/ITT.docx"), doc("d", "BOQ.xlsx")];
     expect(folderGroup("Conditions/ITT.docx", loose)).toBe("Conditions");
+  });
+
+  it("shows the folders below the group, such as a revision", () => {
+    const all = [doc("a", "Pkg/BOQ/Rev0 (Old)/Part 1/Earth.xlsx"), doc("b", "Pkg/BOQ/Rev01 (Update)/Earth R-8486.xlsx")];
+    expect(subfolder("Pkg/BOQ/Rev0 (Old)/Part 1/Earth.xlsx", all)).toBe("Rev0 (Old) / Part 1");
+    expect(subfolder("Pkg/BOQ/Rev01 (Update)/Earth R-8486.xlsx", all)).toBe("Rev01 (Update)");
+    expect(subfolder("Pkg/ITT.docx", [...all, doc("c", "Pkg/ITT.docx")])).toBe("");
   });
 });
 
@@ -45,6 +55,25 @@ describe("Documents", () => {
 
     expect(await screen.findByText("1 of 1 read")).toBeInTheDocument();
     expect(service.state.documents[0].path).toBe("Package/Conditions.pdf");
+  });
+
+  it("shows what the office made of each document and how much of it was read", async () => {
+    const described = { group_name: "Specifications", description: "Technical specification for earthworks." };
+    fakeService({
+      tenders: [tender],
+      documents: [
+        doc("d1", "Pkg/Spec.pdf", { ...described, kind: "pdf", scans_to_read: 541, opened: 12, cited: 3 }),
+        doc("d2", "Pkg/ITT.docx", { opened: 1 }),
+      ],
+    });
+    openApp("/tenders/t1/documents");
+
+    expect(await screen.findByText("Specifications")).toBeInTheDocument();
+    expect(screen.getByText("Technical specification for earthworks.")).toBeInTheDocument();
+    expect(
+      screen.getByText("541 scanned pages still being read · the office opened 12 pages · its work cites 3"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("The office opened 1 page")).toBeInTheDocument();
   });
 
   it("groups documents, flags problems and shows a page's text", async () => {

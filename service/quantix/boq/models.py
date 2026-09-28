@@ -1,21 +1,23 @@
 """The client's bill of quantities, as the office read it, and the tender facts pricing depends on."""
 
 import uuid
-from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from quantix.core.db import Base, UTCDateTime
+from quantix.core.db import Base
+from quantix.core.review import APPROVED, Reviewed
 
-# proposed → approved | rejected. In a fully autonomous office: office_approved. A fact replaced by a newer
-# approved one becomes "replaced".
-APPROVED = ("approved", "office_approved")
+__all__ = ["APPROVED", "FACT_KINDS", "BoqItem", "Fact"]
+
 FACT_KINDS = {
     "method_of_measurement": "Method of measurement",
     "currency": "Currency",
     "vat": "VAT",
+    # what decides how much a difference between the drawings and the BOQ matters, and which document wins
+    "contract_type": "Contract type",
+    "precedence": "Order of precedence",
 }
 
 
@@ -23,23 +25,14 @@ def _id() -> str:
     return uuid.uuid4().hex
 
 
-def _now() -> datetime:
-    return datetime.now(UTC)
-
-
-class Sourced:
-    """A record the office proposed, with the page it came from and the engineer's decision."""
+class Sourced(Reviewed):
+    """A record the office proposed, with the page it came from."""
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     tender_id: Mapped[str] = mapped_column(ForeignKey("tenders.id", ondelete="CASCADE"))
     document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"))
     page: Mapped[int] = mapped_column(Integer)
     quote: Mapped[str] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(String(20), default="proposed")
-    proposed_by: Mapped[str] = mapped_column(String(32))
-    reason: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
-    decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
 
 class BoqItem(Sourced, Base):

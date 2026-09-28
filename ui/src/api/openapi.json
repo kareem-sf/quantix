@@ -238,6 +238,50 @@
             }
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "tenders"
+        ],
+        "summary": "Delete Tender",
+        "description": "The tender and everything Quantix keeps for it. Built packages in exports and the engineer's own files stay.",
+        "operationId": "delete_tender_tenders__tender_id__delete",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/ai/connections": {
@@ -501,6 +545,163 @@
         }
       }
     },
+    "/web/keys": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Get Web Keys",
+        "operationId": "get_web_keys_web_keys_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebKeys"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/web/keys/{service}": {
+      "put": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Set Web Key",
+        "description": "Keep a web research key once the service accepts it.",
+        "operationId": "set_web_key_web_keys__service__put",
+        "parameters": [
+          {
+            "name": "service",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "firecrawl",
+                "tinyfish"
+              ],
+              "type": "string",
+              "title": "Service"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebKey"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebKeys"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Remove Web Key",
+        "operationId": "remove_web_key_web_keys__service__delete",
+        "parameters": [
+          {
+            "name": "service",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "firecrawl",
+                "tinyfish"
+              ],
+              "type": "string",
+              "title": "Service"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/settings": {
       "get": {
         "tags": [
@@ -578,6 +779,50 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Settings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ai/usage": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Usage",
+        "description": "How each AI model has done in the office, and the tokens each tender's office has used.",
+        "operationId": "usage_ai_usage_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Usage"
                 }
               }
             }
@@ -819,7 +1064,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PageOut"
+                  "$ref": "#/components/schemas/quantix__api__documents__PageOut"
                 }
               }
             }
@@ -1667,7 +1912,7 @@
           "takeoff"
         ],
         "summary": "Get Sheet",
-        "description": "Any PDF page as a sheet the engineer can measure on.",
+        "description": "Any PDF page, or any page of a CAD drawing, as a sheet the engineer can measure on.",
         "operationId": "get_sheet_documents__document_id__pages__number__sheet_get",
         "parameters": [
           {
@@ -2068,6 +2313,687 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{document_id}/drawing": {
+      "get": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Get Drawing",
+        "description": "What a drawing holds: its pages, units, what couldn't be read, and one page's layers and blocks.",
+        "operationId": "get_drawing_documents__document_id__drawing_get",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DrawingOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{document_id}/pages/{number}/screen": {
+      "get": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Screen Copy",
+        "description": "A page of a drawing for the Takeoff screen to draw: its segments, objects and texts, packed.",
+        "operationId": "screen_copy_documents__document_id__pages__number__screen_get",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Number"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{document_id}/pages/{number}/choose": {
+      "post": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Choose",
+        "description": "What Quantix measures of the objects chosen: how many, their length and closed area.",
+        "operationId": "choose_documents__document_id__pages__number__choose_post",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Number"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/quantix__api__drawings__Choice"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Chosen"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{document_id}/rooms": {
+      "get": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Rooms",
+        "description": "The rooms Quantix finds in model space from the layer map.",
+        "operationId": "rooms_documents__document_id__rooms_get",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RoomOut"
+                  },
+                  "title": "Response Rooms Documents  Document Id  Rooms Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenders/{tender_id}/units": {
+      "post": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Set Units",
+        "description": "The engineer sets a drawing's units.",
+        "operationId": "set_units_tenders__tender_id__units_post",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnitsIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnitsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenders/{tender_id}/drawing-measurements": {
+      "post": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Add Drawing Measurement",
+        "description": "The engineer measures objects they chose on the Takeoff screen, or by a rule.",
+        "operationId": "add_drawing_measurement_tenders__tender_id__drawing_measurements_post",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DrawingMeasurementIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Add Drawing Measurement Tenders  Tender Id  Drawing Measurements Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenders/{tender_id}/checks": {
+      "get": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Checks",
+        "description": "What Quantix's own checks find: in one drawing, or in the BOQ and across the drawings.",
+        "operationId": "checks_tenders__tender_id__checks_get",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProblemOut"
+                  },
+                  "title": "Response Checks Tenders  Tender Id  Checks Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenders/{tender_id}/layer-maps": {
+      "get": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Layer Maps",
+        "operationId": "layer_maps_tenders__tender_id__layer_maps_get",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LayerMapOut"
+                  },
+                  "title": "Response Layer Maps Tenders  Tender Id  Layer Maps Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/layer-maps/{map_id}/decision": {
+      "post": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Decide Layer Map",
+        "operationId": "decide_layer_map_layer_maps__map_id__decision_post",
+        "parameters": [
+          {
+            "name": "map_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Map Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenders/{tender_id}/queries": {
+      "get": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Tender Queries",
+        "description": "The tender queries the office raised, and the engineer's decisions on them.",
+        "operationId": "tender_queries_tenders__tender_id__queries_get",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/QueryOut"
+                  },
+                  "title": "Response Tender Queries Tenders  Tender Id  Queries Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/queries/{query_id}/decision": {
+      "post": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Decide Query",
+        "operationId": "decide_query_queries__query_id__decision_post",
+        "parameters": [
+          {
+            "name": "query_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Query Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -2598,7 +3524,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Choice"
+                "$ref": "#/components/schemas/quantix__api__subcontract__Choice"
               }
             }
           }
@@ -2686,6 +3612,7 @@
           "subcontract"
         ],
         "summary": "Add Company",
+        "description": "Add a firm. 409 when it may be a firm already in the directory: the detail names them, and adding it again\nwith them in `different_from` confirms it is another firm.",
         "operationId": "add_company_directory_post",
         "parameters": [
           {
@@ -2719,6 +3646,65 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "It may be a firm already there"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/directory/{company_id}/merge": {
+      "post": {
+        "tags": [
+          "subcontract"
+        ],
+        "summary": "Merge Company",
+        "description": "The engineer says a firm is the same as another: its enquiries and quotes move there, and its name stays as\none of the other firm's names.",
+        "operationId": "merge_company_directory__company_id__merge_post",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Company Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Merge"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -2936,6 +3922,52 @@
                 "schema": {}
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/requirements/{requirement_id}": {
+      "delete": {
+        "tags": [
+          "submission"
+        ],
+        "summary": "Remove Requirement",
+        "description": "Take an item off the checklist, such as a duplicate. Its drafts and any attached file go with it.",
+        "operationId": "remove_requirement_requirements__requirement_id__delete",
+        "parameters": [
+          {
+            "name": "requirement_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Requirement Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -3320,6 +4352,580 @@
           }
         }
       }
+    },
+    "/company": {
+      "get": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Get Profile",
+        "description": "The firm's details for the title block and letterhead of every document Quantix writes.",
+        "operationId": "get_profile_company_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Save Profile",
+        "operationId": "save_profile_company_put",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/company/logo": {
+      "put": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Save Logo",
+        "operationId": "save_logo_company_logo_put",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_save_logo_company_logo_put"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Remove Logo",
+        "operationId": "remove_logo_company_logo_delete",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Get Logo",
+        "operationId": "get_logo_company_logo_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenders/{tender_id}/review": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "summary": "Review Queue",
+        "description": "What the staff proposed that the Tender Manager hasn't reviewed yet.",
+        "operationId": "review_queue_tenders__tender_id__review_get",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Waiting"
+                  },
+                  "title": "Response Review Queue Tenders  Tender Id  Review Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/records/{kind}/{record_id}/reopen": {
+      "post": {
+        "tags": [
+          "review"
+        ],
+        "summary": "Reopen",
+        "description": "The engineer sends back work the office, or the engineer, already approved.",
+        "operationId": "reopen_records__kind___record_id__reopen_post",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "record_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Record Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReopenIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/records/{kind}/{record_id}/findings": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "summary": "Findings",
+        "description": "What Quantix's checks find in a record now, with the Manager's reason for each warning he accepted.",
+        "operationId": "findings_records__kind___record_id__findings_get",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "record_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Record Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FindingOut"
+                  },
+                  "title": "Response Findings Records  Kind   Record Id  Findings Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenders/{tender_id}/audit": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "summary": "Tender Audit",
+        "description": "What keeps the tender from release, blockers first, with the Manager's reason for each warning he accepted.",
+        "operationId": "tender_audit_tenders__tender_id__audit_get",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FindingOut"
+                  },
+                  "title": "Response Tender Audit Tenders  Tender Id  Audit Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenders/{tender_id}/lessons": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "summary": "Tender Lessons",
+        "description": "What the office learned on this tender from work that needed correcting, and whether the engineer kept it.",
+        "operationId": "tender_lessons_tenders__tender_id__lessons_get",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LessonOut"
+                  },
+                  "title": "Response Tender Lessons Tenders  Tender Id  Lessons Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/lessons/{lesson_id}": {
+      "patch": {
+        "tags": [
+          "review"
+        ],
+        "summary": "Decide Lesson",
+        "description": "The engineer keeps a lesson as a company rule for later tenders, or drops it.",
+        "operationId": "decide_lesson_lessons__lesson_id__patch",
+        "parameters": [
+          {
+            "name": "lesson_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Lesson Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LessonDecision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LessonOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3370,6 +4976,36 @@
         ],
         "title": "Approved"
       },
+      "BlockOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "copies": {
+            "type": "integer",
+            "title": "Copies"
+          },
+          "meaning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meaning"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "copies",
+          "meaning"
+        ],
+        "title": "BlockOut"
+      },
       "Body_add_documents_tenders__tender_id__documents_post": {
         "properties": {
           "files": {
@@ -3400,6 +5036,20 @@
           "file"
         ],
         "title": "Body_attach_file_requirements__requirement_id__file_post"
+      },
+      "Body_save_logo_company_logo_put": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_save_logo_company_logo_put"
       },
       "Boq": {
         "properties": {
@@ -3439,18 +5089,70 @@
         ],
         "title": "CheckRequest"
       },
-      "Choice": {
+      "Chosen": {
         "properties": {
-          "quote_id": {
-            "type": "string",
-            "title": "Quote Id"
+          "objects": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Objects"
+          },
+          "keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Keys"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "length_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Length M"
+          },
+          "area_m2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Area M2"
+          },
+          "volume_m3": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volume M3"
           }
         },
         "type": "object",
         "required": [
-          "quote_id"
+          "objects",
+          "keys",
+          "count",
+          "length_m",
+          "area_m2",
+          "volume_m3"
         ],
-        "title": "Choice"
+        "title": "Chosen"
       },
       "ColumnsOut": {
         "properties": {
@@ -3531,6 +5233,26 @@
               }
             ],
             "title": "Phone"
+          },
+          "website": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Website"
+          },
+          "different_from": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Different From",
+            "description": "Firms in the directory the engineer says it isn't",
+            "default": []
           }
         },
         "type": "object",
@@ -3583,9 +5305,27 @@
             ],
             "title": "Phone"
           },
+          "website": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Website"
+          },
           "id": {
             "type": "string",
             "title": "Id"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Aliases"
           },
           "added_by": {
             "type": "string",
@@ -3598,6 +5338,7 @@
           "kind",
           "trades",
           "id",
+          "aliases",
           "added_by"
         ],
         "title": "CompanyOut"
@@ -3841,6 +5582,42 @@
             "type": "array",
             "title": "Options"
           },
+          "subject_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Kind"
+          },
+          "subject_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Id"
+          },
+          "sources": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DecisionSource"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sources"
+          },
           "status": {
             "type": "string",
             "title": "Status"
@@ -3869,11 +5646,71 @@
           "title",
           "text",
           "options",
+          "subject_kind",
+          "subject_id",
+          "sources",
           "status",
           "answer",
           "created_at"
         ],
         "title": "DecisionOut"
+      },
+      "DecisionSource": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "boq_item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boq Item Id"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "title": "DecisionSource"
       },
       "DocumentOut": {
         "properties": {
@@ -3944,6 +5781,21 @@
               }
             ],
             "title": "Description"
+          },
+          "scans_to_read": {
+            "type": "integer",
+            "title": "Scans To Read",
+            "default": 0
+          },
+          "opened": {
+            "type": "integer",
+            "title": "Opened",
+            "default": 0
+          },
+          "cited": {
+            "type": "integer",
+            "title": "Cited",
+            "default": 0
           }
         },
         "type": "object",
@@ -3982,6 +5834,28 @@
           "proposed_by": {
             "type": "string",
             "title": "Proposed By"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
           }
         },
         "type": "object",
@@ -3990,9 +5864,259 @@
           "title",
           "body",
           "status",
-          "proposed_by"
+          "proposed_by",
+          "reviewed_by",
+          "review_note"
         ],
         "title": "DraftOut"
+      },
+      "DrawingMeasurementIn": {
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "length",
+              "area",
+              "count",
+              "volume"
+            ],
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "choice": {
+            "$ref": "#/components/schemas/quantix__api__drawings__Choice"
+          },
+          "multiplier": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Multiplier"
+          },
+          "boq_item": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boq Item"
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_id",
+          "kind",
+          "label",
+          "unit",
+          "choice"
+        ],
+        "title": "DrawingMeasurementIn"
+      },
+      "DrawingOut": {
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "stamp": {
+            "type": "string",
+            "title": "Stamp"
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/quantix__api__drawings__PageOut"
+            },
+            "type": "array",
+            "title": "Pages"
+          },
+          "header_units": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Header Units"
+          },
+          "units": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UnitsOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "not_read": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Not Read"
+          },
+          "layers": {
+            "items": {
+              "$ref": "#/components/schemas/LayerOut"
+            },
+            "type": "array",
+            "title": "Layers"
+          },
+          "blocks": {
+            "items": {
+              "$ref": "#/components/schemas/BlockOut"
+            },
+            "type": "array",
+            "title": "Blocks"
+          },
+          "meanings": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Meanings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_id",
+          "name",
+          "stamp",
+          "pages",
+          "header_units",
+          "units",
+          "evidence",
+          "not_read",
+          "layers",
+          "blocks",
+          "meanings"
+        ],
+        "title": "DrawingOut"
+      },
+      "DueSource": {
+        "properties": {
+          "basis": {
+            "type": "string",
+            "enum": [
+              "engineer",
+              "document"
+            ],
+            "title": "Basis",
+            "description": "The engineer's own date, or a tender document's"
+          },
+          "set_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Set By",
+            "description": "Who entered it, when not the engineer: the staff member's first name"
+          },
+          "set_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Set At",
+            "description": "When it was entered; unknown for dates entered before this was kept"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "document_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Name"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote"
+          }
+        },
+        "type": "object",
+        "required": [
+          "basis",
+          "set_by",
+          "set_at"
+        ],
+        "title": "DueSource",
+        "description": "Where the due date comes from, shown with it."
       },
       "EnquiryOut": {
         "properties": {
@@ -4030,6 +6154,28 @@
           "created_by": {
             "type": "string",
             "title": "Created By"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
           }
         },
         "type": "object",
@@ -4040,7 +6186,9 @@
           "subject",
           "body",
           "status",
-          "created_by"
+          "created_by",
+          "reviewed_by",
+          "review_note"
         ],
         "title": "EnquiryOut"
       },
@@ -4188,6 +6336,28 @@
             "type": "string",
             "title": "Proposed By"
           },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
+          },
           "source": {
             "$ref": "#/components/schemas/Source"
           }
@@ -4200,12 +6370,68 @@
           "value",
           "status",
           "proposed_by",
+          "reviewed_by",
+          "review_note",
           "source"
         ],
         "title": "FactOut"
       },
+      "FindingOut": {
+        "properties": {
+          "severity": {
+            "type": "string",
+            "title": "Severity"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "refs": {
+            "items": {
+              "$ref": "#/components/schemas/quantix__api__review__SourceOut"
+            },
+            "type": "array",
+            "title": "Refs"
+          },
+          "accepted_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted By"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "severity",
+          "message",
+          "refs",
+          "accepted_by",
+          "reason"
+        ],
+        "title": "FindingOut"
+      },
       "Gates": {
         "properties": {
+          "manager": {
+            "type": "integer",
+            "title": "Manager"
+          },
           "boq": {
             "type": "integer",
             "title": "Boq"
@@ -4217,6 +6443,10 @@
           "takeoff": {
             "type": "integer",
             "title": "Takeoff"
+          },
+          "drawings": {
+            "type": "integer",
+            "title": "Drawings"
           },
           "pricing": {
             "type": "integer",
@@ -4233,9 +6463,11 @@
         },
         "type": "object",
         "required": [
+          "manager",
           "boq",
           "facts",
           "takeoff",
+          "drawings",
           "pricing",
           "subcontract",
           "submission"
@@ -4315,6 +6547,28 @@
             ],
             "title": "Reason"
           },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
+          },
           "source": {
             "$ref": "#/components/schemas/Source"
           }
@@ -4330,9 +6584,188 @@
           "status",
           "proposed_by",
           "reason",
+          "reviewed_by",
+          "review_note",
           "source"
         ],
         "title": "ItemOut"
+      },
+      "LayerMapOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "document_name": {
+            "type": "string",
+            "title": "Document Name"
+          },
+          "layers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Layers"
+          },
+          "blocks": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Blocks"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "proposed_by": {
+            "type": "string",
+            "title": "Proposed By"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "document_id",
+          "document_name",
+          "layers",
+          "blocks",
+          "note",
+          "status",
+          "proposed_by",
+          "reviewed_by",
+          "review_note"
+        ],
+        "title": "LayerMapOut"
+      },
+      "LayerOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "objects": {
+            "type": "integer",
+            "title": "Objects"
+          },
+          "types": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Types"
+          },
+          "prints": {
+            "type": "boolean",
+            "title": "Prints"
+          },
+          "meaning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meaning"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "objects",
+          "types",
+          "prints",
+          "meaning"
+        ],
+        "title": "LayerOut"
+      },
+      "LessonDecision": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "kept",
+              "dropped"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "LessonDecision"
+      },
+      "LessonOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "topic": {
+            "type": "string",
+            "title": "Topic"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "text",
+          "topic",
+          "source",
+          "status",
+          "created_at"
+        ],
+        "title": "LessonOut"
       },
       "LibraryIn": {
         "properties": {
@@ -4512,10 +6945,12 @@
             "type": "string",
             "title": "Id"
           },
-          "preliminaries": {
-            "type": "string",
-            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
-            "title": "Preliminaries"
+          "preliminary_items": {
+            "items": {
+              "$ref": "#/components/schemas/PreliminaryOut"
+            },
+            "type": "array",
+            "title": "Preliminary Items"
           },
           "overheads": {
             "type": "string",
@@ -4543,18 +6978,42 @@
           "proposed_by": {
             "type": "string",
             "title": "Proposed By"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
           }
         },
         "type": "object",
         "required": [
           "id",
-          "preliminaries",
+          "preliminary_items",
           "overheads",
           "profit",
           "adjustment",
           "note",
           "status",
-          "proposed_by"
+          "proposed_by",
+          "reviewed_by",
+          "review_note"
         ],
         "title": "MarkupsOut"
       },
@@ -4711,6 +7170,65 @@
           "proposed_by": {
             "type": "string",
             "title": "Proposed By"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
+          },
+          "rule": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule"
+          },
+          "object_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Count"
+          },
+          "objects": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objects"
           }
         },
         "type": "object",
@@ -4726,9 +7244,25 @@
           "quantity",
           "boq_item",
           "status",
-          "proposed_by"
+          "proposed_by",
+          "reviewed_by",
+          "review_note"
         ],
         "title": "MeasurementOut"
+      },
+      "Merge": {
+        "properties": {
+          "into": {
+            "type": "string",
+            "title": "Into",
+            "description": "The firm the duplicate is the same as"
+          }
+        },
+        "type": "object",
+        "required": [
+          "into"
+        ],
+        "title": "Merge"
       },
       "MessageIn": {
         "properties": {
@@ -4772,6 +7306,20 @@
             "type": "string",
             "title": "Text"
           },
+          "sources": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DecisionSource"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sources"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -4785,6 +7333,7 @@
           "channel",
           "kind",
           "text",
+          "sources",
           "created_at"
         ],
         "title": "MessageOut"
@@ -4802,6 +7351,11 @@
           "checked_at": {
             "type": "string",
             "title": "Checked At"
+          },
+          "sees_images": {
+            "type": "boolean",
+            "title": "Sees Images",
+            "default": false
           }
         },
         "type": "object",
@@ -4811,6 +7365,54 @@
           "checked_at"
         ],
         "title": "ModelCheck"
+      },
+      "ModelScore": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "turns": {
+            "type": "integer",
+            "title": "Turns"
+          },
+          "finished": {
+            "type": "integer",
+            "title": "Finished"
+          },
+          "calls": {
+            "type": "integer",
+            "title": "Calls"
+          },
+          "calls_sent_back": {
+            "type": "integer",
+            "title": "Calls Sent Back"
+          },
+          "accepted": {
+            "type": "integer",
+            "title": "Accepted"
+          },
+          "sent_back": {
+            "type": "integer",
+            "title": "Sent Back"
+          },
+          "tokens": {
+            "type": "integer",
+            "title": "Tokens"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model",
+          "turns",
+          "finished",
+          "calls",
+          "calls_sent_back",
+          "accepted",
+          "sent_back",
+          "tokens"
+        ],
+        "title": "ModelScore"
       },
       "OfficeAI": {
         "properties": {
@@ -4872,6 +7474,17 @@
             "type": "string",
             "title": "Id"
           },
+          "section": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Section"
+          },
           "item": {
             "type": "string",
             "title": "Item"
@@ -4912,6 +7525,7 @@
         "type": "object",
         "required": [
           "id",
+          "section",
           "item",
           "description",
           "unit",
@@ -4988,6 +7602,28 @@
             ],
             "title": "Recommended By"
           },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
+          },
           "selected_quote_id": {
             "anyOf": [
               {
@@ -5015,33 +7651,48 @@
           "recommended_quote_id",
           "recommendation",
           "recommended_by",
+          "reviewed_by",
+          "review_note",
           "selected_quote_id",
           "created_by"
         ],
         "title": "PackageOut"
       },
-      "PageOut": {
+      "PreliminaryOut": {
         "properties": {
-          "number": {
-            "type": "integer",
-            "title": "Number"
-          },
-          "text": {
+          "item": {
             "type": "string",
-            "title": "Text"
+            "title": "Item"
           },
-          "has_text": {
-            "type": "boolean",
-            "title": "Has Text"
+          "quantity": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Quantity"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "rate": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Rate"
+          },
+          "cost": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Cost"
           }
         },
         "type": "object",
         "required": [
-          "number",
-          "text",
-          "has_text"
+          "item",
+          "quantity",
+          "unit",
+          "rate",
+          "cost"
         ],
-        "title": "PageOut"
+        "title": "PreliminaryOut"
       },
       "PricedItem": {
         "properties": {
@@ -5124,6 +7775,238 @@
           "amount"
         ],
         "title": "PricedItem"
+      },
+      "ProblemOut": {
+        "properties": {
+          "severity": {
+            "type": "string",
+            "title": "Severity"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "objects": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Objects"
+          },
+          "screen_objects": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Screen Objects"
+          }
+        },
+        "type": "object",
+        "required": [
+          "severity",
+          "message",
+          "document_id",
+          "page",
+          "objects",
+          "screen_objects"
+        ],
+        "title": "ProblemOut"
+      },
+      "ProfileIn": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Name"
+          },
+          "address": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Address"
+          },
+          "cr_number": {
+            "type": "string",
+            "maxLength": 50,
+            "title": "Cr Number"
+          },
+          "vat_number": {
+            "type": "string",
+            "maxLength": 50,
+            "title": "Vat Number"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "address",
+          "cr_number",
+          "vat_number"
+        ],
+        "title": "ProfileIn"
+      },
+      "ProfileOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Name"
+          },
+          "address": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Address"
+          },
+          "cr_number": {
+            "type": "string",
+            "maxLength": 50,
+            "title": "Cr Number"
+          },
+          "vat_number": {
+            "type": "string",
+            "maxLength": 50,
+            "title": "Vat Number"
+          },
+          "has_logo": {
+            "type": "boolean",
+            "title": "Has Logo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "address",
+          "cr_number",
+          "vat_number",
+          "has_logo"
+        ],
+        "title": "ProfileOut"
+      },
+      "QueryOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "kind_label": {
+            "type": "string",
+            "title": "Kind Label"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "wording": {
+            "type": "string",
+            "title": "Wording"
+          },
+          "governs": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Governs"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/quantix__api__drawings__SourceOut"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "boq_item": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boq Item"
+          },
+          "figures": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Figures"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "proposed_by": {
+            "type": "string",
+            "title": "Proposed By"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "kind_label",
+          "title",
+          "detail",
+          "wording",
+          "governs",
+          "sources",
+          "boq_item",
+          "figures",
+          "status",
+          "proposed_by",
+          "reviewed_by",
+          "review_note"
+        ],
+        "title": "QueryOut"
       },
       "QuoteOut": {
         "properties": {
@@ -5399,6 +8282,16 @@
             ],
             "title": "Library Id"
           },
+          "web_page": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WebSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "note": {
             "type": "string",
             "title": "Note"
@@ -5410,6 +8303,28 @@
           "proposed_by": {
             "type": "string",
             "title": "Proposed By"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
           }
         },
         "type": "object",
@@ -5424,9 +8339,12 @@
           "page",
           "quote",
           "library_id",
+          "web_page",
           "note",
           "status",
-          "proposed_by"
+          "proposed_by",
+          "reviewed_by",
+          "review_note"
         ],
         "title": "RateOut"
       },
@@ -5447,6 +8365,20 @@
           "ready"
         ],
         "title": "ReadyIn"
+      },
+      "ReopenIn": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "ReopenIn"
       },
       "RequirementIn": {
         "properties": {
@@ -5530,6 +8462,17 @@
             "type": "string",
             "title": "Added By"
           },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
           "state": {
             "type": "string",
             "title": "State"
@@ -5577,12 +8520,183 @@
           "page",
           "quote",
           "added_by",
+          "reviewed_by",
           "state",
           "draft",
           "ready_note",
           "file_name"
         ],
         "title": "RequirementOut"
+      },
+      "RoomOut": {
+        "properties": {
+          "number": {
+            "type": "integer",
+            "title": "Number"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "area_m2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Area M2"
+          },
+          "perimeter_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Perimeter M"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "ring": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Ring"
+          }
+        },
+        "type": "object",
+        "required": [
+          "number",
+          "name",
+          "area_m2",
+          "perimeter_m",
+          "source",
+          "ring"
+        ],
+        "title": "RoomOut"
+      },
+      "Rule": {
+        "properties": {
+          "layers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Layers",
+            "description": "Layer names; \"A-WALL*\" takes every layer starting A-WALL",
+            "default": []
+          },
+          "blocks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Blocks",
+            "description": "Block names: their placed references, wherever they sit",
+            "default": []
+          },
+          "types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Types",
+            "description": "Object types: Line, Arc, Circle, Ellipse, Polyline, Spline, Hatch, Solid, Point, Insert, Text, MText, Attribute, Dimension, MLine",
+            "default": []
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text",
+            "description": "Words in the object's text or block attributes"
+          },
+          "attributes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Attributes",
+            "description": "Block attributes by tag, e.g. {'TYPE': 'D1'}",
+            "default": {}
+          },
+          "closed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closed",
+            "description": "Only closed outlines (true) or only open ones (false)"
+          },
+          "hatch_pattern": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hatch Pattern",
+            "description": "Only hatches with this pattern"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region",
+            "description": "[left, bottom, right, top] in drawing units"
+          },
+          "rooms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rooms",
+            "description": "Only objects inside these rooms, by name as query_drawing lists them; with types ['Room'], the rooms themselves (a room's length is its perimeter)",
+            "default": []
+          },
+          "keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Keys",
+            "description": "Exact objects by key, as query_drawing lists them",
+            "default": []
+          }
+        },
+        "type": "object",
+        "title": "Rule",
+        "description": "Which objects of a drawing space to take: every condition given must hold, and within a list any one will do.\nAnnotation (the drawing of dimensions, leaders and tables) is never taken."
       },
       "RuleIn": {
         "properties": {
@@ -5699,6 +8813,10 @@
             "type": "number",
             "title": "Metres Per Point"
           },
+          "ratio": {
+            "type": "integer",
+            "title": "Ratio"
+          },
           "line": {
             "items": {
               "items": {
@@ -5724,17 +8842,42 @@
           "proposed_by": {
             "type": "string",
             "title": "Proposed By"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
           }
         },
         "type": "object",
         "required": [
           "id",
           "metres_per_point",
+          "ratio",
           "line",
           "length_m",
           "dimension",
           "status",
-          "proposed_by"
+          "proposed_by",
+          "reviewed_by",
+          "review_note"
         ],
         "title": "ScaleOut"
       },
@@ -5785,12 +8928,24 @@
                 "type": "null"
               }
             ]
+          },
+          "tender_allowance": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tender Allowance"
           }
         },
         "type": "object",
         "required": [
           "office_mode",
-          "office_ai"
+          "office_ai",
+          "tender_allowance"
         ],
         "title": "Settings"
       },
@@ -5820,6 +8975,18 @@
                 "type": "null"
               }
             ]
+          },
+          "tender_allowance": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tender Allowance"
           }
         },
         "type": "object",
@@ -5856,6 +9023,22 @@
                 "type": "null"
               }
             ]
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "default": "pdf"
+          },
+          "units": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Units"
           }
         },
         "type": "object",
@@ -5990,6 +9173,10 @@
             "type": "integer",
             "title": "Waiting"
           },
+          "reviewing": {
+            "type": "integer",
+            "title": "Reviewing"
+          },
           "net": {
             "type": "string",
             "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
@@ -6070,6 +9257,7 @@
           "priced",
           "items",
           "waiting",
+          "reviewing",
           "net",
           "preliminaries",
           "overheads",
@@ -6163,21 +9351,38 @@
       "TenderChange": {
         "properties": {
           "outcome": {
-            "type": "string",
-            "enum": [
-              "open",
-              "submitted",
-              "won",
-              "lost"
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "open",
+                  "submitted",
+                  "won",
+                  "lost"
+                ]
+              },
+              {
+                "type": "null"
+              }
             ],
             "title": "Outcome"
+          },
+          "due_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due Date"
           }
         },
         "type": "object",
-        "required": [
-          "outcome"
-        ],
-        "title": "TenderChange"
+        "title": "TenderChange",
+        "description": "Only the fields sent change; a due date sent as null clears it."
       },
       "TenderCreate": {
         "properties": {
@@ -6229,6 +9434,16 @@
             "title": "Due Date",
             "description": "Submission deadline, when known"
           },
+          "due_date_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DueSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "outcome": {
             "type": "string",
             "enum": [
@@ -6254,6 +9469,104 @@
           "created_at"
         ],
         "title": "TenderOut"
+      },
+      "TenderUsage": {
+        "properties": {
+          "tender_id": {
+            "type": "string",
+            "title": "Tender Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "tokens": {
+            "type": "integer",
+            "title": "Tokens"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tender_id",
+          "name",
+          "tokens"
+        ],
+        "title": "TenderUsage"
+      },
+      "UnitsIn": {
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "units": {
+            "type": "string",
+            "title": "Units"
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_id",
+          "units"
+        ],
+        "title": "UnitsIn"
+      },
+      "UnitsOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "metres": {
+            "type": "number",
+            "title": "Metres"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "metres",
+          "status",
+          "note"
+        ],
+        "title": "UnitsOut"
+      },
+      "Usage": {
+        "properties": {
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelScore"
+            },
+            "type": "array",
+            "title": "Models"
+          },
+          "tenders": {
+            "items": {
+              "$ref": "#/components/schemas/TenderUsage"
+            },
+            "type": "array",
+            "title": "Tenders"
+          }
+        },
+        "type": "object",
+        "required": [
+          "models",
+          "tenders"
+        ],
+        "title": "Usage"
       },
       "ValidationError": {
         "properties": {
@@ -6294,6 +9607,301 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "Waiting": {
+        "properties": {
+          "ref": {
+            "type": "string",
+            "title": "Ref"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "record_id": {
+            "type": "string",
+            "title": "Record Id"
+          },
+          "producer": {
+            "type": "string",
+            "title": "Producer"
+          },
+          "line": {
+            "type": "string",
+            "title": "Line"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ref",
+          "kind",
+          "record_id",
+          "producer",
+          "line"
+        ],
+        "title": "Waiting"
+      },
+      "WebKey": {
+        "properties": {
+          "api_key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Api Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "api_key"
+        ],
+        "title": "WebKey"
+      },
+      "WebKeys": {
+        "properties": {
+          "firecrawl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Firecrawl"
+          },
+          "tinyfish": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tinyfish"
+          }
+        },
+        "type": "object",
+        "required": [
+          "firecrawl",
+          "tinyfish"
+        ],
+        "title": "WebKeys",
+        "description": "The web research keys the engineer added, as hints; None for a service without one."
+      },
+      "WebSource": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "read_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Read At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url",
+          "title",
+          "read_at"
+        ],
+        "title": "WebSource"
+      },
+      "quantix__api__documents__PageOut": {
+        "properties": {
+          "number": {
+            "type": "integer",
+            "title": "Number"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "has_text": {
+            "type": "boolean",
+            "title": "Has Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "number",
+          "text",
+          "has_text"
+        ],
+        "title": "PageOut"
+      },
+      "quantix__api__drawings__Choice": {
+        "properties": {
+          "stamp": {
+            "type": "string",
+            "title": "Stamp"
+          },
+          "objects": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Objects",
+            "default": []
+          },
+          "rule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Rule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "stamp"
+        ],
+        "title": "Choice",
+        "description": "Objects of a drawing page: by their numbers on the Takeoff screen, or by a rule."
+      },
+      "quantix__api__drawings__PageOut": {
+        "properties": {
+          "number": {
+            "type": "integer",
+            "title": "Number"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "extents": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extents"
+          },
+          "objects": {
+            "type": "integer",
+            "title": "Objects"
+          }
+        },
+        "type": "object",
+        "required": [
+          "number",
+          "name",
+          "kind",
+          "extents",
+          "objects"
+        ],
+        "title": "PageOut"
+      },
+      "quantix__api__drawings__SourceOut": {
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "document_name": {
+            "type": "string",
+            "title": "Document Name"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote"
+          },
+          "objects": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Objects"
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_id",
+          "document_name",
+          "page",
+          "quote",
+          "objects"
+        ],
+        "title": "SourceOut"
+      },
+      "quantix__api__review__SourceOut": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "document_id",
+          "page"
+        ],
+        "title": "SourceOut"
+      },
+      "quantix__api__subcontract__Choice": {
+        "properties": {
+          "quote_id": {
+            "type": "string",
+            "title": "Quote Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "quote_id"
+        ],
+        "title": "Choice"
       }
     }
   }

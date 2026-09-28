@@ -10,6 +10,8 @@ DEFAULTS: dict[str, Any] = {
     "office_mode": "engineer",
     # The connection and model the office works with: {"connection_id": ..., "model": ...}.
     "office_ai": None,
+    # The most AI tokens one tender's office may use; it pauses there. None for no limit.
+    "tender_allowance": None,
 }
 
 

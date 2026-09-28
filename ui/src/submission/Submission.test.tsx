@@ -23,6 +23,7 @@ const requirement = (id: string, title: string, state: string, extra: Partial<Re
   page: 4,
   quote: `7.3 ${title}`,
   added_by: "s3",
+  reviewed_by: "s1",
   state,
   draft: null,
   ready_note: null,
@@ -33,7 +34,15 @@ const checklist = () => [
   requirement("r1", "Bid bond, 1% of the tender price", "missing"),
   requirement("r2", "Method statement for concrete works", "review", {
     section: "Technical",
-    draft: { id: "dr1", title: "Method statement", body: "Pour sequence.", status: "proposed", proposed_by: "s3" },
+    draft: {
+      id: "dr1",
+      title: "Method statement",
+      body: "Pour sequence.",
+      status: "reviewed",
+      proposed_by: "s3",
+      reviewed_by: "s1",
+      review_note: "Follows clause 7.6.",
+    },
   }),
   requirement("r3", "Site visit certificate", "ready", { ready_note: "" }),
 ];
@@ -63,6 +72,18 @@ describe("Submission", () => {
     await waitFor(() => expect(service.state.requirements[1].draft?.status).toBe("approved"));
   });
 
+  it("removes a duplicate from the checklist after asking", async () => {
+    const service = fakeService({ tenders: [tender], staff: [layla], requirements: checklist() });
+    openApp("/tenders/t1/submission?item=r3");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Remove from checklist" }));
+    await userEvent.click(screen.getByRole("button", { name: "Keep" }));
+    expect(service.state.requirements).toHaveLength(3);
+    await userEvent.click(screen.getByRole("button", { name: "Remove from checklist" }));
+    await userEvent.click(screen.getByRole("button", { name: "Remove it" }));
+    await waitFor(() => expect(service.state.requirements.map((r) => r.id)).toEqual(["r1", "r2"]));
+  });
+
   it("marks a requirement the engineer provides as ready", async () => {
     const service = fakeService({ tenders: [tender], staff: [layla], requirements: checklist() });
     openApp("/tenders/t1/submission?item=r1");
@@ -71,8 +92,21 @@ describe("Submission", () => {
     await waitFor(() => expect(service.state.requirements[0].state).toBe("ready"));
   });
 
+  it("reopens a draft the engineer approved, with the reason", async () => {
+    const approved = { id: "dr2", title: "Programme", body: "Earthworks first.", status: "approved", proposed_by: "s3", reviewed_by: "s1", review_note: "Covers every line." };
+    const service = fakeService({ tenders: [tender], staff: [layla], requirements: [requirement("r4", "Programme", "ready", { draft: approved })] });
+    openApp("/tenders/t1/submission?item=r4");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Reopen" }));
+    await userEvent.type(screen.getByLabelText("Why it needs doing again"), "Add the yard gravel line.");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(service.state.reopened).toEqual([{ kind: "draft", id: "dr2", reason: "Add the yard gravel line." }]));
+  });
+
   it("builds the package on the engineer's computer and reports what is not ready", async () => {
-    const service = fakeService({ tenders: [tender], staff: [layla], requirements: checklist() });
+    const blocker = (message: string) => ({ severity: "blocker", message, refs: [], accepted_by: null, reason: null });
+    const audit = [blocker("1 checklist item isn’t ready: Bid bond"), blocker("VAT isn't recorded.")];
+    const service = fakeService({ tenders: [tender], staff: [layla], requirements: checklist(), audit });
     openApp("/tenders/t1/submission");
 
     await userEvent.click(await screen.findByRole("checkbox", { name: "Markups in the rates" }));

@@ -1,7 +1,12 @@
+import { IconChevronLeft } from "@tabler/icons-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
+import { Findings } from "../review/Review";
+import { isChecked } from "../review/queries";
 import { Face } from "./Face";
+import { Prose } from "./Prose";
 import { firstName, useAnswer, useDecisions, useOffice } from "./queries";
+import { Sources } from "./Sources";
 
 export function DecisionPage() {
   const { tenderId = "", decisionId = "" } = useParams();
@@ -19,6 +24,8 @@ export function DecisionPage() {
   const position = waiting.findIndex((d) => d.id === decision.id);
   const next = waiting.find((d) => d.id !== decision.id);
   const reply = own.trim() || choice;
+  // an escalation about a record: the Manager puts his recommended correction first
+  const escalated = isChecked(decision.subject_kind) && Boolean(decision.subject_id);
 
   function confirm() {
     answer.mutate(
@@ -28,10 +35,11 @@ export function DecisionPage() {
   }
 
   return (
-    <div className="flex w-[640px] flex-col gap-6 pt-12">
+    <div className="flex w-full max-w-[704px] flex-col gap-6 px-8 pt-12">
       <div className="flex items-center justify-between text-ink-2">
-        <Link to={`/tenders/${tenderId}`} className="hover:text-ink">
-          ‹ Overview
+        <Link to={`/tenders/${tenderId}`} className="flex items-center gap-1 hover:text-ink">
+          <IconChevronLeft className="size-4" stroke={1.75} />
+          Overview
         </Link>
         {position >= 0 && (
           <span>
@@ -48,11 +56,19 @@ export function DecisionPage() {
               {firstName(asker)} <span className="font-normal text-ink-3">{asker.role}</span>
             </span>
           )}
-          <span className="text-[15px] text-[#27272A]" dir="auto">
-            {decision.text}
-          </span>
+          <Prose text={decision.text} signer={asker ? firstName(asker) : undefined} className="text-[15px] text-[#27272A]" />
         </span>
       </div>
+
+      {decision.sources && decision.sources.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <span className="font-semibold text-ink-2">Where it shows</span>
+          <Sources sources={decision.sources} />
+        </div>
+      )}
+      {isChecked(decision.subject_kind) && decision.subject_id && (
+        <Findings kind={decision.subject_kind} id={decision.subject_id} tenderId={tenderId} />
+      )}
 
       {decision.status === "waiting" ? (
         <>
@@ -71,6 +87,7 @@ export function DecisionPage() {
                   className="mt-0.5 accent-ink"
                 />
                 <span className="grow text-sm font-medium">{option}</span>
+                {i === 0 && escalated && <span className="text-xs font-medium text-ink-2">Recommended</span>}
                 <span className="text-xs text-ink-4">{i + 1}</span>
               </label>
             ))}

@@ -1,0 +1,82 @@
+//! 3D solids and regions: an object's ACIS body lifted into opencadkernel's B-rep, meshed and measured. A solid's
+//! volume is exact for a cylinder or a sphere and otherwise comes from its closed mesh; a region's area from its
+//! faces. Their edges seen from above are what the drawing shows of them.
+
+use opencadcodec::entities::acis::{SabReader, SatParser};
+use opencadcodec::entities::AcisData;
+use opencadkernel::acis::lift;
+use opencadkernel::brep::bounds::body_bounds;
+use opencadkernel::brep::mass::analytic_mass_properties;
+use opencadkernel::brep::mesh::{tessellate, TessellationTolerance};
+
+/// Largest turn between two chords of a curved face, in radians (about 60 chords to a circle).
+const TURN: f64 = 0.1;
+
+pub struct Measured {
+    /// Edges seen from above, each a chain of points.
+    pub edges: Vec<Vec<[f64; 2]>>,
+    /// Enclosed volume, cubic drawing units.
+    pub volume: f64,
+    /// Area of the faces, square drawing units.
+    pub area: f64,
+}
+
+/// A body's edges and measures, or `None` when its data can't be read or its faces can't all be meshed.
+pub fn measure(data: &AcisData) -> Option<Measured> {
+    let document = if data.is_binary {
+        SabReader::read(&data.sab_data).ok()?
+    } else {
+        SatParser::parse(&data.sat_data)
+            .or_else(|_| SatParser::parse(&AcisData::decode_sat(&data.sat_data)))
+            .ok()?
+    };
+    let (bodies, _) = lift(&document);
+    if bodies.is_empty() {
+        return None;
+    }
+    let mut measured = Measured {
+        edges: vec![],
+        volume: 0.0,
+        area: 0.0,
+    };
+    for body in &bodies {
+        let bounds = body_bounds(body)?;
+        let size = (0..3)
+            .map(|k| (bounds.max[k] - bounds.min[k]).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        let meshed = tessellate(
+            body,
+            TessellationTolerance::new(TURN, (size * 1e-4).max(1e-9)),
+        );
+        if !meshed.missing_faces.is_empty() {
+            return None;
+        }
+        let mesh = &meshed.mesh;
+        measured.volume += analytic_mass_properties(body)
+            .map(|m| m.volume)
+            .or_else(|| mesh.mass_properties().map(|(volume, _)| volume))
+            .unwrap_or(0.0);
+        for t in &mesh.triangles {
+            let [a, b, c] = t.map(|i| mesh.positions[i]);
+            let (u, v) = (
+                [b[0] - a[0], b[1] - a[1], b[2] - a[2]],
+                [c[0] - a[0], c[1] - a[1], c[2] - a[2]],
+            );
+            let cross = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ];
+            measured.area += (cross[0].powi(2) + cross[1].powi(2) + cross[2].powi(2)).sqrt() / 2.0;
+        }
+        measured.edges.extend(
+            meshed
+                .drawing_edges
+                .iter()
+                .map(|e| e.positions.iter().map(|p| [p[0], p[1]]).collect::<Vec<_>>())
+                .filter(|e: &Vec<[f64; 2]>| e.len() > 1),
+        );
+    }
+    Some(measured)
+}

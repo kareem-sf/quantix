@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from quantix import tenders
 from quantix.api.tenders import DB
 from quantix.boq import records as boq
-from quantix.documents.models import Document
+from quantix.core.review import REVIEWED, UNDECIDED
+from quantix.documents.models import Document, WebPage
 from quantix.estimate import records
 from quantix.estimate.models import LibraryResource, Markups, Rate
 from quantix.office import records as office
@@ -28,6 +29,12 @@ class LineOut(BaseModel):
     cost: Decimal
 
 
+class WebSource(BaseModel):
+    url: str
+    title: str
+    read_at: datetime
+
+
 class RateOut(BaseModel):
     id: str
     basis: str
@@ -39,9 +46,12 @@ class RateOut(BaseModel):
     page: int | None
     quote: str | None
     library_id: str | None
+    web_page: WebSource | None
     note: str
     status: str
     proposed_by: str
+    reviewed_by: str | None
+    review_note: str | None
 
 
 class PricedItem(BaseModel):
@@ -56,15 +66,25 @@ class PricedItem(BaseModel):
     amount: Decimal | None
 
 
+class PreliminaryOut(BaseModel):
+    item: str
+    quantity: Decimal
+    unit: str
+    rate: Decimal
+    cost: Decimal
+
+
 class MarkupsOut(BaseModel):
     id: str
-    preliminaries: Decimal
+    preliminary_items: list[PreliminaryOut]
     overheads: Decimal
     profit: Decimal
     adjustment: Decimal
     note: str
     status: str
     proposed_by: str
+    reviewed_by: str | None
+    review_note: str | None
 
 
 class SummaryOut(BaseModel):
@@ -72,6 +92,7 @@ class SummaryOut(BaseModel):
     priced: int
     items: int
     waiting: int
+    reviewing: int
     net: Decimal
     preliminaries: Decimal
     overheads: Decimal
@@ -131,6 +152,7 @@ def _rate(session: Session, rate: Rate | None) -> RateOut | None:
     if rate.lines:
         lines = [LineOut(**{"wastage": 0, **line}, cost=records.line_cost(line)) for line in rate.lines]
     document = session.get(Document, rate.document_id) if rate.document_id else None
+    page = session.get(WebPage, rate.web_page_id) if rate.web_page_id else None
     return RateOut(
         id=rate.id,
         basis=rate.basis,
@@ -142,9 +164,12 @@ def _rate(session: Session, rate: Rate | None) -> RateOut | None:
         page=rate.page,
         quote=rate.quote,
         library_id=rate.library_id,
+        web_page=WebSource(url=page.url, title=page.title, read_at=page.read_at) if page else None,
         note=rate.note,
         status=rate.status,
         proposed_by=rate.proposed_by,
+        reviewed_by=rate.reviewed_by,
+        review_note=rate.review_note,
     )
 
 
@@ -171,8 +196,24 @@ def get_estimate(tender_id: str, session: DB) -> EstimateOut:
     markups = records.current_markups(session, tender_id)
     return EstimateOut(
         items=items,
-        markups=MarkupsOut.model_validate(markups, from_attributes=True) if markups else None,
+        markups=_markups(markups) if markups else None,
         summary=SummaryOut(**vars(records.summary(session, tender_id))),
+    )
+
+
+def _markups(markups: Markups) -> MarkupsOut:
+    items = [PreliminaryOut(**i, cost=records.preliminary_cost(i)) for i in markups.preliminary_items]
+    return MarkupsOut(
+        id=markups.id,
+        preliminary_items=items,
+        overheads=markups.overheads,
+        profit=markups.profit,
+        adjustment=markups.adjustment,
+        note=markups.note,
+        status=markups.status,
+        proposed_by=markups.proposed_by,
+        reviewed_by=markups.reviewed_by,
+        review_note=markups.review_note,
     )
 
 
@@ -180,7 +221,7 @@ def _proposed(session: Session, model: type[Rate] | type[Markups], record_id: st
     record = session.get(model, record_id)
     if record is None or tenders.get_tender(session, record.tender_id) is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    if record.status != "proposed":
+    if record.status not in UNDECIDED:
         raise HTTPException(status_code=400, detail="This has already been decided.")
     return record
 
@@ -201,10 +242,10 @@ def approve_all_rates(tender_id: str, session: DB, request: Request) -> Saved:
     waiting = [
         r
         for item in boq.items(session, tender_id)
-        if (r := records.current_rate(session, item.id)) is not None and r.status == "proposed"
+        if (r := records.current_rate(session, item.id)) is not None and r.status == REVIEWED
     ]
     for rate in waiting:
-        records.decide(session, rate, approve=True)
+        records.approve(session, rate)
     manager = office.manager(session, tender_id)
     if waiting and manager:
         office.post(session, tender_id, ENGINEER, manager.id, f"I approved {len(waiting)} rates.")
@@ -223,7 +264,9 @@ def decide_markups(markups_id: str, body: DecisionIn, session: DB, request: Requ
 
 @router.get("/library")
 def get_library(session: DB, q: str = "") -> list[LibraryOut]:
-    return [LibraryOut.model_validate(r, from_attributes=True) for r in records.library(session, q)]
+    rows = records.library(session, q)
+    session.commit()  # keeps the meaning of names searched for the first time
+    return [LibraryOut.model_validate(r, from_attributes=True) for r in rows]
 
 
 @router.post("/library", status_code=201)

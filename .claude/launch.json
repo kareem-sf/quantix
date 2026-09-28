@@ -2,6 +2,16 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "quantix-desktop",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "tauri",
+        "dev"
+      ],
+      "port": 1420
+    },
+    {
       "name": "quantix",
       "runtimeExecutable": "npm",
       "runtimeArgs": [
@@ -9,15 +19,6 @@
         "dev"
       ],
       "port": 1420
-    },
-    {
-      "name": "quantix-verify",
-      "runtimeExecutable": "cmd",
-      "runtimeArgs": [
-        "/c",
-        "set QUANTIX_HOME=%TEMP%\\quantix-verify-home&& npm run dev -- --port 1421"
-      ],
-      "port": 1421
     }
   ]
 }

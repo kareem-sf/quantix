@@ -9,13 +9,18 @@ stays in the loop and approves at every gate. The specification is `docs/spec.md
 
 - **Engineer in the loop.** Anything that changes scope, method of measurement, quantities, rates, subcontract or
   supplier choices, the final price or the release waits at a gate for the engineer. The Fully autonomous setting
-  lets the office approve its own gates, and marks each of those decisions as not reviewed. Export and release are
-  always the engineer's.
+  lets the Tender Manager's review approve those gates, and marks each as not reviewed by the engineer. Export and
+  release are always the engineer's.
+- **The Tender Manager reviews everything.** Staff produce every record; the Manager never produces one. Each
+  proposal goes to his review first: he accepts it, saying what he checked, or sends it back to whoever made it,
+  saying what to correct. Only what he accepted reaches the engineer. Nothing approves itself. Nothing is left
+  unresolved silently: what the office can't settle, he escalates to the engineer with where it shows and his
+  suggested corrections, and the engineer decides.
 - **Quantix computes, the model proposes.** Agents submit records through `propose`. Quantix validates them, checks
   their evidence and calculates every quantity, extension, total and comparison. A model never states a computed
   number as fact.
-- **Evidence.** Every factual finding cites a document location that exists and was read. Keep imported, read and
-  reviewed coverage distinct.
+- **Evidence.** Every factual finding cites a document location that exists and was read, or a web page Quantix
+  saved when it was read. Keep imported, read and reviewed coverage distinct.
 - **Staff are generated.** The Manager hires staff per tender with generated profiles. There is no default roster,
   fixed role list or hard-coded persona.
 - **Talk is real.** The team conversation shows only messages that agents actually sent through their tools.

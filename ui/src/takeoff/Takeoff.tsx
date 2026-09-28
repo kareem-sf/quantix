@@ -1,8 +1,20 @@
-import { useState, type MouseEvent } from "react";
+import { IconChevronLeft, IconChevronRight } from "@tabler/icons-react";
+import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import { useParams, useSearchParams } from "react-router";
 import { pageImage, useDocuments } from "../documents/queries";
 import { useBoq, quantity as formatQuantity } from "../estimate/queries";
 import { firstName, useOffice } from "../office/queries";
+import { Findings, Reopen, ReviewNote, SendBack, WITH_MANAGER } from "../review/Review";
+import { CadDrawing, LayerList } from "./CadDrawing";
+import {
+  useChosen,
+  useDrawingInfo,
+  useMeasureObjects,
+  useRooms,
+  useScreenCopy,
+  useSetUnits,
+  type ScreenCopy,
+} from "./cad";
 import {
   RESULTS,
   UNITS,
@@ -22,7 +34,7 @@ import {
   type Sheet,
 } from "./queries";
 
-type Tool = "select" | Kind | "scale";
+type Tool = "select" | Exclude<Kind, "volume"> | "scale";
 const TOOLS: [Tool, string][] = [
   ["select", "Select"],
   ["length", "Length"],
@@ -46,8 +58,31 @@ export function Takeoff() {
   const [zoom, setZoom] = useState(1);
   const selected = params.get("m");
 
+  const isCad = sheet.data?.kind === "cad";
+  // what a check found, shown from the Queries screen
+  const shown = useMemo(() => (params.get("show") ?? "").split(",").filter(Boolean).map(Number), [params]);
+  const copy = useScreenCopy(documentId, page, isCad);
+  const info = useDrawingInfo(documentId, page, isCad);
+  const rooms = useRooms(documentId, isCad && page === 1);
+  const [chosen, setChosen] = useState<number[]>([]);
+  const [hidden, setHidden] = useState<Set<number>>(new Set());
+  useEffect(() => {
+    setChosen([]);
+    const names = new Set(copy.data?.header.hidden ?? []);
+    setHidden(new Set((copy.data?.header.layers ?? []).flatMap((name, i) => (names.has(name) ? [i] : []))));
+  }, [copy.data]);
+  const meanings = useMemo(
+    () => new Map((info.data?.layers ?? []).flatMap((l) => (l.meaning ? [[l.name.toLowerCase(), l.meaning]] : []))),
+    [info.data],
+  );
+
   const onSheet = (takeoff.data?.measurements ?? []).filter((m) => m.document_id === documentId && m.page === page);
   const open = (doc: string, number: number) => setParams({ doc, page: String(number) });
+  const pickObject = (object: number | null, add: boolean) => {
+    if (object === null) return setChosen(add ? chosen : []);
+    if (!add) return setChosen([object]);
+    setChosen(chosen.includes(object) ? chosen.filter((o) => o !== object) : [...chosen, object]);
+  };
   const choose = (next: Tool) => {
     setTool(next);
     setDraft([]);
@@ -72,7 +107,36 @@ export function Takeoff() {
             onOpen={open}
           />
         </div>
-        {sheet.data ? (
+        {sheet.data && isCad ? (
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-2">
+              <UnitsNote tenderId={tenderId} documentId={sheet.data.document_id} scale={sheet.data.scale} header={info.data?.header_units} />
+              {chosen.length > 0 && (
+                <button onClick={() => setChosen([])} className="text-ink-2 underline underline-offset-4">
+                  Clear the choice
+                </button>
+              )}
+            </div>
+            <p className="pb-2 text-ink-3">
+              Click objects to choose them, shift-click to add more. Scroll to zoom, drag to move. Quantix measures what
+              you choose from the drawing itself.
+            </p>
+            <div className="min-h-0 grow">
+              {copy.data ? (
+                <CadDrawing
+                  copy={copy.data}
+                  hiddenLayers={hidden}
+                  marked={onSheet.find((m) => m.id === selected)?.objects ?? shown}
+                  chosen={chosen}
+                  rooms={rooms.data}
+                  onPick={pickObject}
+                />
+              ) : (
+                <p className="text-ink-2">{copy.isError ? copy.error.message : "Opening the drawing…"}</p>
+              )}
+            </div>
+          </>
+        ) : sheet.data ? (
           <>
             <div className="flex flex-wrap items-center justify-between gap-3 pb-2">
               <div role="toolbar" aria-label="Measuring tools" className="flex gap-0.5 rounded-lg bg-white p-[3px] shadow-[0_0_0_1px_var(--color-line-strong)]">
@@ -99,9 +163,9 @@ export function Takeoff() {
                 ))}
               </span>
             </div>
-            <p className="pb-2">
+            <div className="pb-2">
               <ScaleNote tenderId={tenderId} sheet={sheet.data} />
-            </p>
+            </div>
             {tool !== "select" && !finished && (
               <p className="pb-2 text-ink-2">
                 {tool === "scale"
@@ -135,11 +199,40 @@ export function Takeoff() {
         )}
       </section>
       <aside aria-label="Measurements" className="flex w-[320px] shrink-0 flex-col gap-3 overflow-y-auto border-l border-line px-5 pt-7 pb-5">
-        {finished && sheet.data ? (
+        {isCad && sheet.data && copy.data && chosen.length > 0 ? (
+          <ObjectsForm
+            tenderId={tenderId}
+            documentId={sheet.data.document_id}
+            page={page}
+            copy={copy.data}
+            chosen={chosen}
+            onDone={() => setChosen([])}
+          />
+        ) : isCad && copy.data ? (
+          <>
+            <SheetPanel
+              tenderId={tenderId}
+              measurements={onSheet}
+              selected={selected}
+              onShow={(id) => setParams({ doc: documentId!, page: String(page), m: id })}
+            />
+            <LayerList
+              copy={copy.data}
+              hidden={hidden}
+              meanings={meanings}
+              onToggle={(layer) => {
+                const next = new Set(hidden);
+                if (next.has(layer)) next.delete(layer);
+                else next.add(layer);
+                setHidden(next);
+              }}
+            />
+          </>
+        ) : finished && sheet.data ? (
           tool === "scale" ? (
             <ScaleForm tenderId={tenderId} sheet={sheet.data} line={draft} onDone={() => choose("select")} />
           ) : (
-            <MeasureForm tenderId={tenderId} sheet={sheet.data} kind={tool as Kind} points={draft} onDone={() => choose("select")} />
+            <MeasureForm tenderId={tenderId} sheet={sheet.data} kind={tool as Exclude<Kind, "volume">} points={draft} onDone={() => choose("select")} />
           )
         ) : (
           <SheetPanel tenderId={tenderId} measurements={onSheet} selected={selected} />
@@ -156,7 +249,7 @@ function SheetPicker(props: {
   onOpen: (doc: string, page: number) => void;
 }) {
   const documents = useDocuments(props.tenderId);
-  const pdfs = (documents.data ?? []).filter((d) => d.kind === "pdf" && d.status === "read");
+  const pdfs = (documents.data ?? []).filter((d) => ["pdf", "cad"].includes(d.kind) && d.status === "read");
   const measured = new Set(props.sheets.map((s) => s.document_id));
   const value = props.current.documentId ? `${props.current.documentId}|${props.current.page}` : "";
   return (
@@ -168,7 +261,7 @@ function SheetPicker(props: {
           const [doc, page] = e.target.value.split("|");
           if (doc) props.onOpen(doc, Number(page));
         }}
-        className="h-8 max-w-[260px] rounded-md border border-line-strong bg-white px-2 text-[13px]"
+        className="h-8 max-w-[380px] min-w-0 rounded-md border border-line-strong bg-white px-2 text-[13px]"
       >
         <option value="">Choose a sheet…</option>
         {props.sheets.length > 0 && (
@@ -176,7 +269,7 @@ function SheetPicker(props: {
             {props.sheets.map((s) => (
               <option key={`${s.document_id}|${s.page}`} value={`${s.document_id}|${s.page}`}>
                 {s.name} · page {s.page}
-                {s.scale ? "" : " · no scale"}
+                {s.scale ? "" : s.kind === "cad" ? " · no units" : " · no scale"}
               </option>
             ))}
           </optgroup>
@@ -207,16 +300,17 @@ function PagePicker(props: { documentId: string; page: number; count: number; on
   if (props.count <= 1) return null;
   return (
     <span className="flex items-center gap-2 text-ink-2">
-      <button disabled={props.page <= 1} onClick={() => props.onOpen(props.documentId, props.page - 1)} aria-label="Previous page">
-        ‹
+      <button disabled={props.page <= 1} onClick={() => props.onOpen(props.documentId, props.page - 1)} aria-label="Previous page" className="disabled:text-ink-4">
+        <IconChevronLeft className="size-4" stroke={1.75} />
       </button>
       Page {props.page} of {props.count}
       <button
         disabled={props.page >= props.count}
         onClick={() => props.onOpen(props.documentId, props.page + 1)}
         aria-label="Next page"
+        className="disabled:text-ink-4"
       >
-        ›
+        <IconChevronRight className="size-4" stroke={1.75} />
       </button>
     </span>
   );
@@ -224,16 +318,27 @@ function PagePicker(props: { documentId: string; page: number; count: number; on
 
 function ScaleNote({ tenderId, sheet }: { tenderId: string; sheet: Sheet }) {
   const decide = useDecideScale(tenderId);
+  const office = useOffice(tenderId);
+  const people = new Map((office.data?.staff ?? []).map((m) => [m.id, m]));
   if (!sheet.scale) return <span className="text-attention">No scale yet: use Scale on a printed dimension</span>;
   return (
-    <span className="flex items-center gap-2 text-ink-2">
+    <div className="flex flex-wrap items-center gap-2 text-ink-2">
       Scale checked on the {sheet.scale.dimension} dimension
-      {sheet.scale.status === "proposed" && (
-        <button onClick={() => decide.mutate({ id: sheet.scale!.id, approve: true })} className="font-medium text-ink">
-          Approve scale
-        </button>
+      <span className="text-ink-3" title="At the sheet's printed size: compare it with the scale in the title block">
+        · about 1:{sheet.scale.ratio.toLocaleString("en-US")}
+      </span>
+      {sheet.scale.status === "proposed" && <span className="text-ink-3">· {WITH_MANAGER}</span>}
+      {sheet.scale.status === "reviewed" && (
+        <>
+          <ReviewNote reviewedBy={sheet.scale.reviewed_by} note={sheet.scale.review_note} people={people} />
+          <button onClick={() => decide.mutate({ id: sheet.scale!.id, approve: true })} className="font-medium text-ink">
+            Approve scale
+          </button>
+          <SendBack onSend={(reason) => decide.mutate({ id: sheet.scale!.id, approve: false, reason })} />
+        </>
       )}
-    </span>
+      {["approved", "office_approved"].includes(sheet.scale.status) && <Reopen kind="scale" id={sheet.scale.id} />}
+    </div>
   );
 }
 
@@ -271,7 +376,7 @@ function Drawing(props: {
         onClick={(e) => props.drawing && props.onPoint(toPoint(e))}
       >
         {props.measurements.map((m) => {
-          const colour = m.status === "proposed" ? "var(--color-attention)" : "var(--color-ink)";
+          const colour = m.status === "reviewed" ? "var(--color-attention)" : "var(--color-ink)";
           const width = m.id === props.selected ? 3 : 1.8;
           const path = m.points.map((p) => p.join(",")).join(" ");
           const select = (e: MouseEvent) => {
@@ -308,7 +413,17 @@ function Drawing(props: {
   );
 }
 
-function SheetPanel({ tenderId, measurements, selected }: { tenderId: string; measurements: Measurement[]; selected: string | null }) {
+function SheetPanel({
+  tenderId,
+  measurements,
+  selected,
+  onShow,
+}: {
+  tenderId: string;
+  measurements: Measurement[];
+  selected: string | null;
+  onShow?: (id: string) => void;
+}) {
   const takeoff = useTakeoff(tenderId);
   const office = useOffice(tenderId);
   const decide = useDecideMeasurement(tenderId);
@@ -332,10 +447,26 @@ function SheetPanel({ tenderId, measurements, selected }: { tenderId: string; me
               <span className="font-medium">{m.label}</span>
               <span className="font-semibold">
                 {m.quantity === null
-                  ? "needs a scale"
+                  ? m.object_count === null || m.object_count === undefined
+                    ? "needs a scale"
+                    : "needs units"
                   : `${m.kind === "count" ? Number(m.quantity) : formatQuantity(m.quantity)} ${m.unit}`}
               </span>
             </span>
+            {m.object_count !== null && m.object_count !== undefined && (
+              <span className="flex justify-between gap-2.5 text-ink-3">
+                <span>
+                  {m.object_count === 0
+                    ? "Nothing on the drawing matches"
+                    : `${m.object_count.toLocaleString("en-US")} drawing ${m.object_count === 1 ? "object" : "objects"}`}
+                </span>
+                {onShow && m.object_count > 0 && (
+                  <button onClick={() => onShow(m.id)} className="text-ink-2 underline underline-offset-4">
+                    Show
+                  </button>
+                )}
+              </span>
+            )}
             <span className="flex justify-between gap-2.5 text-ink-3">
               <span>{m.boq_item ? `BOQ ${m.boq_item}` : "No BOQ item"}</span>
               {compared && (
@@ -345,15 +476,16 @@ function SheetPanel({ tenderId, measurements, selected }: { tenderId: string; me
               )}
             </span>
             <span className="text-xs text-ink-3">{by ? `Measured by ${firstName(by)}` : "Measured by you"}</span>
-            <span className="flex gap-3 pt-1">
-              {m.status === "proposed" && (
+            {m.status === "proposed" && <span className="text-xs text-ink-3">{WITH_MANAGER}</span>}
+            <ReviewNote reviewedBy={m.reviewed_by} note={m.review_note} people={people} />
+            {m.id === selected && <Findings kind="measurement" id={m.id} tenderId={tenderId} />}
+            <span className="flex flex-wrap gap-3 pt-1">
+              {m.status === "reviewed" && (
                 <>
                   <button onClick={() => decide.mutate({ id: m.id, approve: true })} className="font-medium">
                     Approve
                   </button>
-                  <button onClick={() => decide.mutate({ id: m.id, approve: false })} className="text-ink-2">
-                    Reject
-                  </button>
+                  <SendBack onSend={(reason) => decide.mutate({ id: m.id, approve: false, reason })} />
                 </>
               )}
               <button onClick={() => remove.mutate(m.id)} className="text-ink-3 hover:text-ink">
@@ -364,13 +496,174 @@ function SheetPanel({ tenderId, measurements, selected }: { tenderId: string; me
         );
       })}
       <span className="pt-2 text-xs leading-normal text-ink-3">
-        Quantix calculates every length, area and count from the marks and the sheet’s scale.
+        {onShow
+          ? "Quantix calculates every length, area, volume and count from the drawing’s own objects and its units."
+          : "Quantix calculates every length, area and count from the marks and the sheet’s scale."}
       </span>
     </>
   );
 }
 
-function MeasureForm(props: { tenderId: string; sheet: Sheet; kind: Kind; points: Point[]; onDone: () => void }) {
+const UNIT_NAMES = ["millimetres", "centimetres", "metres", "inches", "feet"];
+
+/** A CAD drawing's units: what its header says, the office's proposal, and the engineer's decision. */
+function UnitsNote(props: { tenderId: string; documentId: string; scale: Sheet["scale"]; header: string | null | undefined }) {
+  const setUnits = useSetUnits(props.tenderId);
+  const decide = useDecideScale(props.tenderId);
+  const office = useOffice(props.tenderId);
+  const people = new Map((office.data?.staff ?? []).map((m) => [m.id, m]));
+  const [choice, setChoice] = useState<string | null>(null);
+  const units = choice ?? props.header ?? "millimetres"; // what the drawing says, until the engineer picks
+  const scale = props.scale;
+  if (!scale)
+    return (
+      <span className="flex flex-wrap items-center gap-2">
+        <span className="text-attention">
+          No units yet{props.header ? `: the drawing says ${props.header}` : ": the drawing doesn’t say"}
+        </span>
+        <select aria-label="Units" value={units} onChange={(e) => setChoice(e.target.value)} className="h-7 rounded-md border border-line-strong bg-white px-1.5 text-[13px]">
+          {UNIT_NAMES.map((u) => (
+            <option key={u}>{u}</option>
+          ))}
+        </select>
+        <button onClick={() => setUnits.mutate({ document_id: props.documentId, units })} className="font-medium text-ink">
+          Set units
+        </button>
+        {setUnits.isError && <span className="text-attention">{setUnits.error.message}</span>}
+      </span>
+    );
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-ink-2">
+      Drawing units: {scale.dimension}
+      {scale.status === "proposed" && <span className="text-ink-3">· {WITH_MANAGER}</span>}
+      {scale.status === "reviewed" && (
+        <>
+          <ReviewNote reviewedBy={scale.reviewed_by} note={scale.review_note} people={people} />
+          <button onClick={() => decide.mutate({ id: scale.id, approve: true })} className="font-medium text-ink">
+            Approve units
+          </button>
+          <SendBack onSend={(reason) => decide.mutate({ id: scale.id, approve: false, reason })} />
+        </>
+      )}
+      {["approved", "office_approved"].includes(scale.status) && <Reopen kind="scale" id={scale.id} />}
+    </div>
+  );
+}
+
+/** Measure the objects the engineer chose on a CAD drawing: Quantix gives their count, length and area first. */
+function ObjectsForm(props: {
+  tenderId: string;
+  documentId: string;
+  page: number;
+  copy: ScreenCopy;
+  chosen: number[];
+  onDone: () => void;
+}) {
+  const totals = useChosen(props.documentId, props.page, props.copy.header.stamp, props.chosen);
+  const measure = useMeasureObjects(props.tenderId);
+  const boq = useBoq(props.tenderId);
+  const [kind, setKind] = useState<Kind>("count");
+  const [label, setLabel] = useState("");
+  const [unit, setUnit] = useState(UNITS.count[0]);
+  const [multiplier, setMultiplier] = useState("");
+  const [item, setItem] = useState("");
+  const needsMultiplier =
+    (kind === "length" && unit === "m2") || (kind === "area" && unit === "m3") || (kind === "volume" && unit !== "m3");
+  const t = totals.data;
+  const kinds: Kind[] = t?.volume_m3 ? ["count", "length", "area", "volume"] : ["count", "length", "area"];
+  return (
+    <form
+      className="flex flex-col gap-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        measure.mutate(
+          {
+            document_id: props.documentId,
+            kind,
+            label,
+            unit,
+            stamp: props.copy.header.stamp,
+            objects: props.chosen,
+            multiplier: needsMultiplier ? multiplier : null,
+            boq_item: item || null,
+          },
+          { onSuccess: props.onDone },
+        );
+      }}
+    >
+      <h2 className="text-[15px] font-semibold">
+        {props.chosen.length} {props.chosen.length === 1 ? "object" : "objects"} chosen
+      </h2>
+      {t && (
+        <p className="leading-normal text-ink-2">
+          {t.count.toLocaleString("en-US")} to count
+          {t.length_m ? ` · ${t.length_m.toLocaleString("en-US")} m long` : ""}
+          {t.area_m2 ? ` · ${t.area_m2.toLocaleString("en-US")} m² enclosed` : ""}
+          {t.volume_m3 ? ` · ${t.volume_m3.toLocaleString("en-US")} m³ solid` : ""}
+          {t.length_m === null && " · set the units for lengths and areas"}
+        </p>
+      )}
+      <div role="radiogroup" aria-label="Measure as" className="flex gap-1">
+        {kinds.map((k) => (
+          <button
+            type="button"
+            key={k}
+            aria-pressed={kind === k}
+            onClick={() => {
+              setKind(k);
+              setUnit(UNITS[k][0]);
+            }}
+            className={`h-7 rounded-md px-2.5 text-[13px] ${kind === k ? "bg-ink text-white" : "text-ink-2 shadow-[0_0_0_1px_var(--color-line-strong)]"}`}
+          >
+            {{ count: "Count", length: "Length", area: "Area", volume: "Volume" }[k]}
+          </button>
+        ))}
+      </div>
+      <label className="flex flex-col gap-1">
+        <span className="text-ink-2">What is it</span>
+        <input aria-label="What is it" required value={label} onChange={(e) => setLabel(e.target.value)}
+          className="h-9 rounded-lg border border-line-strong px-3 outline-none focus:border-ink" />
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-ink-2">Unit</span>
+        <select aria-label="Unit" value={unit} onChange={(e) => setUnit(e.target.value)} className="h-9 rounded-lg border border-line-strong px-2">
+          {UNITS[kind].map((u) => (
+            <option key={u}>{u}</option>
+          ))}
+        </select>
+      </label>
+      {needsMultiplier && (
+        <label className="flex flex-col gap-1">
+          <span className="text-ink-2">
+            {kind === "volume" ? `Density in ${unit} per m³` : `${kind === "length" ? "Height" : "Thickness"} in metres`}
+          </span>
+          <input aria-label="Multiplier" required inputMode="decimal" value={multiplier} onChange={(e) => setMultiplier(e.target.value)}
+            className="h-9 rounded-lg border border-line-strong px-3 outline-none focus:border-ink" />
+        </label>
+      )}
+      <label className="flex flex-col gap-1">
+        <span className="text-ink-2">BOQ item</span>
+        <select aria-label="BOQ item" value={item} onChange={(e) => setItem(e.target.value)} className="h-9 rounded-lg border border-line-strong px-2">
+          <option value="">Not in the BOQ</option>
+          {(boq.data?.items ?? []).map((i) => (
+            <option key={i.id} value={i.item}>
+              {i.item} · {i.description.slice(0, 40)}
+            </option>
+          ))}
+        </select>
+      </label>
+      {measure.isError && <p className="text-attention">{measure.error.message}</p>}
+      <div className="flex gap-2">
+        <button className="h-[38px] grow rounded-lg bg-ink text-sm text-white">Save</button>
+        <button type="button" onClick={props.onDone} className="h-[38px] rounded-lg border border-line-strong px-3.5 text-sm">
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function MeasureForm(props: { tenderId: string; sheet: Sheet; kind: Exclude<Kind, "volume">; points: Point[]; onDone: () => void }) {
   const measure = useMeasure(props.tenderId);
   const boq = useBoq(props.tenderId);
   const [label, setLabel] = useState("");

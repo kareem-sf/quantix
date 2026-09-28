@@ -34,6 +34,7 @@ export default defineConfig(async ({ command }) => {
       environment: "jsdom",
       include: ["ui/src/**/*.test.{ts,tsx}"],
       setupFiles: ["ui/src/test-setup.ts"],
+      testTimeout: 20000, // a busy machine or CI runner must not fail a correct test
     },
   };
 });

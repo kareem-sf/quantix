@@ -1,10 +1,13 @@
+import { IconX } from "@tabler/icons-react";
 import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { Face } from "../office/Face";
 import { firstName, useOffice, type Staff } from "../office/queries";
+import { Findings, Reopen, ReviewNote, SendBack, WITH_MANAGER } from "../review/Review";
 import {
   money,
   quantity,
+  exact,
   statusDot,
   statusLabel,
   useApproveAll,
@@ -22,13 +25,21 @@ import {
   type Markups,
 } from "./queries";
 
-const COLUMNS = "grid grid-cols-[56px_minmax(0,1fr)_84px_40px_84px_104px_132px] gap-3";
+// Descriptions keep a readable width; in a narrow window the table scrolls sideways rather than hiding them
+const COLUMNS = "grid min-w-fit grid-cols-[56px_minmax(120px,1fr)_84px_40px_84px_104px_120px] gap-3";
+const BASIS: Record<string, string> = {
+  quote: "From a quote",
+  library: "From the company library",
+  web: "A market price from the web",
+};
 
 /** One status for the row: the BOQ line first, then its rate. */
 function rowStatus(item: BoqItem, rate: Rate | null | undefined): [label: string, dot: string] {
-  if (item.status === "proposed") return ["Needs you", "bg-attention"];
+  if (item.status === "proposed") return ["With the Manager", "bg-ink-4"];
+  if (item.status === "reviewed") return ["Needs you", "bg-attention"];
   if (!rate) return ["Not priced", "bg-ink-4"];
-  if (rate.status === "proposed") return ["Rate needs you", "bg-attention"];
+  if (rate.status === "proposed") return ["Rate with the Manager", "bg-ink-4"];
+  if (rate.status === "reviewed") return ["Rate needs you", "bg-attention"];
   return [rate.status === "office_approved" ? "Priced by the office" : "Priced", "bg-approved"];
 }
 
@@ -46,12 +57,15 @@ export function Estimate() {
   const facts = boq.data?.facts ?? [];
   const priced = new Map((estimate.data?.items ?? []).map((p) => [p.id, p]));
   const summary = estimate.data?.summary;
-  const waitingItems = items.filter((i) => i.status === "proposed").length;
-  const waitingRates = (estimate.data?.items ?? []).filter((p) => p.rate?.status === "proposed").length;
+  const waitingItems = items.filter((i) => i.status === "reviewed").length;
+  const waitingRates = (estimate.data?.items ?? []).filter((p) => p.rate?.status === "reviewed").length;
   const waiting = waitingItems + waitingRates;
+  const withManager =
+    items.filter((i) => i.status === "proposed").length +
+    (estimate.data?.items ?? []).filter((p) => p.rate?.status === "proposed").length;
   const shown = items.filter((i) => {
     const rate = priced.get(i.id)?.rate;
-    if (filter === "waiting") return i.status === "proposed" || rate?.status === "proposed";
+    if (filter === "waiting") return i.status === "reviewed" || rate?.status === "reviewed";
     if (filter === "unpriced") return !rate;
     return true;
   });
@@ -68,6 +82,7 @@ export function Estimate() {
             <span className="text-ink-2">
               {summary?.priced ?? 0} of {items.length} {items.length === 1 ? "item" : "items"} priced
               {waiting > 0 && ` · ${waiting} need${waiting === 1 ? "s" : ""} you`}
+              {withManager > 0 && ` · ${withManager} with the Manager`}
             </span>
           </div>
           <div className="flex items-center gap-3">
@@ -103,7 +118,7 @@ export function Estimate() {
         {facts.length > 0 && (
           <div className="mt-5 flex flex-col gap-1.5">
             {facts.map((f) => (
-              <FactLine key={f.id} tenderId={tenderId} fact={f} />
+              <FactLine key={f.id} tenderId={tenderId} fact={f} people={people} />
             ))}
           </div>
         )}
@@ -151,7 +166,7 @@ export function Estimate() {
                     className={`${COLUMNS} w-full items-center border-b border-subtle px-2 py-3 text-left ${item.id === selected?.id ? "rounded-md bg-subtle" : "hover:bg-rail"}`}
                   >
                     <span className="text-ink-3">{item.item}</span>
-                    <span className="min-w-0 truncate" dir="auto">
+                    <span className="line-clamp-2 min-w-0" dir="auto" title={item.description}>
                       {item.description}
                     </span>
                     <span className="text-right">{quantity(item.quantity)}</span>
@@ -175,7 +190,7 @@ export function Estimate() {
         </div>
       </section>
       {params.get("view") === "summary" && summary ? (
-        <SummaryPanel tenderId={tenderId} summary={summary} markups={estimate.data?.markups ?? null} />
+        <SummaryPanel tenderId={tenderId} summary={summary} markups={estimate.data?.markups ?? null} people={people} />
       ) : (
         selected && (
           <ItemPanel tenderId={tenderId} item={selected} priced={priced.get(selected.id)} people={people} />
@@ -193,40 +208,45 @@ function Close() {
     <button
       aria-label="Close"
       onClick={() => setParams(show ? { show } : {})}
-      className="-mt-3 -mr-2 self-end text-lg leading-none text-ink-3 hover:text-ink"
+      className="-mt-3 -mr-2 self-end text-ink-3 hover:text-ink"
     >
-      ×
+      <IconX className="size-[18px]" stroke={1.75} />
     </button>
   );
 }
 
-function FactLine({ tenderId, fact }: { tenderId: string; fact: Fact }) {
+function FactLine({ tenderId, fact, people }: { tenderId: string; fact: Fact; people: Map<string, Staff> }) {
   const decide = useDecide(tenderId);
   return (
-    <div className="flex items-center gap-3 rounded-lg bg-rail px-3 py-2">
-      <span className={`size-[7px] shrink-0 rounded-full ${statusDot(fact.status)}`} />
-      <span className="grow" dir="auto">
-        <span className="font-medium">{fact.label}:</span> {fact.value}{" "}
-        <Link
-          to={`/tenders/${tenderId}/documents?doc=${fact.source.document_id}&page=${fact.source.page}`}
-          className="text-ink-3 underline-offset-2 hover:underline"
-        >
-          {fact.source.document_name}, page {fact.source.page}
-        </Link>
-      </span>
-      {fact.status === "proposed" ? (
-        <span className="flex gap-2">
-          <button onClick={() => decide.mutate({ kind: "fact", id: fact.id, approve: true })} className="font-medium">
-            Approve
-          </button>
-          <button onClick={() => decide.mutate({ kind: "fact", id: fact.id, approve: false })} className="text-ink-2">
-            Reject
-          </button>
+    <>
+      <div className="flex items-center gap-3 rounded-lg bg-rail px-3 py-2">
+        <span className={`size-[7px] shrink-0 rounded-full ${statusDot(fact.status)}`} />
+        <span className="grow" dir="auto">
+          <span className="font-medium">{fact.label}:</span> {fact.value}{" "}
+          <Link
+            to={`/tenders/${tenderId}/documents?doc=${fact.source.document_id}&page=${fact.source.page}`}
+            className="text-ink-3 underline-offset-2 hover:underline"
+          >
+            {fact.source.document_name}, page {fact.source.page}
+          </Link>
         </span>
-      ) : (
-        <span className="text-ink-3">{statusLabel(fact.status)}</span>
-      )}
-    </div>
+        {fact.status === "reviewed" ? (
+          <span className="flex flex-wrap items-center justify-end gap-2">
+            <ReviewNote reviewedBy={fact.reviewed_by} note={fact.review_note} people={people} />
+            <button onClick={() => decide.mutate({ kind: "fact", id: fact.id, approve: true })} className="font-medium">
+              Approve
+            </button>
+            <SendBack onSend={(reason) => decide.mutate({ kind: "fact", id: fact.id, approve: false, reason })} />
+          </span>
+        ) : (
+          <span className="flex items-center gap-2 text-ink-3">
+            {statusLabel(fact.status)}
+            {["approved", "office_approved"].includes(fact.status) && <Reopen kind="fact" id={fact.id} />}
+          </span>
+        )}
+      </div>
+      <Findings kind="fact" id={fact.id} tenderId={tenderId} />
+    </>
   );
 }
 
@@ -308,7 +328,7 @@ function ItemPanel(props: { tenderId: string; item: BoqItem; priced?: Priced; pe
                 <span>{line.resource}</span>
                 <span className="text-xs text-ink-3">
                   {quantity(line.quantity)} {line.unit}
-                  {Number(line.wastage) > 0 && ` incl. ${Number(line.wastage) * 100}% waste`} × {money(line.rate)}
+                  {Number(line.wastage) > 0 && ` incl. ${Number(line.wastage) * 100}% waste`} × {exact(line.rate)}
                 </span>
               </span>
               <span>{money(line.cost)}</span>
@@ -330,7 +350,7 @@ function ItemPanel(props: { tenderId: string; item: BoqItem; priced?: Priced; pe
           {pricedBy && <Face id={pricedBy.id} size={24} />}
           <span className="flex flex-col gap-1">
             <span className="font-medium">
-              {rate.basis === "quote" ? "From a quote" : rate.basis === "library" ? "From the company library" : "Estimated"}
+              {BASIS[rate.basis] ?? "Estimated"}
               {pricedBy && <span className="font-normal text-ink-3"> · {firstName(pricedBy)}</span>}
             </span>
             <span className="text-[#27272A]">{rate.note}</span>
@@ -341,6 +361,23 @@ function ItemPanel(props: { tenderId: string; item: BoqItem; priced?: Priced; pe
               >
                 {rate.source_document}, page {rate.page}
               </Link>
+            )}
+            {rate.web_page && (
+              <>
+                <a
+                  href={rate.web_page.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-medium underline underline-offset-4"
+                  dir="auto"
+                >
+                  {rate.web_page.title}, read{" "}
+                  {new Date(rate.web_page.read_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                </a>
+                <span className="text-[#27272A]" dir="auto">
+                  “{rate.quote}”
+                </span>
+              </>
             )}
           </span>
         </div>
@@ -360,22 +397,28 @@ function ItemPanel(props: { tenderId: string; item: BoqItem; priced?: Priced; pe
         {enteredBy && <span className="text-ink-3">Entered by {firstName(enteredBy)}</span>}
       </div>
 
+      <Findings kind="boq" id={item.id} tenderId={tenderId} />
+      {rate && <Findings kind="rate" id={rate.id} tenderId={tenderId} />}
       <div className="grow" />
-      {item.status === "proposed" ? (
+      {(item.status === "proposed" || rate?.status === "proposed") && <p className="text-ink-2">{WITH_MANAGER}</p>}
+      {item.status === "reviewed" ? (
         <Decide
           who={enteredBy}
           approveLabel="Approve item"
           onApprove={() => decideItem.mutate({ kind: "item", id: item.id, approve: true })}
           onReject={(reason) => decideItem.mutate({ kind: "item", id: item.id, approve: false, reason })}
-        />
+        >
+          <ReviewNote reviewedBy={item.reviewed_by} note={item.review_note} people={props.people} />
+        </Decide>
       ) : (
-        rate?.status === "proposed" && (
+        rate?.status === "reviewed" && (
           <Decide
             who={pricedBy}
             approveLabel="Approve rate"
             onApprove={() => decideRate.mutate({ id: rate.id, approve: true, save_to_library: save })}
             onReject={(reason) => decideRate.mutate({ id: rate.id, approve: false, reason })}
           >
+            <ReviewNote reviewedBy={rate.reviewed_by} note={rate.review_note} people={props.people} />
             <label className="flex items-center gap-2 text-ink-2">
               <input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} className="accent-ink" />
               Save to the company library
@@ -383,6 +426,14 @@ function ItemPanel(props: { tenderId: string; item: BoqItem; priced?: Priced; pe
           </Decide>
         )
       )}
+      {rate?.status === "office_approved" && (
+        <div className="flex flex-col gap-1.5">
+          <span className="text-ink-2">Approved by the office</span>
+          <ReviewNote reviewedBy={rate.reviewed_by} note={rate.review_note} people={props.people} />
+          <Reopen kind="rate" id={rate.id} />
+        </div>
+      )}
+      {rate?.status === "approved" && <Reopen kind="rate" id={rate.id} />}
       {(decideItem.isError || decideRate.isError) && (
         <p className="text-attention">{(decideItem.error ?? decideRate.error)?.message}</p>
       )}
@@ -390,12 +441,18 @@ function ItemPanel(props: { tenderId: string; item: BoqItem; priced?: Priced; pe
   );
 }
 
-function SummaryPanel({ tenderId, summary, markups }: { tenderId: string; summary: Summary; markups: Markups | null }) {
+function SummaryPanel(props: {
+  tenderId: string;
+  summary: Summary;
+  markups: Markups | null;
+  people: Map<string, Staff>;
+}) {
+  const { tenderId, summary, markups } = props;
   const decide = useDecideMarkups(tenderId);
   const pct = (value: string) => `${(Number(value) * 100).toFixed(1).replace(/\.0$/, "")}%`;
   const rows: [string, string][] = [
     ["Net cost", summary.net],
-    [`Preliminaries${markups ? ` ${pct(markups.preliminaries)}` : ""}`, summary.preliminaries],
+    ["Preliminaries", summary.preliminaries],
     [`Overheads${markups ? ` ${pct(markups.overheads)}` : ""}`, summary.overheads],
     [`Profit${markups ? ` ${pct(markups.profit)}` : ""}`, summary.profit],
     ["Adjustment", summary.adjustment],
@@ -445,17 +502,30 @@ function SummaryPanel({ tenderId, summary, markups }: { tenderId: string; summar
       {markups ? (
         <div className="flex flex-col gap-2 rounded-[10px] bg-rail p-3">
           <span className="font-medium">Markups · {statusLabel(markups.status)}</span>
+          {markups.preliminary_items.length > 0 && (
+            <ul aria-label="Preliminaries" className="flex flex-col gap-1">
+              {markups.preliminary_items.map((p) => (
+                <li key={p.item} className="flex justify-between gap-3">
+                  <span className="min-w-0 text-ink-2">
+                    {p.item} · {Number(p.quantity).toLocaleString("en-US")} {p.unit} × {exact(p.rate)}
+                  </span>
+                  <span className="shrink-0">{money(p.cost)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
           <span className="leading-normal text-[#27272A]">{markups.note}</span>
-          {markups.status === "proposed" && (
-            <span className="flex gap-3">
+          <Findings kind="markups" id={markups.id} tenderId={tenderId} />
+          <ReviewNote reviewedBy={markups.reviewed_by} note={markups.review_note} people={props.people} />
+          {markups.status === "reviewed" && (
+            <span className="flex flex-wrap gap-3">
               <button onClick={() => decide.mutate({ id: markups.id, approve: true })} className="font-medium">
                 Approve markups
               </button>
-              <button onClick={() => decide.mutate({ id: markups.id, approve: false })} className="text-ink-2">
-                Reject
-              </button>
+              <SendBack onSend={(reason) => decide.mutate({ id: markups.id, approve: false, reason })} />
             </span>
           )}
+          {["approved", "office_approved"].includes(markups.status) && <Reopen kind="markups" id={markups.id} />}
         </div>
       ) : (
         <p className="text-ink-2">No markups yet. Ask the office to propose them.</p>

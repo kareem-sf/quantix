@@ -11,14 +11,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from quantix.boq import records as boq
-from quantix.boq.models import APPROVED, BoqItem, Fact
-from quantix.documents.evidence import check_quote, numbers_in
+from quantix.boq.models import BoqItem, Fact
+from quantix.core.review import APPROVED, LIVE, PROPOSED, REVIEWED, UNDECIDED
+from quantix.documents import meaning
+from quantix.documents.evidence import check_quote, check_web_quote, numbers_in
+from quantix.documents.library import superseded
 from quantix.estimate.models import LibraryResource, Markups, Rate
 from quantix.office import records as office
 from quantix.office.models import ENGINEER
 from quantix.tenders import LOCAL_OWNER
 
-LIVE = ("proposed", *APPROVED)
 CENT = Decimal("0.01")
 KINDS = ("labour", "plant", "material", "subcontract")
 
@@ -52,7 +54,7 @@ def rate_of(rate: Rate) -> Decimal:
 
 
 def current_rate(session: Session, item_id: str) -> Rate | None:
-    """The item's rate: the newest approved one, or else the newest proposed one."""
+    """The item's rate: the newest approved one, or else the newest one still being decided."""
     query = select(Rate).where(Rate.boq_item_id == item_id, Rate.status.in_(LIVE)).order_by(Rate.created_at.desc())
     rates = list(session.scalars(query))
     return next((r for r in rates if r.status in APPROVED), rates[0] if rates else None)
@@ -71,17 +73,16 @@ def propose_rate(
     page: int | None = None,
     quote: str | None = None,
     library_id: str | None = None,
-    status: str = "proposed",
+    status: str = PROPOSED,
+    web_page_id: str | None = None,
 ) -> Rate:
-    item = session.scalars(
-        select(BoqItem).where(
-            BoqItem.tender_id == tender_id, BoqItem.item == item_number.strip(), BoqItem.status.in_(boq.ACTIVE)
-        )
-    ).first()
-    if item is None:
-        raise ValueError(f"There is no BOQ item {item_number}. Use list_boq to see the items.")
+    item = boq.find_item(session, tender_id, item_number)
     if (unit_rate is None) == (not lines):
         raise ValueError("Give either a unit rate or a build-up of lines, not both.")
+    if (unit_rate is not None and unit_rate <= 0) or any(line.rate <= 0 or line.quantity <= 0 for line in lines or []):
+        raise ValueError(
+            "A rate must be more than zero. If you have no basis for a rate yet, say so instead of proposing one."
+        )
     if basis == "quote":
         if not (document_id and page and quote):
             raise ValueError("A quoted rate needs the document, page and the quoted line.")
@@ -91,21 +92,38 @@ def propose_rate(
     elif basis == "library":
         if library_id is None or session.get(LibraryResource, library_id) is None:
             raise ValueError("That library entry doesn't exist. Use search_library to find it.")
+    elif basis == "web":
+        if not (web_page_id and quote):
+            raise ValueError("A web price needs the saved page's id from read_web_page and the quoted line.")
+        check_web_quote(session, web_page_id, quote)
+        if unit_rate is not None and unit_rate not in numbers_in(quote):
+            raise ValueError(f"The rate {unit_rate} is not in the quoted line.")
+        if len(note.strip()) < 20:
+            raise ValueError(
+                "A web price needs a note: what it covers and how it becomes this item's rate (delivery, tax, units)."
+            )
+        _check_not_settled(session, item)
     elif basis == "estimate":
         if len(note.strip()) < 20:
             raise ValueError("An estimated rate needs its reasoning in the note: outputs, prices and assumptions.")
+        _check_not_settled(session, item)
     else:
-        raise ValueError("The basis is quote, library or estimate.")
+        raise ValueError("The basis is quote, library, web or estimate.")
+    # the newest proposal for an item replaces any still being decided, so one rate per line is reviewed
+    for older in session.scalars(select(Rate).where(Rate.boq_item_id == item.id, Rate.status.in_(UNDECIDED))):
+        older.status = "replaced"
     rate = Rate(
         tender_id=tender_id,
         boq_item_id=item.id,
         basis=basis,
         unit_rate=unit_rate,
         lines=[line.model_dump(mode="json") for line in lines] if lines else None,
-        document_id=document_id,
-        page=page,
-        quote=quote,
-        library_id=library_id,
+        # only the evidence the basis calls for, which was checked above
+        document_id=document_id if basis == "quote" else None,
+        page=page if basis == "quote" else None,
+        quote=quote if basis in ("quote", "web") else None,
+        library_id=library_id if basis == "library" else None,
+        web_page_id=web_page_id if basis == "web" else None,
         note=note.strip(),
         proposed_by=by,
         status=status,
@@ -115,6 +133,18 @@ def propose_rate(
     if status in APPROVED:
         _replace_older(session, rate)
     return rate
+
+
+def _check_not_settled(session: Session, item: BoqItem) -> None:
+    """A line the engineer has approved takes a new estimate only once they have sent a rate on it back since, or
+    the quote it was priced from has been replaced by a newer copy."""
+    rates = session.scalars(select(Rate).where(Rate.boq_item_id == item.id, Rate.decided_at.is_not(None)))
+    decided = sorted(rates, key=lambda r: r.decided_at)
+    if decided and decided[-1].status == "approved" and not superseded(session, decided[-1].document_id):
+        raise ValueError(
+            f"The engineer approved {rate_of(decided[-1])} for {boq.reference(item)}; a new estimate doesn't replace "
+            "it. If you think it is wrong, say why with raise_concern. A quote for the line can replace it."
+        )
 
 
 def _replace_older(session: Session, record: Rate | Markups) -> None:
@@ -127,24 +157,27 @@ def _replace_older(session: Session, record: Rate | Markups) -> None:
         older.status = "replaced"
 
 
-def decide(session: Session, record: Rate | Markups, approve: bool, reason: str | None = None) -> None:
-    record.status = "approved" if approve else "rejected"
-    record.reason = reason
-    record.decided_at = datetime.now(UTC)
-    if approve:
-        _replace_older(session, record)
-    if not approve and record.proposed_by != ENGINEER:
-        if isinstance(record, Rate):
-            what = f"the rate for BOQ item {session.get(BoqItem, record.boq_item_id).item}"
-        else:
-            what = "the markups"
-        office.post(
-            session,
-            record.tender_id,
-            ENGINEER,
-            record.proposed_by,
-            f"I rejected {what}" + (f": {reason}" if reason else "."),
-        )
+def label(session: Session, record: Rate | Markups) -> str:
+    """How a message names the record."""
+    if isinstance(record, Rate):
+        return f"the rate for BOQ item {boq.reference(session.get(BoqItem, record.boq_item_id))}"
+    return "the markups"
+
+
+def approve(session: Session, record: Rate | Markups, status: str = "approved") -> None:
+    """Approved by the engineer, or by a fully autonomous office once the Tender Manager has reviewed it."""
+    record.status, record.decided_at = status, datetime.now(UTC)
+    _replace_older(session, record)
+
+
+def decide(session: Session, record: Rate | Markups, approve_it: bool, reason: str | None = None) -> None:
+    if approve_it:
+        approve(session, record)
+    else:
+        office.send_back(session, record.tender_id, record, label(session, record), reason, ENGINEER)
+
+
+KEEP_IN_LIBRARY = "Keep it in the library"  # the engineer's answer to the office's suggestion that saves the rate
 
 
 def save_to_library(session: Session, rate: Rate, currency: str) -> int:
@@ -165,25 +198,45 @@ def save_to_library(session: Session, rate: Rate, currency: str) -> int:
     return len(entries)
 
 
+class PreliminaryIn(BaseModel):
+    """One site cost, priced for the whole job. Quantix multiplies quantity by rate: for a premium or a financing
+    cost, give the amount it is charged on as the quantity and the rate as a fraction, e.g. third-party liability
+    as 3,600,000 (SAR of subcontract value) × 0.003."""
+
+    item: str = Field(description="e.g. Site engineer, Plant mobilisation, Third-party liability insurance")
+    quantity: Decimal = Field(gt=0, description="e.g. 3 (months), 1 (sum) or 3600000 (SAR insured)")
+    unit: str = Field(description="e.g. month, trip, sum, SAR insured")
+    rate: Decimal = Field(gt=0, description="The price per unit, e.g. 18000 a month, or 0.003 for a 0.3% premium")
+
+
+def preliminary_cost(item: dict) -> Decimal:
+    return money(Decimal(str(item["quantity"])) * Decimal(str(item["rate"])))
+
+
 def propose_markups(
     session: Session,
     tender_id: str,
     by: str,
-    preliminaries: Decimal,
+    preliminaries: list[PreliminaryIn],
     overheads: Decimal,
     profit: Decimal,
     adjustment: Decimal,
     note: str,
-    status: str = "proposed",
+    status: str = PROPOSED,
 ) -> Markups:
-    for name, value in (("preliminaries", preliminaries), ("overheads", overheads), ("profit", profit)):
+    for name, value in (("overheads", overheads), ("profit", profit)):
         if not 0 <= value < 1:
-            raise ValueError(f"Give {name} as a fraction between 0 and 1, e.g. 0.08 for 8%.")
-    for older in session.scalars(select(Markups).where(Markups.tender_id == tender_id, Markups.status == "proposed")):
+            raise ValueError(f"Give {name} as a fraction between 0 and 1, e.g. 0.06 for 6%.")
+    current = current_markups(session, tender_id)
+    if current is not None and current.status == "approved" and by != ENGINEER:
+        raise ValueError(
+            "The engineer approved the markups. If you think they need changing, say why with raise_concern."
+        )
+    for older in session.scalars(select(Markups).where(Markups.tender_id == tender_id, Markups.status.in_(UNDECIDED))):
         older.status = "replaced"
     markups = Markups(
         tender_id=tender_id,
-        preliminaries=preliminaries,
+        preliminary_items=[item.model_dump(mode="json") for item in preliminaries],
         overheads=overheads,
         profit=profit,
         adjustment=adjustment,
@@ -209,7 +262,8 @@ class Summary:
     currency: str
     priced: int
     items: int
-    waiting: int
+    waiting: int  # rates the Tender Manager reviewed, waiting for the engineer
+    reviewing: int = 0  # rates with the Tender Manager for review
     net: Decimal = Decimal(0)
     preliminaries: Decimal = Decimal(0)
     overheads: Decimal = Decimal(0)
@@ -235,14 +289,15 @@ def summary(session: Session, tender_id: str) -> Summary:
         result.items += 1
         rate = current_rate(session, item.id)
         if rate is None or item.quantity is None:
-            result.unpriced.append(item.item)
+            result.unpriced.append(boq.reference(item))
             continue
         result.priced += 1
-        result.waiting += rate.status == "proposed"
+        result.waiting += rate.status == REVIEWED
+        result.reviewing += rate.status == PROPOSED
         result.net += money(item.quantity * rate_of(rate))
     markups = current_markups(session, tender_id)
     if markups:
-        result.preliminaries = money(result.net * markups.preliminaries)
+        result.preliminaries = sum((preliminary_cost(i) for i in markups.preliminary_items), Decimal(0))
         result.overheads = money((result.net + result.preliminaries) * markups.overheads)
         result.profit = money((result.net + result.preliminaries + result.overheads) * markups.profit)
         result.adjustment = markups.adjustment
@@ -257,16 +312,21 @@ def summary(session: Session, tender_id: str) -> Summary:
 
 
 def waiting(session: Session, tender_id: str) -> int:
-    rows = (
-        session.scalars(select(Rate.id).where(Rate.tender_id == tender_id, Rate.status == "proposed")).all()
-        + session.scalars(select(Markups.id).where(Markups.tender_id == tender_id, Markups.status == "proposed")).all()
+    """Rates and markups the Tender Manager reviewed, waiting for the engineer: the rates the Estimate shows, so the
+    count and the page agree."""
+    rates = [current_rate(session, item.id) for item in boq.items(session, tender_id)]
+    markups = current_markups(session, tender_id)
+    return sum(r is not None and r.status == REVIEWED for r in rates) + (
+        markups is not None and markups.status == REVIEWED
     )
-    return len(rows)
 
 
 def library(session: Session, query: str = "") -> list[LibraryResource]:
-    """The firm's rates whose names contain every word of the query."""
+    """The firm's rates whose names contain every word of the query, then those close to it in meaning."""
     words = query.lower().split()
     query_rows = select(LibraryResource).where(LibraryResource.owner_id == LOCAL_OWNER)
-    rows = session.scalars(query_rows.order_by(LibraryResource.kind, LibraryResource.name))
-    return [r for r in rows if all(w in r.name.lower() for w in words)]
+    rows = list(session.scalars(query_rows.order_by(LibraryResource.kind, LibraryResource.name)))
+    matched = [all(w in r.name.lower() for w in words) for r in rows]
+    exact = [r for r, m in zip(rows, matched, strict=True) if m]
+    others = [r for r, m in zip(rows, matched, strict=True) if not m]
+    return exact + meaning.closest(session, query, others, lambda r: r.name)

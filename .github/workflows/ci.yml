@@ -13,8 +13,16 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: The drawing reader the service runs (qx-dwg)
+        run: cargo build --release --manifest-path cad/Cargo.toml
       - run: pip install -e "./service[dev]"
       - run: ruff check service && ruff format --check service
+      - name: The meaning model the tests fetch once
+        uses: actions/cache@v6
+        with:
+          path: service/.pytest_cache/d/quantix-models
+          key: multilingual-e5-small-761b726
       - run: pytest service
 
   interface:
@@ -44,3 +52,5 @@ jobs:
         with:
           components: clippy
       - run: cargo clippy --manifest-path desktop/Cargo.toml -- -D warnings
+      - run: cargo clippy --manifest-path cad/Cargo.toml -- -D warnings
+      - run: cargo test --manifest-path cad/Cargo.toml

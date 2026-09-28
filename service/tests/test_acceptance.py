@@ -1,13 +1,13 @@
 """A synthetic tender goes end to end through every gate: the real office runtime with a scripted model for the
-staff, and the engineer deciding through the API, from the package to the built submission."""
+staff, the Tender Manager reviewing their work, and the engineer deciding through the API, from the package to the
+built submission."""
 
 import re
 
 import openpyxl
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart, UserPromptPart
-from pydantic_ai.models.function import FunctionModel
 from test_documents import make_pdf, read_all, upload
-from test_office import wait_for
+from test_office import scripted, wait_for
 from test_submission import client_bill
 
 from quantix import settings
@@ -62,6 +62,8 @@ def phases(docs):
     estimate_note = "Plant output 4.5 m3/hr at 83.25 per hour; no disposal off site."
     return {
         "enter the BOQ": [
+            ("read_page", {"document_id": bill, "page": 1}),  # the office cites only what it has read
+            ("read_page", {"document_id": itt, "page": 1}),
             ("propose_boq_items", {"items": items}),
             ("propose_fact", {"kind": "currency", "value": "SAR", "quote": "Saudi Riyals (SAR)", **fact}),
             ("propose_fact", {"kind": "vat", "value": "15%", "quote": "VAT at 15%", **fact}),
@@ -72,10 +74,18 @@ def phases(docs):
             ("propose_rate", {"boq_item": "4.3", "basis": "estimate", "unit_rate": "3488.00", "note": estimate_note}),
             (
                 "propose_markups",
-                {"preliminaries": "0.10", "overheads": "0", "profit": "0", "adjustment": "0", "note": "Site costs."},
+                {
+                    "preliminaries": [{"item": "Site costs", "quantity": 1, "unit": "sum", "rate": "15672.28"}],
+                    "overheads": "0",
+                    "profit": "0",
+                    "adjustment": "0",
+                    "note": "Site costs.",
+                },
             ),
         ],
         "SUBCONTRACT": [
+            ("read_page", {"document_id": gulf, "page": 1}),
+            ("read_page", {"document_id": najd, "page": 1}),
             ("add_company", {"name": "Gulf Waterproofing", "kind": "subcontractor", "trades": "Waterproofing"}),
             ("add_company", {"name": "Najd Contracting", "kind": "subcontractor", "trades": "Waterproofing"}),
             ("create_package", {"name": "Waterproofing", "kind": "subcontract", "boq_items": ["6.3"]}),
@@ -150,12 +160,24 @@ def test_a_synthetic_tender_goes_through_every_gate_to_a_built_package(client, t
     script = phases(read_all(client, tender_id))
     settings.save(tmp_path, office_ai={"connection_id": "scripted", "model": "brain"})
     replies: list[str] = []
+    reviewed: list[str] = []  # everything the Manager accepted
 
     def brain(messages, info):
         if info.output_tools:  # appointing the Tender Manager
             return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, RANIA)])
         done = [str(p.content) for m in messages for p in m.parts if isinstance(p, ToolReturnPart)]
         new = new_for_me(messages)
+        prompt = next(str(p.content) for m in messages for p in m.parts if isinstance(p, UserPromptPart))
+        if "You are Rania Farouk" in info.instructions and "Waiting for your review:" in prompt:
+            # The Manager reviews everything Layla proposed before it reaches the engineer
+            if not done:
+                return ModelResponse(parts=[ToolCallPart("review_queue", {})])
+            if len(done) == 1:
+                refs = re.findall(r"^(\w+ [0-9a-f]{8}) ·", done[0], re.MULTILINE)
+                reviewed.extend(refs)
+                verdicts = [{"record": r, "accept": True, "note": "Checked against the tender's pages."} for r in refs]
+                return ModelResponse(parts=[ToolCallPart("review", {"verdicts": verdicts})])
+            return ModelResponse(parts=[TextPart("Done.")])
         if "You are Rania Farouk" in info.instructions and "Please price this tender" in new:
             steps = [
                 (
@@ -169,6 +191,7 @@ def test_a_synthetic_tender_goes_through_every_gate_to_a_built_package(client, t
                         "working_style": "Checks every figure twice.",
                         "opinions": "Won't guess a rate she can source.",
                         "voice": "Plain and precise.",
+                        "work": ["boq", "pricing", "subcontract", "submission"],
                     },
                 ),
                 ("assign_task", {"staff_name": "Layla Nasser", "title": "enter the BOQ", "brief": "BOQ and facts."}),
@@ -187,7 +210,7 @@ def test_a_synthetic_tender_goes_through_every_gate_to_a_built_package(client, t
             args = {**args, "task_id": re.search(r"Your open tasks:\n- (\w+):", prompt).group(1)}
         return ModelResponse(parts=[ToolCallPart(name, args)])
 
-    client.app.state.office.model = lambda: FunctionModel(brain)
+    client.app.state.office.model = lambda: scripted(brain)
     gates = lambda: client.get(f"/tenders/{tender_id}/gates").json()  # noqa: E731
 
     def tell_layla(text):
@@ -225,9 +248,30 @@ def test_a_synthetic_tender_goes_through_every_gate_to_a_built_package(client, t
     priced_boq, method = checklist
     client.post(f"/drafts/{method['draft']['id']}/decision", json={"approve": True})
     client.post(f"/requirements/{priced_boq['id']}/ready", json={"ready": True, "note": "Attached as the workbook."})
-    assert gates() == {"boq": 0, "facts": 0, "takeoff": 0, "pricing": 0, "subcontract": 0, "submission": 0}
+    assert gates() == {
+        "manager": 0,
+        "boq": 0,
+        "facts": 0,
+        "takeoff": 0,
+        "drawings": 0,
+        "pricing": 0,
+        "subcontract": 0,
+        "submission": 0,
+    }
+    # Every record reached the engineer through the Manager's review: 3 BOQ lines, 2 facts, 2 rates, the markups,
+    # the recommendation, 2 checklist items and the draft
+    assert sorted({r.split()[0] for r in reviewed}) == [
+        "boq",
+        "checklist",
+        "draft",
+        "fact",
+        "markups",
+        "rate",
+        "recommendation",
+    ]
+    assert len(reviewed) == 12
 
-    # Net 22,940.00 + 98,012.80 + 35,770.00 = 156,722.80; preliminaries 10% = 15,672.28; total 172,395.08.
+    # Net 22,940.00 + 98,012.80 + 35,770.00 = 156,722.80; site costs 15,672.28 (10%); total 172,395.08.
     summary = client.get(f"/tenders/{tender_id}/estimate").json()["summary"]
     assert (summary["net"], summary["total"], summary["vat"], summary["total_with_vat"]) == (
         "156722.80",

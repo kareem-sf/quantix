@@ -73,6 +73,10 @@ MODEL_MISSING = "This model isn't available on this account."
 
 def explain(error: BaseException) -> str:
     """A plain sentence for the engineer. Never includes the key or the raw response."""
+    for _ in range(5):  # Pydantic AI wraps the provider's own error; explain from that
+        if _status(error) is not None or error.__cause__ is None:
+            break
+        error = error.__cause__
     status = _status(error)
     text = str(error).lower()
     if status in (401, 403, "UNAUTHENTICATED", "PERMISSION_DENIED") or "api key" in text or "api_key" in text:
@@ -81,6 +85,8 @@ def explain(error: BaseException) -> str:
         return MODEL_MISSING
     if status in (402, 429, "RESOURCE_EXHAUSTED"):
         return "The service is limiting requests, or the account is out of credit. Try again later."
+    if "timeout" in type(error).__name__.lower():
+        return "The AI service took too long to answer. Try again, or choose a faster model in Settings."
     if status in ("UNAVAILABLE", "DEADLINE_EXCEEDED") or "connect" in type(error).__name__.lower():
         return "Couldn't reach the service. Check the internet connection and the address."
     return f"The service answered with an error ({status or type(error).__name__})."

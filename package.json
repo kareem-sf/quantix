@@ -10,18 +10,23 @@
     "test:ui": "vitest run",
     "test:service": "node scripts/python.mjs -m pytest service",
     "lint:service": "node scripts/python.mjs -m ruff check service && node scripts/python.mjs -m ruff format --check service",
-    "check": "npm run typecheck && npm run lint:service && cargo clippy --manifest-path desktop/Cargo.toml -- -D warnings",
+    "check": "npm run typecheck && npm run lint:service && cargo clippy --manifest-path desktop/Cargo.toml -- -D warnings && cargo clippy --manifest-path cad/Cargo.toml -- -D warnings",
+    "cad": "cargo build --release --manifest-path cad/Cargo.toml",
     "verify": "npm run check && npm run test:service && npm run test:ui",
     "bindings": "node scripts/python.mjs -m quantix.openapi ui/src/api/openapi.json && openapi-typescript ui/src/api/openapi.json -o ui/src/api/schema.ts",
     "tauri": "tauri"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
+    "@lobehub/icons-static-svg": "^1.95.1",
+    "@tabler/icons-react": "^3.48.0",
     "@tanstack/react-query": "^5.103.2",
     "openapi-fetch": "^0.17.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "react-router": "^8.4.0"
+    "react-markdown": "^10.1.0",
+    "react-router": "^8.4.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

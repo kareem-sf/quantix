@@ -3,13 +3,15 @@
 import hashlib
 import logging
 import threading
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
-from quantix.documents import readers
+from quantix.documents import meaning, readers
 from quantix.documents.arabic import searchable
 from quantix.documents.models import Document, Page
 
@@ -18,6 +20,11 @@ log = logging.getLogger("quantix.documents")
 
 def files_dir(home: Path, tender_id: str) -> Path:
     return home / "tenders" / tender_id / "files"
+
+
+def home_of(session: Session) -> Path:
+    """The data home a session's database lives in: the drawings Quantix read are kept there beside it."""
+    return Path(session.get_bind().url.database).parent
 
 
 def stored_file(home: Path, document: Document) -> Path:
@@ -61,29 +68,59 @@ def documents(session: Session, tender_id: str) -> list[Document]:
     return list(session.scalars(query))
 
 
+def superseded(session: Session, document_id: str | None) -> bool:
+    """Whether a newer copy of the file has replaced this one."""
+    document = session.get(Document, document_id) if document_id else None
+    return document is not None and document.status == "replaced"
+
+
+def copies(session: Session, document: Document) -> list[Document]:
+    """Every copy of the same file in the tender, the current one included."""
+    query = select(Document).where(Document.tender_id == document.tender_id, Document.path == document.path)
+    return list(session.scalars(query))
+
+
+def newer_copy(session: Session, document: Document) -> Document | None:
+    """The copy that replaced this one, or None if it is current."""
+    return next((d for d in copies(session, document) if d.status != "replaced" and d.id != document.id), None)
+
+
 def page(session: Session, document_id: str, number: int) -> Page | None:
     return session.scalars(select(Page).where(Page.document_id == document_id, Page.number == number)).first()
 
 
 def search(session: Session, tender_id: str, query: str, limit: int = 40) -> list[dict]:
-    """Pages containing every word of the query, best matches first."""
+    """Pages with every word of the query, and pages that say the same in other words or in the other language,
+    best matches first. A page found both ways ranks highest."""
     words = [w for w in searchable(query).split() if w]
     if not words:
         return []
     match = " ".join('"' + w.replace('"', '""') + '"' for w in words)
-    rows = session.execute(
+    exact = session.scalars(
         text(
-            "SELECT d.id, d.path, p.number, p.text "
-            "FROM pages_fts JOIN pages p ON p.id = pages_fts.rowid JOIN documents d ON d.id = p.document_id "
+            "SELECT p.id FROM pages_fts JOIN pages p ON p.id = pages_fts.rowid "
+            "JOIN documents d ON d.id = p.document_id "
             "WHERE pages_fts MATCH :match AND d.tender_id = :tender AND d.status = 'read' "
             "ORDER BY rank LIMIT :limit"
         ),
         {"match": match, "tender": tender_id, "limit": limit},
-    )
-    return [
-        {"document_id": r[0], "name": r[1].rsplit("/", 1)[-1], "page": r[2], "snippet": snippet(r[3], words)}
-        for r in rows
-    ]
+    ).all()
+    close = meaning.close_pages(session, tender_id, query, limit)
+    ranks: dict[int, float] = {}  # reciprocal rank fusion of the two lists
+    for ranked in (exact, [page_id for page_id, *_ in close]):
+        for rank, page_id in enumerate(ranked):
+            ranks[page_id] = ranks.get(page_id, 0.0) + 1 / (60 + rank)
+    passage = {page_id: (start, stop) for page_id, _, start, stop in close}
+    hits = []
+    for page_id in sorted(ranks, key=lambda p: -ranks[p])[:limit]:
+        found = session.get(Page, page_id)
+        document = session.get(Document, found.document_id)
+        if page_id in passage and page_id not in exact:  # found by meaning alone: its closest passage
+            shown = _shorten(" ".join(found.text[slice(*passage[page_id])].split()))
+        else:
+            shown = snippet(found.text, words)
+        hits.append({"document_id": document.id, "name": document.name, "page": found.number, "snippet": shown})
+    return hits
 
 
 def snippet(page_text: str, words: list[str], width: int = 200) -> str:
@@ -91,16 +128,30 @@ def snippet(page_text: str, words: list[str], width: int = 200) -> str:
     lines = [line for line in page_text.splitlines() if line.strip()] or [""]
     best = max(lines, key=lambda line: sum(w in searchable(line) for w in words))
     marked = [f"[{word}]" if any(w in searchable(word) for w in words) else word for word in best.split()]
-    result = " ".join(marked)
-    return result if len(result) <= width else result[: width - 1].rsplit(" ", 1)[0] + " …"
+    return _shorten(" ".join(marked), width)
+
+
+def _shorten(line: str, width: int = 200) -> str:
+    return line if len(line) <= width else line[: width - 1].rsplit(" ", 1)[0] + " …"
 
 
 class Reader:
-    """Reads waiting documents one at a time on a background thread."""
+    """Reads waiting documents one at a time on a background thread.
 
-    def __init__(self, home: Path, sessions: sessionmaker[Session]):
+    `on_read` runs in the same transaction that saves a read document, before anything else can see it as read, and
+    returns what to add to its note. `after_read` runs once it is saved."""
+
+    def __init__(
+        self,
+        home: Path,
+        sessions: sessionmaker[Session],
+        on_read: Callable[[Session, Document], str | None] | None = None,
+        after_read: Callable[[], None] | None = None,
+    ):
         self.home = home
         self.sessions = sessions
+        self.on_read = on_read
+        self.after_read = after_read
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="quantix-reader", daemon=True)
@@ -141,7 +192,7 @@ class Reader:
             session.commit()
             if claimed.rowcount == 0:
                 return True
-            path, kind = stored_file(self.home, document), document.kind
+            path, kind, document_id = stored_file(self.home, document), document.kind, document.id
             try:
                 pages = readers.read_file(path, kind)
             except readers.Unreadable as reason:
@@ -151,31 +202,50 @@ class Reader:
                 outcome, note, pages = "failed", "Quantix couldn't read this file.", []
             else:
                 outcome, note = "read", None
-            if outcome == "read":
-                for p in pages:
-                    session.add(
-                        Page(
-                            document_id=document.id,
-                            number=p.number,
-                            text=p.text,
-                            search_text=searchable(p.text),
-                            has_text=p.has_text,
-                            width=p.width,
-                            height=p.height,
+            try:
+                if outcome == "read":
+                    for p in pages:
+                        session.add(
+                            Page(
+                                document_id=document.id,
+                                number=p.number,
+                                text=p.text,
+                                search_text=searchable(p.text),
+                                has_text=p.has_text,
+                                width=p.width,
+                                height=p.height,
+                            )
                         )
-                    )
-                scans = sum(not p.has_text for p in pages)
-                if kind == "pdf" and scans:
-                    note = (
-                        f"{scans} of {len(pages)} pages are scans without text. "
-                        "The office reads them from the page image."
-                    )
-            session.execute(
-                update(Document)
-                .where(Document.id == document.id, Document.status == "reading")
-                .values(status=outcome, note=note)
-            )
-            if outcome == "read":
-                session.execute(update(Document).where(Document.id == document.id).values(page_count=len(pages)))
-            session.commit()
+                    scans = sum(not p.has_text for p in pages)
+                    if kind == "pdf" and scans:
+                        note = (
+                            f"{scans} of {len(pages)} pages are scans without text. "
+                            "Quantix reads their words by OCR in the background."
+                        )
+                    session.execute(update(Document).where(Document.id == document.id).values(page_count=len(pages)))
+                if self.on_read is not None:
+                    session.refresh(document)
+                    try:
+                        added = self.on_read(session, document)
+                    except Exception:  # noqa: BLE001  (the document is read even if what follows from it fails)
+                        log.exception("Following up the reading of %s failed", document.id)
+                        added = None
+                    note = " ".join(n for n in (note, added) if n) or None
+                saved = session.execute(
+                    update(Document)
+                    .where(Document.id == document.id, Document.status == "reading")
+                    .values(status=outcome, note=note, read_at=datetime.now(UTC))
+                )
+                session.commit()
+                if saved.rowcount and self.after_read is not None:
+                    self.after_read()
+            except Exception:  # noqa: BLE001  (one bad file must never stop the reader for every other file)
+                session.rollback()
+                log.exception("Saving %s failed", document_id)
+                session.execute(
+                    update(Document)
+                    .where(Document.id == document_id, Document.status == "reading")
+                    .values(status="failed", note="Quantix couldn't read this file.")
+                )
+                session.commit()
             return True

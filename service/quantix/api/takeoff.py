@@ -7,25 +7,31 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from quantix import tenders
+from quantix.api import drawings as drawing_api
 from quantix.api.tenders import DB
 from quantix.boq.models import BoqItem
+from quantix.core.review import UNDECIDED
 from quantix.documents import library, readers
 from quantix.documents.models import Document
 from quantix.office.models import ENGINEER
-from quantix.takeoff import records
+from quantix.takeoff import drawings, records
 from quantix.takeoff.models import Measurement, Scale
 
 router = APIRouter(tags=["takeoff"])
+UI_VERTICES = 50_000  # what the screen snaps to; the office snaps on the service against every point
 
 
 class ScaleOut(BaseModel):
     id: str
     metres_per_point: float
+    ratio: int  # 1:n at the sheet's printed size, to check against the title block
     line: list[list[float]]
     length_m: float
     dimension: str
     status: str
     proposed_by: str
+    reviewed_by: str | None
+    review_note: str | None
 
 
 class Sheet(BaseModel):
@@ -35,6 +41,8 @@ class Sheet(BaseModel):
     width: float
     height: float
     scale: ScaleOut | None
+    kind: str = "pdf"  # pdf | cad: a CAD drawing's page is measured by its objects, in its units
+    units: str | None = None  # a CAD drawing's units, once set
 
 
 class MeasurementOut(BaseModel):
@@ -50,6 +58,12 @@ class MeasurementOut(BaseModel):
     boq_item: str | None
     status: str
     proposed_by: str
+    reviewed_by: str | None
+    review_note: str | None
+    # on a CAD drawing: the rule that chose its objects, how many, and their numbers on the Takeoff screen
+    rule: dict | None = None
+    object_count: int | None = None
+    objects: list[int] | None = None
 
 
 class ComparisonOut(BaseModel):
@@ -105,17 +119,26 @@ def _scale(scale: Scale | None) -> ScaleOut | None:
     return ScaleOut(
         id=scale.id,
         metres_per_point=scale.metres_per_point,
+        ratio=records.drawing_ratio(scale.metres_per_point),
         line=scale.line,
         length_m=scale.length_m,
         dimension=scale.dimension,
         status=scale.status,
         proposed_by=scale.proposed_by,
+        reviewed_by=scale.reviewed_by,
+        review_note=scale.review_note,
     )
 
 
 def _measurement(session: Session, m: Measurement) -> MeasurementOut:
     item = session.get(BoqItem, m.boq_item_id) if m.boq_item_id else None
+    drawn = {}
+    if m.entities is not None:
+        document = session.get(Document, m.document_id)
+        objects = drawing_api.screen_numbers(library.home_of(session), document, m.entities)
+        drawn = {"rule": m.rule, "object_count": len(m.entities), "objects": objects}
     return MeasurementOut(
+        **drawn,
         id=m.id,
         document_id=m.document_id,
         page=m.page,
@@ -128,6 +151,8 @@ def _measurement(session: Session, m: Measurement) -> MeasurementOut:
         boq_item=item.item if item else None,
         status=m.status,
         proposed_by=m.proposed_by,
+        reviewed_by=m.reviewed_by,
+        review_note=m.review_note,
     )
 
 
@@ -140,18 +165,24 @@ def _sheets(session: Session, tender_id: str, measured: list[Measurement]) -> li
     sheets = []
     for document_id, number in keys:
         document = session.get(Document, document_id)
-        page = library.page(session, document_id, number)
-        sheets.append(
-            Sheet(
-                document_id=document_id,
-                name=document.name,
-                page=number,
-                width=page.width,
-                height=page.height,
-                scale=_scale(records.scale_for(session, document_id, number)),
-            )
-        )
+        sheets.append(_sheet(session, document, number))
     return sheets
+
+
+def _sheet(session: Session, document: Document, number: int) -> Sheet:
+    page = library.page(session, document.id, number)
+    scale = records.scale_for(session, document.id, number)
+    units = drawings.unit_name(scale.metres_per_point) if scale and document.kind == "cad" else None
+    return Sheet(
+        document_id=document.id,
+        name=document.name,
+        page=number,
+        width=page.width or 0.0,
+        height=page.height or 0.0,
+        scale=_scale(scale),
+        kind=document.kind,
+        units=units,
+    )
 
 
 @router.get("/tenders/{tender_id}/takeoff")
@@ -167,19 +198,12 @@ def get_takeoff(tender_id: str, session: DB) -> Takeoff:
 
 @router.get("/documents/{document_id}/pages/{number}/sheet")
 def get_sheet(document_id: str, number: int, session: DB) -> Sheet:
-    """Any PDF page as a sheet the engineer can measure on."""
+    """Any PDF page, or any page of a CAD drawing, as a sheet the engineer can measure on."""
     document = session.get(Document, document_id)
     page = library.page(session, document_id, number) if document else None
     if document is None or page is None or not page.width or tenders.get_tender(session, document.tender_id) is None:
         raise HTTPException(status_code=404, detail="That page can't be measured.")
-    return Sheet(
-        document_id=document_id,
-        name=document.name,
-        page=number,
-        width=page.width,
-        height=page.height,
-        scale=_scale(records.scale_for(session, document_id, number)),
-    )
+    return _sheet(session, document, number)
 
 
 @router.get("/documents/{document_id}/pages/{number}/vertices")
@@ -189,7 +213,7 @@ def get_vertices(document_id: str, number: int, session: DB, request: Request) -
     if document is None or document.kind != "pdf" or tenders.get_tender(session, document.tender_id) is None:
         raise HTTPException(status_code=404, detail="That page can't be measured.")
     path = library.stored_file(request.app.state.home, document)
-    return [list(p) for p in readers.vector_points(path, number)]
+    return [list(p) for p in readers.vector_points(path, number)[:UI_VERTICES]]
 
 
 @router.post("/tenders/{tender_id}/scales", status_code=201)
@@ -247,7 +271,7 @@ def _record(session: Session, model: type[Scale] | type[Measurement], record_id:
 @router.post("/measurements/{measurement_id}/decision")
 def decide_measurement(measurement_id: str, body: DecisionIn, session: DB, request: Request) -> None:
     m = _record(session, Measurement, measurement_id)
-    if m.status != "proposed":
+    if m.status not in UNDECIDED:
         raise HTTPException(status_code=400, detail="This has already been decided.")
     records.decide(session, m, body.approve, body.reason)
     session.commit()
@@ -257,7 +281,7 @@ def decide_measurement(measurement_id: str, body: DecisionIn, session: DB, reque
 @router.post("/scales/{scale_id}/decision")
 def decide_scale(scale_id: str, body: DecisionIn, session: DB, request: Request) -> None:
     scale = _record(session, Scale, scale_id)
-    if scale.status != "proposed":
+    if scale.status not in UNDECIDED:
         raise HTTPException(status_code=400, detail="This has already been decided.")
     records.decide(session, scale, body.approve, body.reason)
     session.commit()
@@ -268,5 +292,5 @@ def decide_scale(scale_id: str, body: DecisionIn, session: DB, request: Request)
 def delete_measurement(measurement_id: str, session: DB) -> None:
     """The engineer removes a measurement to redo it. It is kept as rejected, not erased."""
     m = _record(session, Measurement, measurement_id)
-    records.decide(session, m, approve=False, reason="Removed by the engineer to be measured again.")
+    records.decide(session, m, False, "Removed by the engineer to be measured again.")
     session.commit()

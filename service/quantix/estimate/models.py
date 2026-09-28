@@ -9,6 +9,7 @@ from sqlalchemy import JSON, Date, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from quantix.core.db import Base, UTCDateTime
+from quantix.core.review import Reviewed
 from quantix.tenders import LOCAL_OWNER
 
 
@@ -18,15 +19,6 @@ def _id() -> str:
 
 def _now() -> datetime:
     return datetime.now(UTC)
-
-
-class Reviewed:
-    # proposed | approved | office_approved | rejected | replaced
-    status: Mapped[str] = mapped_column(String(20), default="proposed")
-    proposed_by: Mapped[str] = mapped_column(String(32))  # a staff id, or "engineer"
-    reason: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
-    decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
 
 class LibraryResource(Base):
@@ -54,7 +46,7 @@ class Rate(Reviewed, Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     tender_id: Mapped[str] = mapped_column(ForeignKey("tenders.id", ondelete="CASCADE"))
     boq_item_id: Mapped[str] = mapped_column(ForeignKey("boq_items.id"))
-    basis: Mapped[str] = mapped_column(String(20))  # quote | library | estimate
+    basis: Mapped[str] = mapped_column(String(20))  # quote | library | web | estimate
     unit_rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     # A build-up: [{kind, resource, quantity, unit, rate, wastage}] per one unit of the BOQ item
     lines: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
@@ -62,6 +54,7 @@ class Rate(Reviewed, Base):
     page: Mapped[int | None] = mapped_column(Integer)
     quote: Mapped[str | None] = mapped_column(Text)
     library_id: Mapped[str | None] = mapped_column(ForeignKey("library.id"))
+    web_page_id: Mapped[str | None] = mapped_column(ForeignKey("web_pages.id"))  # a web price, with its quote
     note: Mapped[str] = mapped_column(Text)
 
 
@@ -70,8 +63,9 @@ class Markups(Reviewed, Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     tender_id: Mapped[str] = mapped_column(ForeignKey("tenders.id", ondelete="CASCADE"))
-    preliminaries: Mapped[Decimal] = mapped_column(Numeric(8, 4))  # fractions: 0.08 is 8%
-    overheads: Mapped[Decimal] = mapped_column(Numeric(8, 4))
+    # the site's own costs, priced item by item: {item, quantity, unit, rate}; Quantix totals them
+    preliminary_items: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    overheads: Mapped[Decimal] = mapped_column(Numeric(8, 4))  # fractions: 0.06 is 6%
     profit: Mapped[Decimal] = mapped_column(Numeric(8, 4))
     adjustment: Mapped[Decimal] = mapped_column(Numeric(18, 2))  # a lump sum added to (or taken off) the price
     note: Mapped[str] = mapped_column(Text)

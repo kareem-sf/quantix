@@ -2,10 +2,9 @@ from decimal import Decimal
 
 import pytest
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
-from pydantic_ai.models.function import FunctionModel
 from test_documents import make_pdf, read_all, upload
 from test_estimate import bill
-from test_office import wait_for
+from test_office import manager_accepts, scripted, wait_for
 
 from quantix import settings
 from quantix.boq import records as boq
@@ -48,8 +47,9 @@ def tender(client):
             )
             for n, (i, d, u, q) in enumerate(rows, start=1)
         ]
-        boq.propose_items(session, tender_id, omar, lines, False)
-        boq.approve_all_items(session, tender_id)
+        boq.propose_items(session, tender_id, omar, lines)
+        for approved in boq.items(session, tender_id):  # the engineer approved the BOQ
+            boq.approve(session, approved)
         for item, rate in (("3.1", "18.50"), ("6.3", "38.00")):
             note = "Our own rate from outputs and current prices."
             estimate.propose_rate(session, tender_id, omar.id, item, "estimate", note, unit_rate=Decimal(rate))
@@ -112,6 +112,27 @@ def test_quotes_are_levelled_with_our_rates_and_their_exclusions(client, tender)
     assert (najd["rank"], gulf["rank"]) == (1, 2)
 
 
+def test_the_manager_sees_what_a_recommendation_costs_and_leaves_out(client, tender):
+    tender_id, _, omar, _, _ = tender
+    package_id = two_quotes(client, tender)
+
+    def recommend(company):
+        with client.app.state.sessions() as session:
+            package = session.get(subcontract.Package, package_id)
+            subcontract.recommend(session, package, omar, subcontract.find_company(session, company), "Best value.")
+            session.commit()
+        found = client.get(f"/records/recommendation/{package_id}/findings").json()
+        return [(f["severity"], f["message"]) for f in found]
+
+    assert recommend("Gulf Groundworks") == [
+        ("warning", "Gulf Groundworks levels at 60,380.00; Najd Contracting is lower at 57,700.00.")
+    ]
+    assert recommend("Najd Contracting") == [
+        ("warning", "Najd Contracting left out 6.3; our own rate stands in for them.")
+    ]
+    assert client.get(f"/tenders/{tender_id}/review").json()[-1]["kind"] == "recommendation"
+
+
 def test_a_quote_must_be_read_from_its_document(client, tender):
     tender_id, _, omar, gulf, _ = tender
     package_id = two_quotes(client, tender)
@@ -151,6 +172,8 @@ def test_the_engineer_chooses_and_the_quoted_rates_enter_the_estimate(client, te
             session, package, tender[2], subcontract.find_company(session, "Najd Contracting"), "Cheapest levelled."
         )
         session.commit()
+    assert client.get(f"/tenders/{tender_id}/gates").json()["subcontract"] == 0  # the Tender Manager reviews it first
+    manager_accepts(client, tender_id)
     assert client.get(f"/tenders/{tender_id}/gates").json()["subcontract"] == 1
 
     [package] = client.get(f"/tenders/{tender_id}/packages").json()
@@ -193,7 +216,7 @@ def test_the_directory_and_enquiries(client, tender):
         client.post("/directory", json={"name": "red sea membranes", "kind": "supplier", "trades": "x"}).json()[
             "detail"
         ]
-        == "red sea membranes is already in the directory."
+        == "red sea membranes is already in the directory as Red Sea Membranes. Use that name."
     )
     assert [c["name"] for c in client.get("/directory", params={"q": "waterproofing"}).json()] == [
         "Gulf Groundworks",
@@ -221,6 +244,8 @@ def test_staff_level_quotes_through_their_tools_and_an_autonomous_office_chooses
     settings.save(tmp_path, office_ai={"connection_id": "scripted", "model": "brain"}, office_mode="autonomous")
     replies: list[str] = []
     steps = [
+        ToolCallPart("read_page", {"document_id": gulf, "page": 1}),  # a quote is recorded from its pages, read
+        ToolCallPart("read_page", {"document_id": najd, "page": 1}),
         ToolCallPart("add_company", {"name": "Gulf Groundworks", "kind": "subcontractor", "trades": "Earthworks"}),
         ToolCallPart("add_company", {"name": "Najd Contracting", "kind": "subcontractor", "trades": "Earthworks"}),
         ToolCallPart("create_package", {"name": "Groundworks", "kind": "subcontract", "boq_items": ["3.1", "6.3"]}),
@@ -271,17 +296,68 @@ def test_staff_level_quotes_through_their_tools_and_an_autonomous_office_chooses
             else ModelResponse(parts=[TextPart("Done.")])
         )
 
-    client.app.state.office.model = lambda: FunctionModel(brain)
+    client.app.state.office.model = lambda: scripted(brain)
     with client.app.state.sessions() as session:
         office.post(session, tender_id, "engineer", omar, "Omar, level the groundworks quotes.")
         session.commit()
     client.app.state.office.engineer_spoke(tender_id)
     wait_for(lambda o: len(replies) == len(steps), client, tender_id)
-    assert replies[6] == (
+    assert replies[8] == (
         "1. Najd Contracting: quoted 20460.00, exclusions 0, levelled 57700.00 (our rate used for 6.3)\n"
         "2. Gulf Groundworks: quoted 55380.00, exclusions 5000, levelled 60380.00"
     )
-    assert replies[7] == "The office has taken Najd Contracting's quote; its rates are in the estimate."
+    assert replies[9] == "Your recommendation is with the Tender Manager for review."
+    assert manager_accepts(client, tender_id, autonomous=True) == "Accepted 4 (approved by the office). Sent back 0."
     rows = {i["item"]: i for i in client.get(f"/tenders/{tender_id}/estimate").json()["items"]}
     assert (rows["3.1"]["rate"]["status"], rows["3.1"]["amount"]) == ("office_approved", "20460.00")
     assert rows["6.3"]["rate"]["basis"] == "estimate"  # the gap stays on our own rate
+
+
+def test_a_firm_is_in_the_directory_once(client):
+    with client.app.state.sessions() as session:
+        bader = subcontract.add_company(session, "engineer", "Al Bader Contracting", "subcontractor", "Earthworks")
+        # another spelling of its name, in any case, with its legal form or in Arabic letter forms, is the same firm
+        with pytest.raises(ValueError, match="Al Bader Contracting Co. W.L.L. is already in the directory as Al Bader"):
+            subcontract.add_company(session, "s1", "Al Bader Contracting Co. W.L.L.", "subcontractor", "Earthworks")
+        assert subcontract.find_company(session, "AL BADER CONTRACTING LLC") is bader
+        rashid = subcontract.add_company(session, "s1", "شركة الراشد للتجارة", "supplier", "Aggregates")
+        assert subcontract.find_company(session, "مؤسسة الرّاشد للتجارة") is rashid
+        # a name that may be the same firm is refused until the adder says it is a different one
+        with pytest.raises(subcontract.NearDuplicate, match="Al Bader General Contracting may be the same firm as Al"):
+            subcontract.add_company(session, "s1", "Al Bader General Contracting", "subcontractor", "Roads")
+        different = ["Al Bader Contracting"]
+        other = subcontract.add_company(
+            session, "s1", "Al Bader General Contracting", "subcontractor", "Roads", different_from=different
+        )
+        with pytest.raises(ValueError, match="Did you mean Al Bader Contracting or Al Bader General Contracting?"):
+            subcontract.find_company(session, "Al Bader")
+        assert other.id != bader.id
+
+
+def test_the_engineer_merges_a_firm_entered_twice(client, tender):
+    tender_id, _, omar, _, _ = tender
+    package_id = two_quotes(client, tender)
+    again = {"name": "Gulf Groundworks Establishment", "kind": "subcontractor", "trades": "Earthworks"}
+    refused = client.post("/directory", json=again).json()["detail"]
+    assert refused == "Gulf Groundworks Establishment is already in the directory as Gulf Groundworks. Use that name."
+    near = client.post("/directory", json={"name": "Gulf Groundworks Dammam", "kind": "subcontractor", "trades": "x"})
+    assert near.status_code == 409 and near.json()["detail"]["firms"] == ["Gulf Groundworks"]
+    body = {"name": "الخليج للحفريات", "kind": "subcontractor", "trades": "Earthworks", "email": "q@gulf.sa"}
+    arabic = client.post("/directory", json=body).json()  # the same firm under its Arabic name, entered again
+    with client.app.state.sessions() as session:
+        package = session.get(subcontract.Package, package_id)
+        firm = subcontract.find_company(session, "الخليج للحفريات")
+        subcontract.draft_enquiry(session, package, firm, omar, "Groundworks enquiry", "Please quote.")
+        session.commit()
+    gulf = next(c for c in client.get("/directory").json() if c["name"] == "Gulf Groundworks")
+
+    assert client.post(f"/directory/{arabic['id']}/merge", json={"into": gulf["id"]}).status_code == 204
+    [merged] = [c for c in client.get("/directory").json() if c["id"] == gulf["id"]]
+    assert (merged["aliases"], merged["email"]) == (["الخليج للحفريات"], "q@gulf.sa")
+    [package] = client.get(f"/tenders/{tender_id}/packages").json()
+    assert [e["company"] for e in package["enquiries"]] == ["Gulf Groundworks"]
+    with client.app.state.sessions() as session:
+        assert subcontract.find_company(session, "الخليج للحفريات").id == gulf["id"]  # the name finds it from now on
+    najd = next(c for c in client.get("/directory").json() if c["name"] == "Najd Contracting")
+    refused = client.post(f"/directory/{najd['id']}/merge", json={"into": gulf["id"]})
+    assert refused.json()["detail"] == "Both have a quote for Groundworks: a firm has one quote per package."

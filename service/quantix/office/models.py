@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from quantix.core.db import Base, UTCDateTime
 
 ENGINEER = "engineer"  # the sender id the engineer's own messages use
+OFFICE = "office"  # the sender of the office's own notices; never used for anything an agent says
 TEAM = "team"  # the team room channel; a direct chat with the engineer uses the staff member's id as its channel
 
 
@@ -34,6 +35,8 @@ class Staff(Base):
     status: Mapped[str] = mapped_column(String(20), default="active")  # active | released
     now: Mapped[str | None] = mapped_column(String(300))  # what they are doing, from their real tool calls
     last_read: Mapped[int] = mapped_column(Integer, default=0)  # the newest message id they have been shown
+    # the Tender Manager: when he last saw his review queue, so new proposals wake him
+    reviewed_up_to: Mapped[datetime | None] = mapped_column(UTCDateTime)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
 
     @property
@@ -50,7 +53,23 @@ class Message(Base):
     channel: Mapped[str] = mapped_column(String(32))  # TEAM, or a staff id for that person's chat with the engineer
     kind: Mapped[str] = mapped_column(String(20), default="message")  # message | concern | task | note
     text: Mapped[str] = mapped_column(Text)
+    # what an answer to the engineer rests on: [{label, document_id?, page?, boq_item_id?}], each one the sender opened
+    sources: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
+
+
+class Opened(Base):
+    """A document page or a record someone in the office opened. What they cite must be something they opened, and
+    the engineer sees how much of the package the office itself read."""
+
+    __tablename__ = "opened"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tender_id: Mapped[str] = mapped_column(ForeignKey("tenders.id", ondelete="CASCADE"))
+    staff_id: Mapped[str] = mapped_column(ForeignKey("staff.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(20))  # page, or a record's kind: rate, boq, draft, ...
+    ref: Mapped[str] = mapped_column(String(80))  # "<document id>:<page>", or the record's id
+    at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)  # the last time they opened it
 
 
 class Task(Base):
@@ -67,6 +86,28 @@ class Task(Base):
     done_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
 
+class TurnRecord(Base):
+    """One person's turn, written as it starts and filled in as it ends: what they called, what Quantix sent back,
+    what it used and how it ended. The office resumes from these after a restart; they also explain the work."""
+
+    __tablename__ = "turns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tender_id: Mapped[str] = mapped_column(ForeignKey("tenders.id", ondelete="CASCADE"))
+    staff_id: Mapped[str] = mapped_column(ForeignKey("staff.id", ondelete="CASCADE"))
+    model: Mapped[str] = mapped_column(String(200))
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
+    ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # done | out_of_steps | tool_failed | ai_failed | stopped | failed; none while running, or if Quantix stopped
+    ended: Mapped[str | None] = mapped_column(String(20))
+    note: Mapped[str | None] = mapped_column(Text)  # why it failed, in plain words
+    calls: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)  # {tool, sent_back}: the reason or null
+    requests: Mapped[int] = mapped_column(Integer, default=0)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cached_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class Decision(Base):
     """Something waiting for the engineer: a question with options, or a gate to approve."""
 
@@ -79,6 +120,11 @@ class Decision(Base):
     title: Mapped[str] = mapped_column(String(300))
     text: Mapped[str] = mapped_column(Text)
     options: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # An escalation: the record the office couldn't settle, and where the problem shows ({label, document_id,
+    # page, boq_item_id}); its options are the Manager's suggested corrections
+    subject_kind: Mapped[str | None] = mapped_column(String(20))
+    subject_id: Mapped[str | None] = mapped_column(String(32))
+    sources: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(20), default="waiting")  # waiting | answered
     answer: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)

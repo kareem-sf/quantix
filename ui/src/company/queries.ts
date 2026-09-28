@@ -26,3 +26,45 @@ export function useRemoveRule() {
     onSuccess: () => client.invalidateQueries({ queryKey: ["rules"] }),
   });
 }
+
+export type Profile = components["schemas"]["ProfileOut"];
+
+/** The firm's details for the title block and letterhead of every document Quantix writes. */
+export function useProfile() {
+  return useQuery({ queryKey: ["company"], queryFn: async () => must(await api.GET("/company")) });
+}
+
+export function useSaveProfile() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: Omit<Profile, "has_logo">) => must(await api.PUT("/company", { body })),
+    onSuccess: (profile) => client.setQueryData(["company"], profile),
+  });
+}
+
+export function useSaveLogo() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (file: File) => {
+      const form = new FormData();
+      form.append("file", file, file.name);
+      const response = await fetch(`${window.location.origin}/api/company/logo`, { method: "PUT", body: form });
+      if (!response.ok) {
+        const detail = (await response.json().catch(() => ({}))).detail;
+        throw new Error(typeof detail === "string" ? detail : "The logo couldn’t be saved.");
+      }
+    },
+    onSuccess: () => client.invalidateQueries({ queryKey: ["company"] }),
+  });
+}
+
+export function useRemoveLogo() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const result = await api.DELETE("/company/logo");
+      if (!result.response.ok) must(result as { data?: undefined; error?: unknown; response: Response });
+    },
+    onSuccess: () => client.invalidateQueries({ queryKey: ["company"] }),
+  });
+}

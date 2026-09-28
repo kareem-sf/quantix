@@ -3,6 +3,7 @@
 The data home is ~/.quantix, or QUANTIX_HOME when set (for example, a scratch folder for testing)."""
 
 import argparse
+import logging
 import os
 from pathlib import Path
 
@@ -19,6 +20,8 @@ def main() -> None:
     if not token:
         raise SystemExit("QUANTIX_TOKEN must be set.")
     home = Path(os.environ.get("QUANTIX_HOME") or Path.home() / ".quantix")
+    logging.basicConfig(format="%(asctime)s %(name)s %(message)s", datefmt="%H:%M:%S")
+    logging.getLogger("quantix").setLevel(logging.INFO)  # what the office does, step by step, for diagnosis
     app = create_app(home, token)
     uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
 

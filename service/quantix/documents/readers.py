@@ -34,7 +34,6 @@ KINDS = {
 UNREADABLE = {
     "old_word": "Old Word files (.doc) can't be read. Save it as .docx or PDF and add that copy.",
     "old_spreadsheet": "Old Excel files (.xls) can't be read. Save it as .xlsx and add that copy.",
-    "cad": "CAD drawings can't be read yet. Add the PDF of this drawing instead.",
     "other": "This type of file isn't read.",
 }
 SCAN_CHARACTERS = 20  # a PDF page with fewer visible characters than this is treated as a scan
@@ -61,12 +60,25 @@ def read_file(path: Path, kind: str) -> list[PageText]:
     if kind in UNREADABLE:
         raise Unreadable(UNREADABLE[kind])
     if kind == "pdf":
-        return _pdf(path)
-    if kind == "spreadsheet":
-        return _spreadsheet(path)
-    if kind == "word":
-        return _word(path)
-    return [PageText(1, "", has_text=False)]  # an image: the office reads it by looking at it
+        pages = _pdf(path)
+    elif kind == "spreadsheet":
+        pages = _spreadsheet(path)
+    elif kind == "word":
+        pages = _word(path)
+    elif kind == "cad":
+        from quantix.documents import cad  # it reads PageText from here
+
+        pages = cad.pages(path)
+    else:
+        return [PageText(1, "", has_text=False)]  # an image: the office reads it by looking at it
+    for page in pages:
+        page.text = clean_text(page.text)
+    return pages
+
+
+def clean_text(text: str) -> str:
+    """Some PDFs give characters as UTF-16 halves: join the pairs, and replace a half left on its own."""
+    return text.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
 
 
 def _pdf(path: Path) -> list[PageText]:
@@ -95,8 +107,15 @@ def _pdf_page_text(textpage: pdfium.PdfTextPage) -> str:
     if not has_arabic(plain):
         return plain.replace("\r\n", "\n").strip()
     chars = []
+    high = None  # a character beyond U+FFFF comes as two UTF-16 halves: the first waits for the second
     for index in range(textpage.count_chars()):
         code = pdfium_raw.FPDFText_GetUnicode(textpage.raw, index)
+        if 0xD800 <= code <= 0xDBFF:
+            high = code
+            continue
+        if 0xDC00 <= code <= 0xDFFF:
+            code = 0x10000 + ((high - 0xD800) << 10) + (code - 0xDC00) if high else 0
+        high = None
         if not code:
             continue
         left, bottom, right, top = textpage.get_charbox(index, loose=True)  # font boxes: one height per line
@@ -182,8 +201,8 @@ def find_text(path: Path, number: int, text: str, limit: int = 20) -> list[tuple
             document.close()
 
 
-@lru_cache(maxsize=32)
-def vector_points(path: Path, number: int, limit: int = 50_000) -> tuple[tuple[float, float], ...]:
+@lru_cache(maxsize=4)  # a site layout can hold several hundred thousand points
+def vector_points(path: Path, number: int, limit: int = 2_000_000) -> tuple[tuple[float, float], ...]:
     """The end and corner points of the lines drawn on a PDF page, in points from the top left. Takeoff snaps to
     them so measurements land exactly on the drawing. A scan has none."""
     found: set[tuple[float, float]] = set()
@@ -207,13 +226,37 @@ def vector_points(path: Path, number: int, limit: int = 50_000) -> tuple[tuple[f
     return tuple(found)
 
 
-def render_page(path: Path, number: int, width: int = 1400) -> bytes:
-    """A PNG of one PDF page, about `width` pixels wide."""
+def render_image(path: Path, width: int = 1400, region: tuple[float, float, float, float] | None = None) -> bytes:
+    """A PNG of an image file about `width` pixels wide; or of a region of it (left, top, right, bottom in pixels of
+    the image at that width), enlarged to that width."""
+    from PIL import Image
+
+    with Image.open(path) as opened:
+        image = opened.convert("RGB")
+    if region is not None:
+        factor = image.width / width
+        image = image.crop(tuple(round(v * factor) for v in region))
+    image = image.resize((width, max(1, round(image.height * width / image.width))))
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def render_page(
+    path: Path, number: int, width: int = 1400, region: tuple[float, float, float, float] | None = None
+) -> bytes:
+    """A PNG of one PDF page, about `width` pixels wide; or of a region of it (left, top, right, bottom in points
+    from the top left), enlarged to that width."""
     with PDFIUM:
         document = pdfium.PdfDocument(path)
         try:
             page = document[number - 1]
-            image = page.render(scale=width / page.get_width()).to_pil()
+            if region is None:
+                image = page.render(scale=width / page.get_width()).to_pil()
+            else:
+                left, top, right, bottom = region
+                crop = (left, page.get_height() - bottom, page.get_width() - right, top)  # trimmed from each side
+                image = page.render(scale=width / (right - left), crop=crop).to_pil()
         finally:
             document.close()
     buffer = BytesIO()

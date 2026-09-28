@@ -1,6 +1,8 @@
+import { IconArrowRight, IconArrowUp } from "@tabler/icons-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Link, useParams, useSearchParams } from "react-router";
+import { useParams, useSearchParams } from "react-router";
 import { Face } from "./Face";
+import { Prose } from "./Prose";
 import {
   ENGINEER,
   TEAM,
@@ -13,6 +15,7 @@ import {
   type Message,
   type Staff,
 } from "./queries";
+import { Sources } from "./Sources";
 
 export function Office() {
   const { tenderId = "" } = useParams();
@@ -20,12 +23,16 @@ export function Office() {
   const office = useOffice(tenderId);
   const staff = office.data?.staff ?? [];
   const channel = params.get("with") ?? TEAM;
-  const person = staff.find((m) => m.id === (params.get("person") ?? (channel === TEAM ? undefined : channel)));
+  const asked = params.get("person"); // a profile the engineer opened; in a direct chat it shows beside the chat
+  const person = staff.find((m) => m.id === (asked ?? (channel === TEAM ? undefined : channel)));
   const active = staff.filter((m) => m.status === "active");
 
   return (
-    <div className="flex h-full w-full">
-      <section aria-label="Conversations" className="flex w-60 shrink-0 flex-col gap-0.5 border-r border-line px-3 py-7">
+    <div className="relative flex h-full w-full">
+      <section
+        aria-label="Conversations"
+        className="flex w-60 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-line px-3 py-7 max-xl:w-52"
+      >
         <h1 className="mx-2 mb-3.5 text-[22px] font-semibold tracking-tight">Office</h1>
         <Thread label="Team room" on={channel === TEAM} onClick={() => setParams({})} />
         {active.map((m) => (
@@ -47,7 +54,15 @@ export function Office() {
           onPerson={(id) => setParams({ ...(channel === TEAM ? {} : { with: channel }), person: id })}
         />
       </section>
-      {person && <Profile tenderId={tenderId} member={person} onMessage={() => setParams({ with: person.id })} />}
+      {person && (
+        <Profile
+          tenderId={tenderId}
+          member={person}
+          overlay={Boolean(asked)}
+          onMessage={() => setParams({ with: person.id })}
+          onClose={() => setParams(channel === TEAM ? {} : { with: channel })}
+        />
+      )}
     </div>
   );
 }
@@ -131,7 +146,7 @@ export function Conversation(props: {
             disabled={!draft.trim() || send.isPending}
             className="flex size-8 items-center justify-center rounded-lg bg-ink text-white disabled:bg-line-strong"
           >
-            ↑
+            <IconArrowUp className="size-4" stroke={1.75} />
           </button>
         </div>
         {send.isError && <p className="pt-2 text-attention">{send.error.message}</p>}
@@ -145,7 +160,7 @@ function Line({ message, author, onPerson }: { message: Message; author?: Staff;
   if (message.kind === "task" || message.kind === "note") {
     return (
       <div className="flex items-center gap-2 pl-10 text-ink-3">
-        <span>→</span>
+        <IconArrowRight className="size-3.5 shrink-0" stroke={1.75} />
         <span className="grow">{message.text}</span>
         <span className="text-xs">{time}</span>
       </div>
@@ -172,20 +187,44 @@ function Line({ message, author, onPerson }: { message: Message; author?: Staff;
           </span>
           {message.kind === "concern" && <span className="text-xs font-medium text-attention"> · raised a concern</span>}
         </span>
-        <span className="text-sm leading-relaxed whitespace-pre-wrap text-[#27272A]" dir="auto">
-          {message.text}
-        </span>
+        {mine ? (
+          <span className="text-sm leading-relaxed whitespace-pre-wrap text-[#27272A] [overflow-wrap:anywhere]" dir="auto">
+            {message.text}
+          </span>
+        ) : (
+          <Prose text={message.text} signer={author ? firstName(author) : undefined} className="text-sm text-[#27272A]" />
+        )}
+        {message.sources && message.sources.length > 0 && (
+          <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-ink-3">
+            <span>From</span>
+            <Sources sources={message.sources} />
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-function Profile({ tenderId, member, onMessage }: { tenderId: string; member: Staff; onMessage: () => void }) {
+function Profile(props: {
+  tenderId: string;
+  member: Staff;
+  overlay: boolean;
+  onMessage: () => void;
+  onClose: () => void;
+}) {
+  const { tenderId, member, onMessage } = props;
   const tasks = useTasks(tenderId);
   const mine = (tasks.data ?? []).filter((t) => t.staff_id === member.id);
   const p = member.profile as Record<string, string | number | undefined>;
   return (
-    <aside aria-label={member.name} className="flex w-[340px] shrink-0 flex-col gap-5 border-l border-line px-6 pt-7 pb-6">
+    <aside
+      aria-label={member.name}
+      className={`flex w-[340px] shrink-0 flex-col gap-5 overflow-y-auto border-l border-line bg-white px-6 pt-7 pb-6 ${
+        props.overlay
+          ? "max-[1400px]:absolute max-[1400px]:inset-y-0 max-[1400px]:right-0 max-[1400px]:z-10 max-[1400px]:shadow-[-8px_0_24px_rgba(0,0,0,0.08)]"
+          : "max-[1400px]:hidden"
+      }`}
+    >
       <div className="flex items-center gap-3.5">
         <Face id={member.id} size={56} />
         <div className="flex flex-col gap-0.5">
@@ -215,20 +254,22 @@ function Profile({ tenderId, member, onMessage }: { tenderId: string; member: St
           {mine.map((t) => (
             <span key={t.id} className="flex justify-between gap-2.5 border-t border-subtle py-2">
               <span>{t.title}</span>
-              <span className="shrink-0 text-ink-3">{t.status === "done" ? "done" : "working"}</span>
+              <span className="shrink-0 text-ink-3">
+                {t.status === "done" ? "done" : member.status === "released" ? "not done" : "working"}
+              </span>
             </span>
           ))}
         </div>
       )}
       <div className="grow" />
       {member.status === "active" && (
-        <button onClick={onMessage} className="h-[38px] rounded-lg bg-ink text-sm text-white">
+        <button onClick={onMessage} className="h-[38px] shrink-0 rounded-lg bg-ink text-sm text-white">
           Message {firstName(member)}
         </button>
       )}
-      <Link to={`/tenders/${tenderId}/office`} className="text-center text-ink-3 hover:text-ink">
+      <button onClick={props.onClose} className="shrink-0 text-center text-ink-3 hover:text-ink">
         Close
-      </Link>
+      </button>
     </aside>
   );
 }

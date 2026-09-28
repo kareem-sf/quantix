@@ -16,17 +16,27 @@ from quantix.subcontract.models import Company, Enquiry, Package, Quote
 router = APIRouter(tags=["subcontract"])
 
 
-class CompanyIn(BaseModel):
+class CompanyFields(BaseModel):
     name: str = Field(min_length=1)
     kind: Literal["subcontractor", "supplier"]
     trades: str = Field(min_length=1)
     email: str | None = None
     phone: str | None = None
+    website: str | None = None
 
 
-class CompanyOut(CompanyIn):
+class CompanyIn(CompanyFields):
+    different_from: list[str] = Field(default=[], description="Firms in the directory the engineer says it isn't")
+
+
+class CompanyOut(CompanyFields):
     id: str
+    aliases: list[str]
     added_by: str
+
+
+class Merge(BaseModel):
+    into: str = Field(description="The firm the duplicate is the same as")
 
 
 class EnquiryOut(BaseModel):
@@ -37,6 +47,8 @@ class EnquiryOut(BaseModel):
     body: str
     status: str
     created_by: str
+    reviewed_by: str | None  # the Tender Manager, once he has reviewed it
+    review_note: str | None
 
 
 class QuotedCell(BaseModel):
@@ -70,6 +82,7 @@ class QuoteOut(BaseModel):
 
 class PackageItem(BaseModel):
     id: str
+    section: str | None
     item: str
     description: str
     unit: str
@@ -87,6 +100,8 @@ class PackageOut(BaseModel):
     recommended_quote_id: str | None
     recommendation: str | None
     recommended_by: str | None
+    reviewed_by: str | None  # the Tender Manager's review of the recommendation
+    review_note: str | None
     selected_quote_id: str | None
     created_by: str
 
@@ -146,6 +161,8 @@ def _package(session: Session, package: Package) -> PackageOut:
                 body=enquiry.body,
                 status=enquiry.status,
                 created_by=enquiry.created_by,
+                reviewed_by=enquiry.reviewed_by,
+                review_note=enquiry.review_note,
             )
         )
     return PackageOut(
@@ -155,6 +172,7 @@ def _package(session: Session, package: Package) -> PackageOut:
         items=[
             PackageItem(
                 id=i.id,
+                section=i.section,
                 item=i.item,
                 description=i.description,
                 unit=i.unit,
@@ -168,6 +186,8 @@ def _package(session: Session, package: Package) -> PackageOut:
         recommended_quote_id=package.recommended_quote_id,
         recommendation=package.recommendation,
         recommended_by=package.recommended_by,
+        reviewed_by=package.reviewed_by,
+        review_note=package.review_note,
         selected_quote_id=package.selected_quote_id,
         created_by=package.created_by,
     )
@@ -208,17 +228,37 @@ def choose(package_id: str, body: Choice, session: DB, request: Request) -> None
 
 @router.get("/directory")
 def get_directory(session: DB, q: str = "") -> list[CompanyOut]:
-    return [CompanyOut.model_validate(c, from_attributes=True) for c in records.directory(session, q)]
+    rows = records.directory(session, q)
+    session.commit()  # keeps the meaning of firms searched for the first time
+    return [CompanyOut.model_validate(c, from_attributes=True) for c in rows]
 
 
-@router.post("/directory", status_code=201)
+@router.post("/directory", status_code=201, responses={409: {"description": "It may be a firm already there"}})
 def add_company(body: CompanyIn, session: DB) -> CompanyOut:
+    """Add a firm. 409 when it may be a firm already in the directory: the detail names them, and adding it again
+    with them in `different_from` confirms it is another firm."""
     try:
         company = records.add_company(session, "engineer", **body.model_dump())
+    except records.NearDuplicate as maybe:
+        raise HTTPException(status_code=409, detail={"message": str(maybe), "firms": maybe.firms}) from maybe
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     session.commit()
     return CompanyOut.model_validate(company, from_attributes=True)
+
+
+@router.post("/directory/{company_id}/merge", status_code=204)
+def merge_company(company_id: str, body: Merge, session: DB) -> None:
+    """The engineer says a firm is the same as another: its enquiries and quotes move there, and its name stays as
+    one of the other firm's names."""
+    duplicate, into = session.get(Company, company_id), session.get(Company, body.into)
+    if duplicate is None or into is None:
+        raise HTTPException(status_code=404, detail="Not found.")
+    try:
+        records.merge(session, duplicate, into)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    session.commit()
 
 
 @router.delete("/directory/{company_id}", status_code=204)

@@ -4,14 +4,15 @@ from decimal import Decimal
 import openpyxl
 import pytest
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
-from pydantic_ai.models.function import FunctionModel
 from test_documents import make_pdf, read_all, upload
-from test_office import wait_for
+from test_office import manager_accepts, scripted, wait_for
 
 from quantix import settings
 from quantix.boq import records as boq
 from quantix.estimate import records as estimate
+from quantix.estimate.models import Rate
 from quantix.office import records as office
+from quantix.review import records as reviews
 
 QUOTE = make_pdf([["Al-Rajhi Steel quotation 17 September", "Rebar B500B cut and bent 2,300.00 SAR per t"]])
 CONDITIONS = make_pdf([["Prices shall be in Saudi Riyals (SAR)", "VAT at 15% shall be shown separately"]])
@@ -70,12 +71,11 @@ def tender(client):
                 start=1,
             )
         ]
-        boq.propose_items(session, tender_id, priya, lines, False)
-        boq.approve_all_items(session, tender_id)
+        boq.propose_items(session, tender_id, priya, lines)
+        for approved in boq.items(session, tender_id):  # the engineer approved the BOQ
+            boq.approve(session, approved)
         for kind, value, quote in (("currency", "SAR", "Saudi Riyals (SAR)"), ("vat", "15%", "VAT at 15%")):
-            fact = boq.propose_fact(
-                session, tender_id, priya, kind, value, docs["Conditions.pdf"]["id"], 1, quote, False
-            )
+            fact = boq.propose_fact(session, tender_id, priya, kind, value, docs["Conditions.pdf"]["id"], 1, quote)
             boq.decide(session, fact, True)
         session.commit()
         return tender_id, priya.id, docs["Quote.pdf"]["id"]
@@ -110,7 +110,12 @@ def test_the_price_is_computed_from_quantities_rates_and_markups(client, tender)
             session,
             tender_id,
             priya,
-            Decimal("0.08"),
+            [
+                estimate.PreliminaryIn(item="Site engineer", quantity=Decimal(3), unit="month", rate=Decimal(3000)),
+                estimate.PreliminaryIn(
+                    item="Plant mobilisation", quantity=Decimal(1), unit="sum", rate=Decimal("676.22")
+                ),
+            ],
             Decimal("0.05"),
             Decimal("0.07"),
             Decimal("-1000"),
@@ -119,6 +124,10 @@ def test_the_price_is_computed_from_quantities_rates_and_markups(client, tender)
         session.commit()
 
     result = client.get(f"/tenders/{tender_id}/estimate").json()
+    assert [(p["item"], p["cost"]) for p in result["markups"]["preliminary_items"]] == [
+        ("Site engineer", "9000.00"),
+        ("Plant mobilisation", "676.22"),
+    ]
     rows = {i["item"]: i for i in result["items"]}
     assert (rows["3.1"]["rate"]["rate"], rows["3.1"]["amount"]) == ("18.50", "22940.00")
     assert [line["cost"] for line in rows["4.3"]["rate"]["lines"]] == ["992.00", "2415.00", "72.00", "9.00"]
@@ -127,7 +136,8 @@ def test_the_price_is_computed_from_quantities_rates_and_markups(client, tender)
     assert rows["6.3"]["rate"] is None
 
     s = result["summary"]
-    assert (s["currency"], s["priced"], s["items"], s["waiting"], s["unpriced"]) == ("SAR", 2, 3, 2, ["6.3"])
+    assert (s["currency"], s["priced"], s["items"], s["unpriced"]) == ("SAR", 2, 3, ["6.3"])
+    assert (s["reviewing"], s["waiting"]) == (2, 0)  # with the Tender Manager, not yet waiting for the engineer
     assert [s[k] for k in ("net", "preliminaries", "overheads", "profit", "adjustment", "total")] == [
         "120952.80",
         "9676.22",
@@ -142,6 +152,8 @@ def test_the_price_is_computed_from_quantities_rates_and_markups(client, tender)
 def test_every_rate_needs_a_basis_that_checks_out(client, tender):
     tender_id, priya, quote = tender
     with client.app.state.sessions() as session:
+        with pytest.raises(ValueError, match="A rate must be more than zero"):
+            estimate.propose_rate(session, tender_id, priya, "3.1", "estimate", "x" * 30, unit_rate=Decimal("0"))
         with pytest.raises(ValueError, match="The rate 2400 is not in the quoted line"):
             estimate.propose_rate(
                 session,
@@ -163,6 +175,13 @@ def test_every_rate_needs_a_basis_that_checks_out(client, tender):
             )
         with pytest.raises(ValueError, match="There is no BOQ item 9.9"):
             estimate.propose_rate(session, tender_id, priya, "9.9", "estimate", "x" * 30, unit_rate=Decimal("1"))
+        # an estimate that also names a library entry or document that doesn't exist keeps only what it rests on
+        rate = estimate.propose_rate(
+            session, tender_id, priya, "3.1", "estimate", "x" * 30, unit_rate=Decimal("18"), library_id="L-01",
+            document_id="made-up", page=3,
+        )  # fmt: skip
+        session.flush()
+        assert (rate.library_id, rate.document_id, rate.page) == (None, None, None)
 
 
 def test_approving_keeps_one_rate_and_can_save_it_to_the_library(client, tender):
@@ -222,16 +241,58 @@ def test_approving_keeps_one_rate_and_can_save_it_to_the_library(client, tender)
     )
 
 
+def test_approved_markups_stay_settled(client, tender):
+    tender_id, priya, _ = tender
+    zero = Decimal(0)
+    with client.app.state.sessions() as session:
+        markups = estimate.propose_markups(session, tender_id, priya, [], Decimal("0.06"), Decimal("0.08"), zero, "x")
+        session.commit()
+        markups_id = markups.id
+    client.post(f"/markups/{markups_id}/decision", json={"approve": True})
+    with client.app.state.sessions() as session, pytest.raises(ValueError, match="The engineer approved the markups"):
+        estimate.propose_markups(session, tender_id, priya, [], Decimal("0.05"), Decimal("0.08"), zero, "Again.")
+
+
+def test_a_new_proposal_replaces_the_one_still_waiting(client, tender):
+    tender_id, priya, _ = tender
+    first = price(
+        client, tender_id, priya, "3.1", "estimate", "Unit rate from the BOQ wording.", unit_rate=Decimal("18")
+    )
+    second = price(
+        client, tender_id, priya, "3.1", "estimate", "Plant 4.5 m3/hr at 83.25 an hour.", unit_rate=Decimal(20)
+    )
+    with client.app.state.sessions() as session:
+        assert [p.kind for p in reviews.pending(session, tender_id)] == ["rate"]  # one rate per line to review
+        assert session.get(Rate, first).status == "replaced"
+        assert session.get(Rate, second).status == "proposed"
+
+
+def test_an_approved_line_takes_a_new_estimate_only_after_the_engineer_sends_one_back(client, tender):
+    tender_id, priya, quote = tender
+    lines = [estimate.LineIn(**line) for line in BUILD_UP]
+    approved = price(client, tender_id, priya, "4.3", "estimate", "Outputs from the last school job.", lines=lines)
+    client.post(f"/rates/{approved}/decision", json={"approve": True})
+    with pytest.raises(ValueError, match="The engineer approved 3488.00 for 4.3; a new estimate doesn't replace it"):
+        price(client, tender_id, priya, "4.3", "estimate", "Outputs from another job.", unit_rate=Decimal(3000))
+    quoted = price(  # a quote may still challenge it
+        client, tender_id, priya, "4.3", "quote", "Quoted.", lines=lines, document_id=quote, page=1,
+        quote="Rebar B500B cut and bent 2,300.00",
+    )  # fmt: skip
+    client.post(f"/rates/{quoted}/decision", json={"approve": False, "reason": "Redo the fixing outputs."})
+    price(client, tender_id, priya, "4.3", "estimate", "Fixing outputs redone as asked.", unit_rate=Decimal(3400))
+
+
 def test_approve_all_and_send_a_rate_back(client, tender):
     tender_id, priya, _ = tender
     price(client, tender_id, priya, "3.1", "estimate", "Plant 4.5 m3/hr at 83.25 per hour.", unit_rate=Decimal("18.50"))
     rejected = price(
         client, tender_id, priya, "6.3", "estimate", "Membrane 38 per m2 laid, from memory.", unit_rate=Decimal("38")
     )
+    manager_accepts(client, tender_id)
     client.post(f"/rates/{rejected}/decision", json={"approve": False, "reason": "Get a supplier quote."})
     assert client.post(f"/tenders/{tender_id}/rates/approve-all").json() == {"approved": 1}
-    chat = client.get(f"/tenders/{tender_id}/messages", params={"channel": priya}).json()
-    assert chat[-1]["text"] == "I rejected the rate for BOQ item 6.3: Get a supplier quote."
+    team = client.get(f"/tenders/{tender_id}/messages", params={"channel": "team"}).json()
+    assert team[-1]["text"] == "Priya, I sent back the rate for BOQ item 6.3: Get a supplier quote."
     assert client.get(f"/tenders/{tender_id}/gates").json()["pricing"] == 0
 
 
@@ -244,10 +305,10 @@ def test_staff_price_through_their_tools(client, tender, tmp_path):
         "name": "Rania Farouk",
         "discipline": "Civil",
         "experience_years": 19,
-        "background": "b",
-        "working_style": "w",
-        "opinions": "o",
-        "voice": "v",
+        "background": "Priced civil works for schools and clinics.",
+        "working_style": "Checks every figure twice.",
+        "opinions": "Distrusts quantities nobody has measured.",
+        "voice": "Short and direct.",
     }
 
     def brain(messages, info):
@@ -275,15 +336,17 @@ def test_staff_price_through_their_tools(client, tender, tmp_path):
             else ModelResponse(parts=[TextPart("Done.")])
         )
 
-    client.app.state.office.model = lambda: FunctionModel(brain)
+    client.app.state.office.model = lambda: scripted(brain)
     with client.app.state.sessions() as session:
         office.post(session, tender_id, "engineer", priya, "Priya, price the excavation.")
         session.commit()
     client.app.state.office.engineer_spoke(tender_id)
     wait_for(
-        lambda o: client.get(f"/tenders/{tender_id}/gates").json()["pricing"] == 1 and len(replies) == 2,
+        lambda o: client.get(f"/tenders/{tender_id}/gates").json()["manager"] == 1 and len(replies) == 2,
         client,
         tender_id,
     )
-    assert replies[0] == "Item 3.1 priced at 18.50 per unit."
-    assert replies[1].startswith("1 of 3 items priced (1 waiting for the engineer).\nNet 22940.00 SAR")
+    assert replies[0] == "Item 3.1 priced at 18.50 per unit, for the Tender Manager's review."
+    assert replies[1].startswith(
+        "1 of 3 items priced (1 with the Tender Manager, 0 waiting for the engineer).\nNet 22940.00 SAR"
+    )

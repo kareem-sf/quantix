@@ -4,15 +4,14 @@ from decimal import Decimal
 import openpyxl
 import pytest
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
-from pydantic_ai.models.function import FunctionModel
 from test_documents import make_pdf, read_all, upload
-from test_office import wait_for
+from test_office import scripted, wait_for
 
 from quantix import settings
 from quantix.boq import records as boq
 from quantix.office import records as office
 
-DRAWING = make_pdf([["A-101 GROUND FLOOR PLAN", "Grid A to E 40.00", "Scale 1:100"]])  # a 612 x 792 point page
+DRAWING = make_pdf([["A-101 GROUND FLOOR PLAN", "Grid A to E 40.00", "Scale 1:250"]])  # a 612 x 792 point page
 
 
 def bill() -> bytes:
@@ -42,7 +41,7 @@ def sheet(client):
             boq.ItemIn(item=i, description=d, unit=u, quantity=Decimal(q), document_id=workbook, page=1, quote=quote)
             for i, d, u, q, quote in rows
         ]
-        assert boq.propose_items(session, tender_id, qs, lines, False).startswith("Saved 3")
+        assert boq.propose_items(session, tender_id, qs, lines).startswith("Saved 3")
         session.commit()
         qs_id = qs.id
     return tender_id, drawing, qs_id
@@ -136,6 +135,28 @@ def test_a_new_scale_recomputes_the_sheet(client, sheet):
     assert again["quantity"] == "80.000"
 
 
+def test_the_office_cannot_set_a_scale_the_sheet_contradicts(client, sheet):
+    from quantix.takeoff import records as takeoff
+
+    tender_id, drawing, qs_id = sheet
+    with client.app.state.sessions() as session, pytest.raises(ValueError) as refused:
+        # 40 m across 40 points, e.g. from one text label to another: about 1:2,835 on a sheet printed 1:250
+        takeoff.set_scale(session, tender_id, qs_id, drawing, 1, [[100, 100], [140, 100]], 40, "40.00", "proposed")
+    assert str(refused.value).startswith("Those two points make the sheet about 1:2,835, but it prints 1:250.")
+    with client.app.state.sessions() as session:  # 1:283 is within 20% of the printed 1:250
+        takeoff.set_scale(session, tender_id, qs_id, drawing, 1, [[100, 100], [500, 100]], 40, "40.00", "proposed")
+        session.commit()
+
+
+def test_the_office_measures_on_the_scale_the_engineer_approved(client, sheet):
+    from quantix.takeoff import records as takeoff
+
+    tender_id, drawing, qs_id = sheet
+    assert scale(client, tender_id, drawing).status_code == 201  # the engineer's, approved
+    with client.app.state.sessions() as session, pytest.raises(ValueError, match="The engineer approved this sheet's"):
+        takeoff.set_scale(session, tender_id, qs_id, drawing, 1, [[100, 100], [490, 100]], 40, "40.00", "proposed")
+
+
 def test_the_rules_are_explained_when_broken(client, sheet):
     tender_id, drawing, _ = sheet
     refused = scale(client, tender_id, drawing, dimension="37.50")
@@ -175,10 +196,10 @@ def test_staff_measure_through_their_tools(client, sheet, tmp_path):
         "name": "Rania Farouk",
         "discipline": "Civil",
         "experience_years": 19,
-        "background": "b",
-        "working_style": "w",
-        "opinions": "o",
-        "voice": "v",
+        "background": "Priced civil works for schools and clinics.",
+        "working_style": "Checks every figure twice.",
+        "opinions": "Distrusts quantities nobody has measured.",
+        "voice": "Short and direct.",
     }
     seen: list[str] = []
 
@@ -213,6 +234,18 @@ def test_staff_measure_through_their_tools(client, sheet, tmp_path):
                     "boq_item": "5.1",
                 },
             ),
+            ToolCallPart(
+                "measure",
+                {
+                    "document_id": drawing,
+                    "page": 1,
+                    "kind": "area",
+                    "label": "Ground slab",
+                    "points": [[100 * px, 100 * px], [500 * px, 100 * px], [500 * px, 300 * px], [100 * px, 300 * px]],
+                    "unit": "m2",
+                    "boq_item": "6.1",
+                },
+            ),
         ]
         seen[:] = done
         return (
@@ -221,16 +254,24 @@ def test_staff_measure_through_their_tools(client, sheet, tmp_path):
             else ModelResponse(parts=[TextPart("Done.")])
         )
 
-    client.app.state.office.model = lambda: FunctionModel(brain)
+    client.app.state.office.model = lambda: scripted(brain)
+    client.app.state.office.sees_images = lambda: True
     with client.app.state.sessions() as session:
         office.post(session, tender_id, "engineer", qs_id, "Omar, measure the external wall on A-101.")
         session.commit()
     client.app.state.office.engineer_spoke(tender_id)
-    wait_for(lambda o: client.get(f"/tenders/{tender_id}/gates").json()["takeoff"] == 2, client, tender_id)
+
+    def queued():
+        return [w["kind"] for w in client.get(f"/tenders/{tender_id}/review").json()]
+
+    wait_for(lambda o: queued().count("measurement") == 2, client, tender_id)
+    assert queued().count("scale") == 1  # the scale and both measurements wait for the Tender Manager
 
     assert seen[0].startswith("“40.00” at left")
+    assert "about 1:283 at the sheet's printed size" in seen[1]  # 400 points = 40 m, on paper 141 mm for 40 m
     assert seen[2] == "Measured External wall: 40.000 m."
-    [m] = client.get(f"/tenders/{tender_id}/takeoff").json()["measurements"]
+    assert seen[3].startswith("Measured Ground slab: 800.000 m2. That is 16.00 times the BOQ quantity of 50 m2")
+    m = client.get(f"/tenders/{tender_id}/takeoff").json()["measurements"][0]
     assert (m["status"], m["quantity"], m["boq_item"]) == ("proposed", "40.000", "5.1")
 
 

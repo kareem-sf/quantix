@@ -8,10 +8,12 @@ import type { SearchHit, TenderDocument } from "../documents/queries";
 import type { BoqItem, Fact, LibraryEntry, Markups, Priced, Summary } from "../estimate/queries";
 import type { Decision, Message, Staff, Task } from "../office/queries";
 import type { Comparison, Measurement, Sheet } from "../takeoff/queries";
-import type { Connection, OfficeSettings } from "../settings/queries";
-import type { Rule } from "../company/queries";
+import type { DrawingInfo, LayerMap, Problem, TenderQuery } from "../takeoff/cad";
+import type { Connection, OfficeSettings, Usage, WebKeys } from "../settings/queries";
+import type { Profile, Rule } from "../company/queries";
 import type { Company, Package } from "../subcontract/queries";
 import type { Requirement } from "../submission/queries";
+import type { Finding, Lesson } from "../review/queries";
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -20,6 +22,7 @@ function json(body: unknown, status = 200) {
 export interface FakeState {
   tenders: (Omit<Tender, "outcome"> & Partial<Pick<Tender, "outcome">>)[];
   rules: Rule[];
+  company: Profile;
   connections: Connection[];
   settings: OfficeSettings;
   models: string[];
@@ -47,8 +50,29 @@ export interface FakeState {
   columns: unknown[];
   exports: { spread_markups: boolean }[];
   decided: { id: string; approve: boolean; save_to_library?: boolean }[];
+  reopened: { kind: string; id: string; reason: string }[];
+  /** What the checks find, by record id. */
+  findings: Record<string, Finding[]>;
+  /** The tender audit. */
+  audit: Finding[];
+  /** What the office learned on the tender. */
+  lessons: Lesson[];
+  /** How each AI has done, and what each tender used. */
+  usage: Usage;
+  /** The web research keys, as hints. */
+  webKeys: WebKeys;
   /** Answer the next POST to this path with this error detail. */
   fail: Record<string, string>;
+  /** A CAD drawing: what it holds, its packed screen copy, and what the engineer set and measured on it. */
+  drawing: DrawingInfo | null;
+  screen: ArrayBuffer | null;
+  /** The volume of 3D solids among the objects chosen, in m³. */
+  volume: number | null;
+  units: unknown[];
+  measured: unknown[];
+  queries: TenderQuery[];
+  layerMaps: LayerMap[];
+  checks: Problem[];
 }
 
 /** An in-memory stand-in for the local service at the fetch boundary, following the same contract. */
@@ -56,8 +80,9 @@ export function fakeService(initial: Partial<FakeState> = {}) {
   const state: FakeState = {
     tenders: [],
     rules: [],
+    company: { name: "", address: "", cr_number: "", vat_number: "", has_logo: false },
     connections: [],
-    settings: { office_mode: "engineer", office_ai: null },
+    settings: { office_mode: "engineer", office_ai: null, tender_allowance: null },
     models: ["model-b", "model-a"],
     documents: [],
     pages: {},
@@ -83,7 +108,21 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     columns: [],
     exports: [],
     decided: [],
+    reopened: [],
+    findings: {},
+    audit: [],
+    lessons: [],
+    usage: { models: [], tenders: [] },
+    webKeys: { firecrawl: null, tinyfish: null },
     fail: {},
+    drawing: null,
+    screen: null,
+    volume: null,
+    units: [],
+    measured: [],
+    queries: [],
+    layerMaps: [],
+    checks: [],
     ...initial,
   };
   const fetch = vi.fn(async (input: Request | string, init?: RequestInit) => {
@@ -119,6 +158,9 @@ export function fakeService(initial: Partial<FakeState> = {}) {
           page_count: 1,
           group_name: null,
           description: null,
+          scans_to_read: 0,
+          opened: 0,
+          cited: 0,
         });
       }
       return json({ added: files.length, unchanged: 0 }, 201);
@@ -141,6 +183,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
         channel: body.channel,
         kind: "message",
         text: body.text,
+        sources: null,
         created_at: "2026-09-23T10:00:00Z",
       };
       state.messages.push(message);
@@ -205,6 +248,11 @@ export function fakeService(initial: Partial<FakeState> = {}) {
       r.state = body.approve ? "ready" : "missing";
       return json(null);
     }
+    const dropped = path.match(/^\/requirements\/(\w+)$/);
+    if (dropped && method === "DELETE") {
+      state.requirements = state.requirements.filter((r) => r.id !== dropped[1]);
+      return new Response(null, { status: 204 });
+    }
     const readied = path.match(/^\/requirements\/(\w+)\/ready$/);
     if (readied) {
       const r = state.requirements.find((x) => x.id === readied[1])!;
@@ -224,9 +272,22 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     }
     if (path === "/directory" && method === "GET") return json(state.directory);
     if (path === "/directory" && method === "POST") {
-      const company = { id: `co${state.directory.length + 1}`, added_by: "engineer", ...body };
+      const { different_from: differentFrom, ...fields } = body;
+      const firms = state.directory
+        .filter((c) => fields.name.toLowerCase().includes(c.name.toLowerCase()) && !differentFrom.includes(c.name))
+        .map((c) => c.name);
+      const message = `${fields.name} may be the same firm as ${firms[0]}.`;
+      if (firms.length) return json({ detail: { message, firms } }, 409);
+      const company = { id: `co${state.directory.length + 1}`, added_by: "engineer", aliases: [], ...fields };
       state.directory.push(company);
       return json(company, 201);
+    }
+    const merged = path.match(/^\/directory\/(\w+)\/merge$/);
+    if (merged && method === "POST") {
+      const duplicate = state.directory.find((c) => c.id === merged[1])!;
+      state.directory = state.directory.filter((c) => c !== duplicate);
+      state.directory.find((c) => c.id === body.into)!.aliases.push(duplicate.name);
+      return new Response(null, { status: 204 });
     }
     if (path.startsWith("/directory/") && method === "DELETE") {
       state.directory = state.directory.filter((c) => `/directory/${c.id}` !== path);
@@ -234,17 +295,46 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     }
     if (path.match(/^\/tenders\/\w+\/takeoff$/))
       return json({ sheets: state.sheets, measurements: state.measurements, comparison: state.comparison });
+    if (path.match(/^\/documents\/\w+\/pages\/\d+\/screen$/) && state.screen)
+      return new Response(state.screen, { headers: { "Content-Type": "application/octet-stream" } });
+    if (path.match(/^\/documents\/\w+\/drawing$/) && state.drawing) return json(state.drawing);
+    if (path.match(/^\/documents\/\w+\/rooms$/)) return json([]);
+    if (path.match(/^\/documents\/\w+\/pages\/\d+\/choose$/))
+      return json({ objects: body.objects, keys: body.objects.map((o: number) => `K${o}`), count: body.objects.length, length_m: 20, area_m2: null, volume_m3: state.volume });
+    if (path.match(/^\/tenders\/\w+\/units$/)) {
+      state.units.push(body);
+      return json({ id: "u1", name: body.units, metres: 0.001, status: "approved", note: body.units }, 201);
+    }
+    if (path.match(/^\/tenders\/\w+\/drawing-measurements$/)) {
+      state.measured.push(body);
+      return json({ id: "m9", quantity: "20.000" }, 201);
+    }
+    if (path.match(/^\/tenders\/\w+\/queries$/)) return json(state.queries);
+    if (path.match(/^\/tenders\/\w+\/layer-maps$/)) return json(state.layerMaps);
+    if (path.match(/^\/tenders\/\w+\/checks$/)) return json(state.checks);
+    const queried = path.match(/^\/(queries|layer-maps)\/(\w+)\/decision$/);
+    if (queried) {
+      state.decided.push({ id: queried[2], ...body });
+      const record = [...state.queries, ...state.layerMaps].find((r) => r.id === queried[2]);
+      if (record) record.status = body.approve ? "approved" : "rejected";
+      return json(null);
+    }
     if (path.match(/^\/documents\/\w+\/pages\/\d+\/vertices$/)) return json([[101, 101]]);
     const sheet = path.match(/^\/documents\/(\w+)\/pages\/(\d+)\/sheet$/);
     if (sheet) return json(state.sheets.find((s) => s.document_id === sheet[1] && s.page === Number(sheet[2])));
     if (path.match(/^\/tenders\/\w+\/scales$/)) {
       state.scales.push(body);
-      return json({ id: "sc1", metres_per_point: 0.1, status: "approved", proposed_by: "engineer", ...body }, 201);
+      return json({ id: "sc1", metres_per_point: 0.1, ratio: 283, status: "approved", proposed_by: "engineer", ...body }, 201);
     }
     if (path.match(/^\/tenders\/\w+\/measurements$/)) {
       const m = { id: `m${state.measurements.length + 1}`, quantity: null, status: "approved", proposed_by: "engineer", ...body };
       state.measurements.push(m);
       return json(m, 201);
+    }
+    const scaled = path.match(/^\/scales\/(\w+)\/decision$/);
+    if (scaled) {
+      state.decided.push({ id: scaled[1], ...body });
+      return json(null);
     }
     const measured = path.match(/^\/measurements\/(\w+)(\/decision)?$/);
     if (measured) {
@@ -254,11 +344,30 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     }
     if (path.match(/^\/tenders\/\w+\/boq$/)) return json({ items: state.items, facts: state.facts });
     if (path.match(/^\/tenders\/\w+\/gates$/)) {
-      const count = (list: { status: string }[]) => list.filter((r) => r.status === "proposed").length;
-      return json({ boq: count(state.items), facts: count(state.facts), takeoff: count(state.measurements), pricing: 0, subcontract: 0, submission: 0 });
+      const count = (list: { status: string }[], status = "reviewed") => list.filter((r) => r.status === status).length;
+      const manager = [state.items, state.facts, state.measurements].reduce((n, list) => n + count(list, "proposed"), 0);
+      return json({ manager, boq: count(state.items), facts: count(state.facts), takeoff: count(state.measurements), drawings: 0, pricing: 0, subcontract: 0, submission: 0 });
+    }
+    if (path.match(/^\/tenders\/\w+\/review$/)) return json([]);
+    if (path.match(/^\/tenders\/\w+\/audit$/)) return json(state.audit);
+    if (path.match(/^\/tenders\/\w+\/lessons$/)) return json(state.lessons.filter((l) => l.status !== "dropped"));
+    const lesson = state.lessons.find((l) => path === `/lessons/${l.id}`);
+    if (lesson && method === "PATCH") {
+      lesson.status = body.status;
+      if (body.status === "kept")
+        state.rules.push({ id: `r${state.rules.length + 1}`, topic: lesson.topic, text: lesson.text, created_at: "" });
+      return json(lesson);
+    }
+    if (path === "/ai/usage") return json(state.usage);
+    const checked = path.match(/^\/records\/\w+\/(\w+)\/findings$/);
+    if (checked) return json(state.findings[checked[1]] ?? []);
+    const reopened = path.match(/^\/records\/(\w+)\/(\w+)\/reopen$/);
+    if (reopened) {
+      state.reopened.push({ kind: reopened[1], id: reopened[2], reason: body.reason });
+      return new Response(null, { status: 204 });
     }
     if (path.match(/^\/tenders\/\w+\/boq\/approve-all$/)) {
-      const waiting = state.items.filter((i) => i.status === "proposed");
+      const waiting = state.items.filter((i) => i.status === "reviewed");
       for (const item of waiting) item.status = "approved";
       return json({ approved: waiting.length });
     }
@@ -269,6 +378,11 @@ export function fakeService(initial: Partial<FakeState> = {}) {
       return json(null);
     }
 
+    if (path === "/company" && method === "GET") return json(state.company);
+    if (path === "/company" && method === "PUT") {
+      state.company = { ...body, has_logo: state.company.has_logo };
+      return json(state.company);
+    }
     if (path === "/rules" && method === "GET") return json(state.rules);
     if (path === "/rules" && method === "POST") {
       const rule = { id: `r${state.rules.length + 1}`, created_at: "2026-09-23T10:00:00Z", ...body };
@@ -286,7 +400,17 @@ export function fakeService(initial: Partial<FakeState> = {}) {
       return json(tender, 201);
     }
     const tender = state.tenders.find((t) => path === `/tenders/${t.id}`);
-    if (tender && method === "PATCH") Object.assign(tender, body);
+    if (tender && method === "PATCH") {
+      Object.assign(tender, body);
+      if ("due_date" in body) {  // the engineer's own date, as the service records it
+        const set_at = "2026-09-28T07:40:00Z";
+        tender.due_date_source = body.due_date ? { basis: "engineer", set_by: null, set_at, document_id: null, document_name: null, page: null, quote: null } : null;
+      }
+    }
+    if (tender && method === "DELETE") {
+      state.tenders = state.tenders.filter((t) => t !== tender);
+      return new Response(null, { status: 204 });
+    }
     if (path.startsWith("/tenders/")) return tender ? json({ outcome: "open", ...tender }) : json({ detail: "Tender not found." }, 404);
 
     if (path === "/ai/connections" && method === "GET") return json(state.connections);
@@ -305,12 +429,19 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     const connection = state.connections.find((c) => path.startsWith(`/ai/connections/${c.id}`));
     if (connection && path.endsWith("/models")) return json(state.models);
     if (connection && path.endsWith("/checks")) {
-      connection.checks[body.model] = { ok: true, message: "Works, including the tools the office needs.", checked_at: "" };
+      connection.checks[body.model] = { ok: true, message: "Works, including the tools the office needs.", checked_at: "", sees_images: true };
       return json(connection);
     }
     if (connection && method === "DELETE") {
       state.connections = state.connections.filter((c) => c !== connection);
       return new Response(null, { status: 204 });
+    }
+
+    if (path === "/web/keys") return json(state.webKeys);
+    const webKey = path.match(/^\/web\/keys\/(firecrawl|tinyfish)$/);
+    if (webKey) {
+      state.webKeys = { ...state.webKeys, [webKey[1]]: method === "PUT" ? `…${body.api_key.slice(-4)}` : null };
+      return method === "PUT" ? json(state.webKeys) : new Response(null, { status: 204 });
     }
 
     if (path === "/settings" && method === "GET") return json(state.settings);

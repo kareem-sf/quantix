@@ -15,6 +15,16 @@ dependencies = [
     "python-docx>=1.2",
     "pillow>=12.3",
     "python-multipart>=0.0.32",
+    "numpy>=2.5",
+    "onnxruntime>=1.30",
+    "tokenizers>=0.23",
+    "markdown-it-py>=4.0",
+    "fpdf2>=2.8",
+    "uharfbuzz>=0.50",
+    "python-pptx>=1.0",
+    "rapidocr>=3.9.2",
+    "python-bidi>=0.6",
+    "httpx>=0.28",
 ]
 
 [project.optional-dependencies]
@@ -22,6 +32,7 @@ dev = [
     "pytest>=9.1",
     "httpx2>=2.13",
     "ruff>=0.16",
+    "pydantic-evals>=2.47",
 ]
 
 [build-system]
@@ -33,6 +44,7 @@ include = ["quantix*"]
 
 [tool.setuptools.package-data]
 "quantix.migrations" = ["script.py.mako", "versions/*.py"]
+"quantix.submission" = ["fonts/*.ttf", "fonts/OFL.txt"]
 
 [tool.ruff]
 line-length = 120

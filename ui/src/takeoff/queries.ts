@@ -5,10 +5,15 @@ import type { components } from "../api/schema";
 export type Sheet = components["schemas"]["Sheet"];
 export type Measurement = components["schemas"]["MeasurementOut"];
 export type Comparison = components["schemas"]["ComparisonOut"];
-export type Kind = "length" | "area" | "count";
+export type Kind = "length" | "area" | "count" | "volume";
 export type Point = [number, number];
 
-export const UNITS: Record<Kind, string[]> = { length: ["m", "m2"], area: ["m2", "m3"], count: ["nr"] };
+export const UNITS: Record<Kind, string[]> = {
+  length: ["m", "m2"],
+  area: ["m2", "m3"],
+  count: ["nr"],
+  volume: ["m3", "kg", "t"],
+};
 
 export function useTakeoff(tenderId: string) {
   return useQuery({
@@ -83,7 +88,7 @@ export function useMeasure(tenderId: string) {
     mutationFn: async (body: {
       document_id: string;
       page: number;
-      kind: Kind;
+      kind: Exclude<Kind, "volume">;
       label: string;
       points: Point[];
       unit: string;
@@ -97,10 +102,10 @@ export function useMeasure(tenderId: string) {
 export function useDecideMeasurement(tenderId: string) {
   const refresh = useRefresh(tenderId);
   return useMutation({
-    mutationFn: async (body: { id: string; approve: boolean }) => {
+    mutationFn: async (body: { id: string; approve: boolean; reason?: string }) => {
       const result = await api.POST("/measurements/{measurement_id}/decision", {
         params: { path: { measurement_id: body.id } },
-        body: { approve: body.approve, reason: null },
+        body: { approve: body.approve, reason: body.reason ?? null },
       });
       if (!result.response.ok) must(result);
     },
@@ -111,10 +116,10 @@ export function useDecideMeasurement(tenderId: string) {
 export function useDecideScale(tenderId: string) {
   const refresh = useRefresh(tenderId);
   return useMutation({
-    mutationFn: async (body: { id: string; approve: boolean }) => {
+    mutationFn: async (body: { id: string; approve: boolean; reason?: string }) => {
       const result = await api.POST("/scales/{scale_id}/decision", {
         params: { path: { scale_id: body.id } },
-        body: { approve: body.approve, reason: null },
+        body: { approve: body.approve, reason: body.reason ?? null },
       });
       if (!result.response.ok) must(result);
     },
@@ -139,7 +144,8 @@ export const RESULTS: Record<string, string> = {
   unit_differs: "Unit differs",
   no_boq_quantity: "BOQ has no quantity",
   not_in_boq: "Missing from the BOQ",
-  no_scale: "Needs a scale",
+  not_on_drawings: "Not on the drawings",
+  no_scale: "Needs a scale or units",
 };
 
 export function percent(value: string | null | undefined) {

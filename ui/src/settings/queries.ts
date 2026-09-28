@@ -76,3 +76,38 @@ export function useUpdateSettings() {
     onSuccess: refresh,
   });
 }
+
+export type Usage = components["schemas"]["Usage"];
+
+/** How each AI model has done in the office, and the tokens each tender's office has used. */
+export function useUsage() {
+  return useQuery({ queryKey: ["usage"], queryFn: async () => must(await api.GET("/ai/usage")) });
+}
+
+export type WebService = "firecrawl" | "tinyfish";
+export type WebKeys = components["schemas"]["WebKeys"];
+
+/** The web research keys the engineer added, as hints. */
+export function useWebKeys() {
+  return useQuery({ queryKey: ["web-keys"], queryFn: async () => must(await api.GET("/web/keys")) });
+}
+
+export function useSetWebKey() {
+  const refresh = useRefresh("web-keys");
+  return useMutation({
+    mutationFn: async ({ service, api_key }: { service: WebService; api_key: string }) =>
+      must(await api.PUT("/web/keys/{service}", { params: { path: { service } }, body: { api_key } })),
+    onSuccess: refresh,
+  });
+}
+
+export function useRemoveWebKey() {
+  const refresh = useRefresh("web-keys");
+  return useMutation({
+    mutationFn: async (service: WebService) => {
+      const result = await api.DELETE("/web/keys/{service}", { params: { path: { service } } });
+      if (!result.response.ok) must(result);
+    },
+    onSuccess: refresh,
+  });
+}

@@ -1,13 +1,17 @@
+import { IconX } from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { money } from "../estimate/queries";
 import { Face } from "../office/Face";
 import { firstName, useOffice, type Staff } from "../office/queries";
+import { Findings, Reopen, ReviewNote, WITH_MANAGER } from "../review/Review";
+import { useAudit } from "../review/queries";
 import { dueShort } from "../tenders/due";
 import { useTender } from "../tenders/queries";
 import {
   useAddRequirement,
   useAttach,
+  useRemoveRequirement,
   useBuild,
   useDecideDraft,
   useMarkReady,
@@ -20,14 +24,16 @@ import {
 const MARK: Record<string, string> = {
   ready: "bg-ink",
   review: "bg-attention",
+  manager: "bg-ink-4",
   missing: "border-2 border-line-strong",
 };
 
 function stateText(r: Requirement): string {
   if (r.state === "review") return "Draft · needs you";
+  if (r.state === "manager") return "Draft · with the Manager";
   if (r.state === "missing") return "Missing";
   if (r.file_name) return "Ready · file added";
-  if (r.draft?.status === "office_approved") return "Ready · approved by the office";
+  if (r.draft?.status === "office_approved") return "Ready · approved by the office after the Manager's review";
   return "Ready";
 }
 
@@ -53,7 +59,8 @@ export function Submission() {
       <section aria-label="Submission checklist" className="flex min-w-0 grow flex-col px-8 pt-7">
         <h1 className="text-[22px] font-semibold tracking-tight">Submission</h1>
         <span className="text-ink-2">
-          {ready} of {rows.length} ready{tender.data?.due_date && ` · submit ${dueShort(tender.data.due_date).replace("due ", "by ")}`}
+          {rows.length ? `${ready} of ${rows.length} ready` : "What the tender asks you to submit"}
+          {tender.data?.due_date && ` · submit ${dueShort(tender.data.due_date).replace("due ", "by ")}`}
         </span>
 
         <div className="mt-[18px] flex gap-[18px] border-b border-line">
@@ -108,7 +115,7 @@ export function Submission() {
           ))}
           <AddRequirement tenderId={tenderId} />
         </div>
-        <BuildBar tenderId={tenderId} notReady={rows.length - ready} columns={submission.data?.columns ?? []} />
+        <BuildBar tenderId={tenderId} columns={submission.data?.columns ?? []} />
       </section>
       {selected && <RequirementPanel tenderId={tenderId} requirement={selected} people={people} />}
     </div>
@@ -150,8 +157,9 @@ function AddRequirement({ tenderId }: { tenderId: string }) {
   );
 }
 
-function BuildBar(props: { tenderId: string; notReady: number; columns: { document_name: string; sheet: number; rate_column: string; amount_column: string }[] }) {
+function BuildBar(props: { tenderId: string; columns: { document_name: string; sheet: number; rate_column: string; amount_column: string }[] }) {
   const build = useBuild(props.tenderId);
+  const blockers = (useAudit(props.tenderId).data ?? []).filter((f) => f.severity === "blocker").length;
   const [spread, setSpread] = useState(true);
   return (
     <div className="flex flex-col gap-3 border-t border-line py-4">
@@ -178,7 +186,7 @@ function BuildBar(props: { tenderId: string; notReady: number; columns: { docume
             disabled={build.isPending}
             className="h-[38px] rounded-lg bg-ink px-4 text-sm whitespace-nowrap text-white disabled:bg-line-strong"
           >
-            Build package{props.notReady > 0 && ` · ${props.notReady} not ready`}
+            Build package{blockers > 0 && ` · ${blockers} not ready`}
           </button>
         </span>
       </div>
@@ -219,18 +227,20 @@ function RequirementPanel(props: { tenderId: string; requirement: Requirement; p
   const decide = useDecideDraft(tenderId);
   const ready = useMarkReady(tenderId);
   const attach = useAttach(tenderId);
+  const remove = useRemoveRequirement(tenderId);
+  const [removing, setRemoving] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
   const author = r.draft ? props.people.get(r.draft.proposed_by) : undefined;
-  const error = decide.error ?? ready.error ?? attach.error;
+  const error = decide.error ?? ready.error ?? attach.error ?? remove.error;
 
   return (
     <aside
       aria-label={r.title}
       className="flex w-[400px] shrink-0 flex-col gap-[18px] overflow-y-auto border-l border-line bg-white px-6 pt-7 pb-5 max-xl:absolute max-xl:inset-y-0 max-xl:right-0 max-xl:z-10 max-xl:shadow-[-8px_0_24px_rgba(0,0,0,0.08)]"
     >
-      <button aria-label="Close" onClick={() => setParams({})} className="-mt-3 -mr-2 self-end text-lg leading-none text-ink-3 hover:text-ink">
-        ×
+      <button aria-label="Close" onClick={() => setParams({})} className="-mt-3 -mr-2 self-end text-ink-3 hover:text-ink">
+        <IconX className="size-[18px]" stroke={1.75} />
       </button>
       <div className="flex flex-col gap-1">
         <span className="text-ink-3">{r.section}</span>
@@ -259,7 +269,7 @@ function RequirementPanel(props: { tenderId: string; requirement: Requirement; p
           <span className="flex items-center gap-2 text-xs font-semibold text-ink-2">
             {author && <Face id={author.id} size={18} />}
             Drafted{author && ` by ${firstName(author)}`}
-            {r.draft.status === "office_approved" && " · approved by the office, not reviewed"}
+            {r.draft.status === "office_approved" && " · approved by the office, not reviewed by you"}
           </span>
           <div className="flex flex-col gap-2 rounded-lg border border-line p-3">
             <span className="font-medium">{r.draft.title}</span>
@@ -270,11 +280,15 @@ function RequirementPanel(props: { tenderId: string; requirement: Requirement; p
         </div>
       )}
 
+      {r.draft && <Findings kind="draft" id={r.draft.id} tenderId={tenderId} />}
+      {r.draft?.status === "proposed" && <p className="text-ink-2">{WITH_MANAGER}</p>}
+      {r.draft && <ReviewNote reviewedBy={r.draft.reviewed_by} note={r.draft.review_note} people={props.people} />}
+      {r.draft && ["approved", "office_approved"].includes(r.draft.status) && <Reopen kind="draft" id={r.draft.id} />}
       {r.file_name && <p className="text-ink-2">File added: {r.file_name}</p>}
       {r.ready_note !== null && <p className="text-ink-2">Marked ready{r.ready_note && `: ${r.ready_note}`}</p>}
 
       <div className="grow" />
-      {r.draft?.status === "proposed" &&
+      {r.draft?.status === "reviewed" &&
         (rejecting ? (
           <div className="flex flex-col gap-2">
             <textarea
@@ -321,6 +335,24 @@ function RequirementPanel(props: { tenderId: string; requirement: Requirement; p
         ) : (
           <button onClick={() => ready.mutate({ id: r.id, ready: false })} className="text-ink-2 hover:text-ink">
             Not ready after all
+          </button>
+        )}
+        <span className="grow" />
+        {removing ? (
+          <span className="flex gap-3">
+            <button
+              onClick={() => remove.mutate(r.id, { onSuccess: () => setParams({}) })}
+              className="font-medium text-attention"
+            >
+              Remove it
+            </button>
+            <button onClick={() => setRemoving(false)} className="text-ink-2">
+              Keep
+            </button>
+          </span>
+        ) : (
+          <button onClick={() => setRemoving(true)} className="text-ink-3 hover:text-attention">
+            Remove from checklist
           </button>
         )}
       </div>

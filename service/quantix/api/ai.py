@@ -2,11 +2,16 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import urlparse
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, StringConstraints, model_validator
+from pydantic import BaseModel, Field, StringConstraints, model_validator
 
-from quantix import settings
+from quantix import settings, tenders
 from quantix.ai import check, connections, providers
+from quantix.api.tenders import DB
+from quantix.documents import web
+from quantix.office import records
+from quantix.review import scorecard
 
 router = APIRouter(tags=["ai"])
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -23,6 +28,7 @@ class ModelCheck(BaseModel):
     ok: bool
     message: str
     checked_at: str
+    sees_images: bool = False  # checks made before this was tested count as not seeing
 
 
 class ConnectionOut(BaseModel):
@@ -58,11 +64,13 @@ class OfficeAI(BaseModel):
 class Settings(BaseModel):
     office_mode: Literal["engineer", "autonomous"]
     office_ai: OfficeAI | None
+    tender_allowance: int | None  # the most AI tokens one tender's office may use
 
 
 class SettingsUpdate(BaseModel):
     office_mode: Literal["engineer", "autonomous"] | None = None
     office_ai: OfficeAI | None = None
+    tender_allowance: int | None = Field(default=None, ge=1)
 
 
 def _out(connection: dict[str, Any]) -> ConnectionOut:
@@ -118,9 +126,48 @@ async def list_models(connection_id: str, home: Home) -> list[str]:
 async def check_model(connection_id: str, body: CheckRequest, home: Home) -> ConnectionOut:
     c = _connection(home, connection_id)
     model = providers.build_model(c["provider"], body.model, c["api_key"], c["base_url"])
-    ok, message = await check.check_model(model)
-    connections.record_check(home, connection_id, body.model, ok, message)
+    ok, message, sees_images = await check.check_model(model)
+    connections.record_check(home, connection_id, body.model, ok, message, sees_images)
     return _out(_connection(home, connection_id))
+
+
+class WebKeys(BaseModel):
+    """The web research keys the engineer added, as hints; None for a service without one."""
+
+    firecrawl: str | None
+    tinyfish: str | None
+
+
+class WebKey(BaseModel):
+    api_key: Text
+
+
+def _web_keys(home: Path) -> WebKeys:
+    keys = connections.web_keys(home)
+    return WebKeys(**{s: f"…{keys[s][-4:]}" if s in keys else None for s in web.SERVICES})
+
+
+@router.get("/web/keys")
+def get_web_keys(home: Home) -> WebKeys:
+    return _web_keys(home)
+
+
+@router.put("/web/keys/{service}")
+def set_web_key(service: Literal["firecrawl", "tinyfish"], body: WebKey, home: Home) -> WebKeys:
+    """Keep a web research key once the service accepts it."""
+    try:
+        web.check_key(service, body.api_key)
+    except httpx.HTTPStatusError as error:
+        raise HTTPException(status_code=400, detail="The key was refused.") from error
+    except httpx.HTTPError as error:
+        raise HTTPException(status_code=502, detail="The service couldn't be reached. Try again later.") from error
+    connections.set_web_key(home, service, body.api_key)
+    return _web_keys(home)
+
+
+@router.delete("/web/keys/{service}", status_code=204)
+def remove_web_key(service: Literal["firecrawl", "tinyfish"], home: Home) -> None:
+    connections.set_web_key(home, service, None)
 
 
 @router.get("/settings")
@@ -137,3 +184,37 @@ def update_settings(body: SettingsUpdate, home: Home) -> Settings:
         if not c["checks"].get(office_ai["model"], {}).get("ok"):
             raise HTTPException(status_code=400, detail="Check this model before the office uses it.")
     return Settings(**settings.save(home, **values))
+
+
+class ModelScore(BaseModel):
+    model: str
+    turns: int
+    finished: int  # turns that ended done, rather than cut short or failed
+    calls: int
+    calls_sent_back: int  # tool calls Quantix sent back with a reason
+    accepted: int  # records filed on its turns that the Tender Manager or the engineer accepted
+    sent_back: int  # records filed on its turns that were sent back
+    tokens: int
+
+
+class TenderUsage(BaseModel):
+    tender_id: str
+    name: str
+    tokens: int
+
+
+class Usage(BaseModel):
+    models: list[ModelScore]  # the most recently used first
+    tenders: list[TenderUsage]
+
+
+@router.get("/ai/usage")
+def usage(session: DB) -> Usage:
+    """How each AI model has done in the office, and the tokens each tender's office has used."""
+    return Usage(
+        models=[ModelScore(**vars(s)) for s in scorecard.scores(session)],
+        tenders=[
+            TenderUsage(tender_id=t.id, name=t.name, tokens=records.tokens_used(session, t.id))
+            for t in tenders.list_tenders(session)
+        ],
+    )

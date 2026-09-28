@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { TenderDocument } from "../documents/queries";
 import type { BoqItem } from "../estimate/queries";
 import { fakeService, openApp } from "../test/app";
+import { drawingInfo, screenCopy } from "../test/drawing";
 import type { Measurement, Sheet } from "./queries";
 
 const tender = { id: "t1", name: "Synthetic school", due_date: null, created_at: "2026-09-23T10:00:00Z" };
@@ -18,18 +19,24 @@ const drawing: TenderDocument = {
   page_count: 1,
   group_name: null,
   description: null,
+  scans_to_read: 0,
+  opened: 0,
+  cited: 0,
 };
-const sheet: Sheet = { document_id: "d1", name: "A-101.pdf", page: 1, width: 612, height: 792, scale: null };
+const sheet: Sheet = { document_id: "d1", name: "A-101.pdf", page: 1, width: 612, height: 792, scale: null, kind: "pdf", units: null };
 const scaled: Sheet = {
   ...sheet,
   scale: {
     id: "sc1",
     metres_per_point: 0.1,
+    ratio: 283,
     line: [],
     length_m: 40,
     dimension: "40.00",
-    status: "proposed",
+    status: "reviewed",
     proposed_by: "s2",
+    reviewed_by: "s1",
+    review_note: "Checked against the title block.",
   },
 };
 const wall: BoqItem = {
@@ -42,6 +49,8 @@ const wall: BoqItem = {
   status: "approved",
   proposed_by: "s2",
   reason: null,
+  reviewed_by: "s1",
+  review_note: null,
   source: { document_id: "d2", document_name: "Bill.xlsx", page: 1, quote: "" },
 };
 const doors: Measurement = {
@@ -59,8 +68,10 @@ const doors: Measurement = {
   multiplier: null,
   quantity: "3",
   boq_item: "7.1",
-  status: "proposed",
+  status: "reviewed",
   proposed_by: "s2",
+  reviewed_by: "s1",
+  review_note: "Three doors on the plan.",
 };
 
 /** jsdom has no layout: give the drawing the page's own size so clicks land on page points. */
@@ -153,8 +164,98 @@ describe("Takeoff", () => {
     expect(await within(panel).findByText("3 nr")).toBeInTheDocument();
     expect(within(panel).getByText("Differs -40.0%")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Approve scale" })).toBeInTheDocument();
+    expect(screen.getByText("· about 1:283")).toBeInTheDocument(); // to compare with the title block
+
+    const sheetArea = screen.getByRole("region", { name: "Drawing" });
+    await userEvent.click(within(sheetArea).getByRole("button", { name: "Send back" }));
+    await userEvent.type(within(sheetArea).getByLabelText("What to put right"), "Use the 40.00 m dimension on grid A.");
+    await userEvent.click(within(sheetArea).getByRole("button", { name: "Send" }));
+    await waitFor(() =>
+      expect(service.state.decided).toContainEqual({ id: "sc1", approve: false, reason: "Use the 40.00 m dimension on grid A." }),
+    );
 
     await userEvent.click(within(panel).getByRole("button", { name: "Approve" }));
     await waitFor(() => expect(service.state.measurements[0].status).toBe("approved"));
+  });
+});
+
+const cadDocument: TenderDocument = { ...drawing, id: "d3", path: "Drawings/A-201.dwg", name: "A-201.dwg", kind: "cad" };
+const cadSheet: Sheet = { document_id: "d3", name: "A-201.dwg", page: 1, width: 20, height: 20, scale: null, kind: "cad", units: null };
+
+describe("Takeoff from a CAD drawing", () => {
+  it("sets the drawing's units from what it says", async () => {
+    const service = fakeService({
+      tenders: [tender],
+      documents: [cadDocument],
+      sheets: [cadSheet],
+      drawing: drawingInfo,
+      screen: screenCopy(),
+    });
+    openApp("/tenders/t1/takeoff?doc=d3&page=1");
+
+    expect(await screen.findByText("No units yet: the drawing says millimetres")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Set units" }));
+    await waitFor(() => expect(service.state.units).toEqual([{ document_id: "d3", units: "millimetres" }]));
+  });
+
+  it("measures the objects the engineer chooses on the drawing", async () => {
+    const service = fakeService({
+      tenders: [tender],
+      documents: [cadDocument],
+      sheets: [cadSheet],
+      drawing: drawingInfo,
+      screen: screenCopy(),
+      items: [wall],
+    });
+    openApp("/tenders/t1/takeoff?doc=d3&page=1");
+
+    const view = await screen.findByRole("img", { name: "Model: 3 objects" });
+    fireEvent.pointerDown(view, { clientX: 400, clientY: 300 }); // the drawing's centre, on the wall line
+    fireEvent.pointerUp(view, { clientX: 400, clientY: 300 });
+    expect(await screen.findByText("1 object chosen")).toBeInTheDocument();
+    expect(await screen.findByText(/1 to count · 20 m long/)).toBeInTheDocument(); // Quantix's figures
+
+    await userEvent.click(screen.getByRole("button", { name: "Length" }));
+    await userEvent.type(screen.getByLabelText("What is it"), "Wall");
+    await userEvent.selectOptions(screen.getByLabelText("BOQ item"), "5.1 · External wall");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(service.state.measured[0]).toEqual({
+        document_id: "d3",
+        kind: "length",
+        label: "Wall",
+        unit: "m",
+        multiplier: null,
+        boq_item: "5.1",
+        choice: { stamp: "st1", objects: [0] },
+      }),
+    );
+  });
+
+  it("measures 3D solids by volume, and by weight with a density", async () => {
+    const service = fakeService({
+      tenders: [tender],
+      documents: [cadDocument],
+      sheets: [cadSheet],
+      drawing: drawingInfo,
+      screen: screenCopy(),
+      volume: 0.061,
+    });
+    openApp("/tenders/t1/takeoff?doc=d3&page=1");
+
+    const view = await screen.findByRole("img", { name: "Model: 3 objects" });
+    fireEvent.pointerDown(view, { clientX: 400, clientY: 300 });
+    fireEvent.pointerUp(view, { clientX: 400, clientY: 300 });
+    expect(await screen.findByText(/0.061 m³ solid/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Volume" }));
+    await userEvent.type(screen.getByLabelText("What is it"), "Ladder steel");
+    await userEvent.selectOptions(screen.getByLabelText("Unit"), "kg");
+    expect(screen.getByText("Density in kg per m³")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Multiplier"), "7850");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(service.state.measured[0]).toMatchObject({ kind: "volume", unit: "kg", multiplier: "7850" }),
+    );
   });
 });

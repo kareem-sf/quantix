@@ -7,6 +7,7 @@ left, runs of English words and numbers left to right, and vowel marks kept with
 
 import re
 import unicodedata
+from collections import Counter
 from dataclasses import dataclass
 from statistics import median
 
@@ -29,6 +30,9 @@ class Char:
     @property
     def y(self) -> float:
         return (self.bottom + self.top) / 2
+
+
+_ALEFS = frozenset("اأإآ")
 
 
 def has_arabic(text: str) -> bool:
@@ -89,7 +93,7 @@ def _is_mark(char: Char) -> bool:
 def _word_text(word: list[Char]) -> str:
     if not has_arabic("".join(c.text for c in word)):
         return "".join(c.text for c in sorted(word, key=lambda c: c.x))
-    bases = sorted((c for c in word if not _is_mark(c)), key=lambda c: -c.x)
+    bases = _lam_first(sorted((c for c in word if not _is_mark(c)), key=lambda c: -c.x))
     marks = [c for c in word if _is_mark(c)]
     if not bases:
         return "".join(c.text for c in marks)
@@ -98,6 +102,25 @@ def _word_text(word: list[Char]) -> str:
         nearest = min(range(len(bases)), key=lambda i: abs(bases[i].x - mark.x))
         seated[nearest].append(mark.text)
     return "".join("".join(parts) for parts in seated)
+
+
+def _lam_first(bases: list[Char]) -> list[Char]:
+    """A lam-alef ligature comes as its two letters in one box, and some PDFs store the alef first ("خالل" for
+    "خلال"): the ligature always reads lam first. Only a box holding exactly those two letters is a ligature; a word
+    whose letters all share one box keeps the order it was stored in."""
+    boxes = Counter((c.left, c.right, c.bottom, c.top) for c in bases)
+    ordered = list(bases)
+    for i in range(len(ordered) - 1):
+        alef, lam = ordered[i], ordered[i + 1]
+        box = (alef.left, alef.right, alef.bottom, alef.top)
+        if (
+            alef.text in _ALEFS
+            and lam.text == "ل"
+            and box == (lam.left, lam.right, lam.bottom, lam.top)
+            and boxes[box] == 2
+        ):
+            ordered[i], ordered[i + 1] = lam, alef
+    return ordered
 
 
 def _right_to_left(words: list[str]) -> list[str]:
