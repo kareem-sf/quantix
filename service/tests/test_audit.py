@@ -311,4 +311,6 @@ def test_a_problem_in_approved_work_wakes_the_manager_once(client, tender):
     assert asyncio.run(runtime._turn(scripted(brain), tender_id, rania_id)) is True
     shown = f"- markups {markups_id[:8]}: The markups: Site engineer and Foreman: 4 month is about 104 working days"
     assert "Quantix finds problems in work the engineer already approved." in briefings[0] and shown in briefings[0]
+    # as what woke him, not after "Nothing new", which on the real tender he took at its word
+    assert f"New for you:\n- Quantix, in work the engineer approved (markups {markups_id[:8]}): " in briefings[0]
     assert asyncio.run(runtime._turn(scripted(brain), tender_id, rania_id)) is False  # once, not every pass

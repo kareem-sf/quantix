@@ -3,7 +3,7 @@
 import logging
 import time
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -140,7 +140,13 @@ def _due(session: Session, tender: tenders.Tender) -> str:
     return f"{when}, the engineer's date, not from the tender documents"
 
 
-def situation(session: Session, member: Staff, new: list[Message], problems: Sequence[tuple[str, Any]] = ()) -> str:
+def situation(
+    session: Session,
+    member: Staff,
+    new: list[Message],
+    problems: Sequence[tuple[str, Any]] = (),
+    fresh: Collection[str] = (),
+) -> str:
     """What this person needs to know now. Rebuilt every turn from the records, never from memory."""
     tender = tenders.get_tender(session, member.tender_id)
     team = records.team(session, member.tender_id)
@@ -217,7 +223,14 @@ def situation(session: Session, member: Staff, new: list[Message], problems: Seq
             "Earlier in your chat with the engineer:\n"
             + "\n".join(f"- {'You' if m.sender == member.id else 'Engineer'}: {m.text}" for m in chat)
         )
-    parts.append("New for you:\n" + ("\n".join(line(m) for m in new) or "- Nothing new; carry on with your tasks."))
+    found = [  # what woke him: a problem in approved work he hasn't seen yet
+        f"- Quantix, in work the engineer approved ({ref}): {f.message} Only the engineer can decide it: escalate it "
+        "now, with your recommended correction first."
+        for ref, f in problems
+        if f.key in fresh
+    ]
+    news = [line(m) for m in new] + found
+    parts.append("New for you:\n" + ("\n".join(news) or "- Nothing new; carry on with your tasks."))
     return "\n\n".join(parts)
 
 

@@ -204,7 +204,7 @@ class Office:
             ):
                 return False
             history = self._carry.pop(staff_id, None)
-            prompt = agents.situation(session, member, new, problems)
+            prompt = agents.situation(session, member, new, problems, {f.key for f in unseen})
             for _, finding in problems:
                 records.note_opened(session, tender_id, staff_id, "finding", finding.key[:80])
             if history is not None:

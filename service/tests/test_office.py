@@ -4,6 +4,7 @@ import re
 import threading
 import time
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -790,8 +791,11 @@ def test_the_turn_budget_is_kept_across_a_restart(client, office, tmp_path, monk
         rania = office_records.hire(session, tender_id, "Rania Farouk", "Tender Manager", {}, is_manager=True)
         office_records.post(session, tender_id, ENGINEER, TEAM, "Price the asphalt.")
         session.flush()
+        later = datetime.now(UTC) + timedelta(seconds=1)  # clearly after the message, whatever the clock's grain
         for _ in range(runtime.TURN_BUDGET):  # a long stretch of work since the engineer last wrote
-            session.add(TurnRecord(tender_id=tender_id, staff_id=rania.id, model="scripted", ended="done"))
+            session.add(
+                TurnRecord(tender_id=tender_id, staff_id=rania.id, model="scripted", ended="done", started_at=later)
+            )
         session.commit()
     with restarted(tmp_path) as again:
         wait_for(lambda o: o["state"] == "paused", again, tender_id)
