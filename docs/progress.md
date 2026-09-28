@@ -977,7 +977,8 @@ told the engineer when the last approval was done, either. The same gap showed i
 - **Stuck in his queue.** The next redo priced monthly site staff by the day (preliminaries 155% of net). Salem
   couldn't send it back a third time, and his escalation was turned away twice: he named the markups themselves
   as a BOQ line, and markups have no page of their own. His turn ended and nothing woke him again. Now:
-  - a source naming the escalated work is left out;
+  - a source naming the escalated work, or giving no page or BOQ line, is left out (once this was live, Salem's third
+    attempt gave the markups as a source with no page, and was refused again);
   - work Quantix's checks find a problem in needs no page, since its finding shows beside the decision (as for
     approved work);
   - work still in his queue after one finished turn since it came, neither decided nor escalated, wakes him once

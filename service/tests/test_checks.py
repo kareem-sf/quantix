@@ -265,7 +265,8 @@ def test_the_schedule_and_the_markups_are_checked_against_each_other(client, ten
 
 def test_work_quantix_warns_about_is_escalated_where_its_finding_shows(client, tender):
     """The real tender: Salem escalated markups whose preliminaries came to 155% of the net cost, naming the markups
-    as a BOQ line; the tool turned him away, and the engineer waited for markups no one brought."""
+    as a BOQ line, then as a source with no page; the tool turned him away each time, and the engineer waited for
+    markups no one brought."""
     tender_id, omar, _ = tender
     with client.app.state.sessions() as session:
         for item in ("8485 · Earthwork / C.1", "8485 · Earthwork / C.2", "8486 · Earthwork / C.1"):
@@ -278,7 +279,9 @@ def test_work_quantix_warns_about_is_escalated_where_its_finding_shows(client, t
         ref, manager = f"markups {markups.id[:8]}", office.manager(session, tender_id)
         problem = "Preliminaries are many times the net cost: the monthly rates are priced by the day."
         itself = reviews.Source(boq_item=ref, what="The markups")
-        decision = reviews.escalate(session, tender_id, manager, ref, problem, [itself], ["Price the staff by month"])
+        nowhere = reviews.Source(what=f"open record {ref}: site engineer 72 day × 18000")
+        suggested = ["Price the staff by month"]
+        decision = reviews.escalate(session, tender_id, manager, ref, problem, [itself, nowhere], suggested)
         session.commit()
         assert (decision.subject_kind, decision.sources) == ("markups", [])  # its finding shows beside the decision
         assert reviews.counts(session, tender_id) == ""  # it waits for the engineer's answer, not for him

@@ -754,8 +754,10 @@ def escalate(
     if approved and any(s.lower().startswith(("keep", "leave")) for s in suggestions):
         # any choice but Quantix's own keep reopens the work: a second "keep" would reopen it to be kept
         raise ValueError(f"Give only corrections: Quantix adds “{KEEP_APPROVED}” itself.")
-    # the escalated work itself is not a place it shows: the real tender's markups were refused for naming it
-    sources = [s for s in sources if (s.boq_item or "").strip().lower() not in (ref.strip().lower(), p.ref)]
+    # neither the escalated work itself nor a source with no page or BOQ line is a place it shows: the real tender's
+    # markups were refused for each, three times
+    itself = (ref.strip().lower(), p.ref)
+    sources = [s for s in sources if (s.document_id or s.boq_item) and (s.boq_item or "").strip().lower() not in itself]
     # approved work, or work Quantix's checks find a problem in: the finding says where, beside the decision
     if not sources and not approved and not checks.for_record(session, library.home_of(session), p.kind, p.record):
         raise ValueError("Show the engineer where the problem is: at least one document page or BOQ line.")
