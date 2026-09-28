@@ -240,6 +240,7 @@ def test_find_records_and_the_priced_boq(client, tender):
         filed.status = "rejected"
         [returned] = lookup.search(session, tender_id, "markup")
         assert returned.endswith("· sent back") and lookup.find(session, tender_id, "markups") == ("markups", filed)
+        assert lookup.find(session, tender_id, returned) == ("markups", filed)  # the whole line, as Salem cited it
         assert agents.standing(session, tender_id).count(
             "Markups: the last set was sent back, and none proposed since."
         )

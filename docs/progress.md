@@ -922,3 +922,7 @@ was already marked as read, so it would not have come back as new.
   Sent-back drafts were already shown for correcting. Now the newest sent-back set of markups is too:
   `find_records` and `open_record("markups")` return it marked "sent back", and "where the tender stands" says the
   last set was sent back and none has been proposed since.
+- **A pasted search line counts as its reference.** Asked a third time, Salem found the sent-back markups and wrote
+  the right answer ("It is both…"), but twice gave the whole `find_records` line as his source. Quantix refused it
+  both times, so the answer never reached the engineer. A source, or anything else opened by reference, is now read
+  by the reference its line starts with ("markups · …" is "markups"). It must still have been opened.

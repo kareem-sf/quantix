@@ -97,8 +97,9 @@ def _tender_of(session: Session, record: Any) -> str:
 
 
 def find(session: Session, tender_id: str, ref: str) -> tuple[str, Any]:
-    """A record by its reference ("rate 42a9fb15", "markups") or a BOQ line by its number ("Earthwork / C.1.2")."""
-    text = ref.strip()
+    """A record by its reference ("rate 42a9fb15", "markups") or a BOQ line by its number ("Earthwork / C.1.2"). A
+    whole line from find_records is taken by the reference it starts with."""
+    text = ref.split(" · ")[0].strip()
     kind, _, short = text.partition(" ")
     kind = {"recommendation": "package", "requirement": "checklist"}.get(kind.lower(), kind.lower())
     short = short.strip().lower()
@@ -534,7 +535,7 @@ def cited(session: Session, tender_id: str, staff_id: str, text: str) -> dict[st
         return {"label": f"{document.name}, page {number}", "document_id": document.id, "page": number}
     kind, record = find(session, tender_id, wanted)
     if not office.has_opened(session, staff_id, kind, record.id):
-        raise ValueError(f"You haven't opened {wanted}. Open it with open_record first.")
+        raise ValueError(f"You haven't opened {wanted.split(' · ')[0]}. Open it with open_record first.")
     return _link(session, kind, record)
 
 
