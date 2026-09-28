@@ -196,6 +196,9 @@ count from the geometry and scale. Measurements link to BOQ items, and Quantix c
   block reference's contents with its full transform (nested blocks, MINSERT arrays, base points, object normals).
   Layer "0" inside a block takes the reference's layer, as CAD shows it; an anonymous copy of a dynamic block is
   counted under its definition. It never counts from the library's `entities()`, which includes block definitions.
+  A clipped reference (XCLIP) keeps only what shows inside its clip boundary: lines are cut where they leave it, a
+  closed shape keeps the area inside and the part of its outline inside, and what lies wholly outside is left out.
+  The boundary comes from the reference's spatial filter, taken back into the block by its inverse placement.
   Each placed object gets a key (the block references it sits in, then its handle, e.g. `1F3/2A`), its layer, block,
   flags (closed, annotation, inside a block), extent, and exact length and area in drawing units. The folder,
   `tenders/<id>/drawings/<sha256>/` beside the stored file, holds `drawing.json` (units, spaces, layers, blocks,
@@ -224,7 +227,7 @@ count from the geometry and scale. Measurements link to BOQ items, and Quantix c
   swing are left out and its opening closed by the swing's radius that isn't the leaf. Regions under 1 m² or thinner
   than 0.5 m are dropped. Each room takes the names printed inside it (the room-name layers, or else any word).
 - **Checks** (`drawings.drawing_problems`, `boq_problems`, `grid_problems`), computed and never stored: what
-  couldn't be read (3D solids, images, proxies, undecoded records, unloaded xrefs, clipped blocks), layers that
+  couldn't be read (3D solids, images, proxies, undecoded records, unloaded xrefs), layers that
   don't print but hold objects, lines drawn twice, written dimensions that disagree with the drawn length, drawn
   work the map calls work that no measurement takes, room names in no closed room, services crossing fire-rated
   walls, grids that differ between drawings, and the BOQ's own lines billed twice, provisional and prime cost sums,

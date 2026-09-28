@@ -16,19 +16,20 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::Path;
+use std::rc::Rc;
 
 use opencadcodec::entities::mtext_format::parse_mtext;
 use opencadcodec::entities::{AttachmentPoint, BoundaryEdge, EntityType, Hatch, Insert};
 use opencadcodec::objects::ObjectType;
-use opencadcodec::types::Vector3;
+use opencadcodec::types::{Handle, Matrix4, Vector3};
 use opencadcodec::{CadDocument, DwgReadOptions, DwgReader, DxfReader, ReadOutcome};
 use serde_json::{json, Value};
 
-use crate::geometry::{self as g, Affine, Shape};
+use crate::geometry::{self as g, Affine, Clip, Shape};
 use crate::Failure;
 
 /// Bumped whenever what the folder holds changes, so Quantix reads older folders again.
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
 pub const READER: &str = "opencadcodec a35f43e, opencadkernel ee41029";
 
 pub const TYPES: [&str; 20] = [
@@ -93,7 +94,12 @@ struct Place {
     parent: Option<usize>,
     flags: u32,
     depth: u32,
+    /// The clip boundaries of the block references it sits in: only what shows through all of them is kept.
+    clips: Rc<Vec<Clip>>,
 }
+
+/// How much the walker had written, to take back a clipped block reference none of whose objects show.
+struct Mark([usize; 8]);
 
 struct Walker<'a> {
     doc: &'a CadDocument,
@@ -114,6 +120,8 @@ struct Walker<'a> {
     viewports: Vec<Value>,
     not_read: BTreeMap<&'static str, u64>,
     xrefs: BTreeMap<String, Value>,
+    /// Each clipped block reference's clip boundary, in its block's own coordinates.
+    clips: BTreeMap<u64, Vec<[f64; 2]>>,
 }
 
 pub fn run(drawing: &str, folder: &str) -> Result<(), Failure> {
@@ -131,6 +139,7 @@ pub fn run(drawing: &str, folder: &str) -> Result<(), Failure> {
             parent: None,
             flags: 0,
             depth: 0,
+            clips: Rc::default(),
         };
         walker.block(&block, &place);
         let objects = walker.keys.len() - first;
@@ -162,6 +171,61 @@ pub fn run(drawing: &str, folder: &str) -> Result<(), Failure> {
         ));
     }
     walker.write(Path::new(folder), &outcome, spaces)
+}
+
+/// Each clipped block reference's clip boundary (CAD's XCLIP), in its block's own coordinates. A clip hangs off
+/// its reference through the reference's own dictionaries; a two-point boundary is a rectangle; a switched-off
+/// clip shows everything.
+fn clip_boundaries(doc: &CadDocument) -> BTreeMap<u64, Vec<[f64; 2]>> {
+    let mut found = BTreeMap::new();
+    for object in doc.objects.values() {
+        let ObjectType::SpatialFilter(filter) = object else {
+            continue;
+        };
+        let points: Vec<[f64; 2]> = filter.boundary_points.iter().map(|p| [p.x, p.y]).collect();
+        let points = match points.as_slice() {
+            [a, b] => vec![*a, [b[0], a[1]], *b, [a[0], b[1]]],
+            _ => points,
+        };
+        if !filter.display_enabled || points.len() < 3 {
+            continue;
+        }
+        let Some(insert) = clipped_insert(doc, filter.owner) else {
+            continue;
+        };
+        // boundary → the world when the clip was made → the block's own coordinates
+        let ring = points
+            .iter()
+            .map(|&p| {
+                apply(
+                    &filter.inverse_block_transform,
+                    apply(&filter.clip_bound_transform, p),
+                )
+            })
+            .collect();
+        found.insert(insert.value(), ring);
+    }
+    found
+}
+
+fn clipped_insert(doc: &CadDocument, owner: Handle) -> Option<Handle> {
+    let mut owner = Some(owner);
+    for _ in 0..4 {
+        let h = owner?;
+        if let Some(EntityType::Insert(_)) = doc.get_entity(h) {
+            return Some(h);
+        }
+        owner = doc.object_owner(h);
+    }
+    None
+}
+
+fn apply(m: &Matrix4, p: [f64; 2]) -> [f64; 2] {
+    let m = m.m;
+    [
+        m[0][0] * p[0] + m[0][1] * p[1] + m[0][3],
+        m[1][0] * p[0] + m[1][1] * p[1] + m[1][3],
+    ]
 }
 
 fn open(path: &Path) -> Result<ReadOutcome, Failure> {
@@ -312,11 +376,39 @@ impl<'a> Walker<'a> {
             viewports: vec![],
             not_read: BTreeMap::new(),
             xrefs: BTreeMap::new(),
+            clips: clip_boundaries(doc),
         };
         for layer in doc.layers.iter() {
             walker.layer(&layer.name);
         }
         walker
+    }
+
+    fn mark(&self) -> Mark {
+        Mark([
+            self.keys.len(),
+            self.coords.len(),
+            self.texts.len(),
+            self.inserts.len(),
+            self.dims.len(),
+            self.tables.len(),
+            self.hatches.len(),
+            self.viewports.len(),
+        ])
+    }
+
+    fn rollback(&mut self, mark: &Mark) {
+        let [objects, coords, texts, inserts, dims, tables, hatches, viewports] = mark.0;
+        self.keys.truncate(objects);
+        self.index.truncate(objects);
+        self.num.truncate(objects);
+        self.coords.truncate(coords);
+        self.texts.truncate(texts);
+        self.inserts.truncate(inserts);
+        self.dims.truncate(dims);
+        self.tables.truncate(tables);
+        self.hatches.truncate(hatches);
+        self.viewports.truncate(viewports);
     }
 
     fn layer(&mut self, name: &str) -> u32 {
@@ -427,6 +519,7 @@ impl<'a> Walker<'a> {
         i
     }
 
+    /// An object placed, and cut to what shows through its clips; `None` when none of it shows.
     fn shape(
         &mut self,
         place: &Place,
@@ -434,9 +527,9 @@ impl<'a> Walker<'a> {
         kind: usize,
         layer: &str,
         shape: Shape,
-    ) -> usize {
-        let placed = shape.transformed(&place.xf);
-        self.push(place, handle, kind, layer, None, Some(&placed), None, 0)
+    ) -> Option<usize> {
+        let placed = shape.transformed(&place.xf).clipped(&place.clips)?;
+        Some(self.push(place, handle, kind, layer, None, Some(&placed), None, 0))
     }
 
     fn text(
@@ -446,8 +539,11 @@ impl<'a> Walker<'a> {
         kind: usize,
         layer: &str,
         found: TextFound,
-    ) -> usize {
+    ) -> Option<usize> {
         let anchor = place.xf.apply(found.anchor);
+        if !g::shows(&place.clips, anchor) {
+            return None;
+        }
         let scale = place.xf.det().abs().sqrt();
         let height = found.height * scale;
         let rotation = found.rotation + place.xf.angle();
@@ -470,7 +566,7 @@ impl<'a> Walker<'a> {
             round(rotation.to_degrees()),
             found.tag
         ]));
-        i
+        Some(i)
     }
 
     fn entity(&mut self, entity: &EntityType, place: &Place) {
@@ -629,7 +725,12 @@ impl<'a> Walker<'a> {
             EntityType::Leader(e) => {
                 let vertices: Vec<([f64; 2], f64)> =
                     e.vertices.iter().map(|v| (v2(*v), 0.0)).collect();
-                let shape = g::polyline(&vertices, false).transformed(&place.xf);
+                let Some(shape) = g::polyline(&vertices, false)
+                    .transformed(&place.xf)
+                    .clipped(&place.clips)
+                else {
+                    return;
+                };
                 self.push(
                     place,
                     handle,
@@ -642,6 +743,7 @@ impl<'a> Walker<'a> {
                 );
             }
             EntityType::MultiLeader(e) => {
+                let mark = self.mark();
                 let i = self.push(
                     place,
                     handle,
@@ -667,6 +769,10 @@ impl<'a> Walker<'a> {
                         },
                     );
                 }
+                if !place.clips.is_empty() && self.keys.len() == i + 1 {
+                    self.rollback(&mark); // none of it shows through the clip
+                    return;
+                }
                 self.close_extent(i);
                 let _ = e;
             }
@@ -683,6 +789,9 @@ impl<'a> Walker<'a> {
                     rows.push(row);
                 }
                 let at = place.xf.apply(v2(e.insertion_point));
+                if !g::shows(&place.clips, at) {
+                    return;
+                }
                 let i = self.push(
                     place,
                     handle,
@@ -757,7 +866,11 @@ impl<'a> Walker<'a> {
                     e.vertices.iter().map(|v| (v2(v.position), 0.0)).collect();
                 let closed = format!("{:?}", e.flags).contains("CLOSED")
                     || format!("{:?}", e.flags).contains("closed: true");
-                let i = self.shape(place, handle, MLINE, layer, g::polyline(&vertices, closed));
+                let Some(i) =
+                    self.shape(place, handle, MLINE, layer, g::polyline(&vertices, closed))
+                else {
+                    return;
+                };
                 let inner = Place {
                     path: format!("{}{:X}/", place.path, handle),
                     parent: Some(i),
@@ -898,8 +1011,9 @@ impl<'a> Walker<'a> {
             return;
         }
         let shape = g::rings(parts, curved).transformed(&Affine::ocs(e.normal));
-        let i = self.shape(place, handle, HATCH, layer, shape);
-        self.hatches.push(json!([i, e.pattern.name, e.is_solid]));
+        if let Some(i) = self.shape(place, handle, HATCH, layer, shape) {
+            self.hatches.push(json!([i, e.pattern.name, e.is_solid]));
+        }
     }
 
     fn dimension(
@@ -921,6 +1035,9 @@ impl<'a> Walker<'a> {
             Some(t) => mtext_plain(t),
         };
         let at = place.xf.apply(v2(base.text_middle_point));
+        if !g::shows(&place.clips, at) {
+            return;
+        }
         let i = self.push(
             place,
             handle,
@@ -1000,6 +1117,20 @@ impl<'a> Walker<'a> {
             ))
             .then(&base);
         let world = place.xf.apply(at);
+        // A clipped reference shows only what lies inside its clip boundary, and inside those around it.
+        let clip = self
+            .clips
+            .get(&handle)
+            .and_then(|ring| Clip::new(ring.iter().map(|&p| own.apply(p)).collect()));
+        let clips = match clip {
+            Some(clip) => {
+                let mut all = (*place.clips).clone();
+                all.push(clip);
+                Rc::new(all)
+            }
+            None => place.clips.clone(),
+        };
+        let mark = self.mark();
         let i = self.push(
             place,
             handle,
@@ -1036,6 +1167,7 @@ impl<'a> Walker<'a> {
                 path: format!("{}{:X}/", place.path, handle),
                 parent: Some(i),
                 flags: place.flags | IN_BLOCK,
+                clips: clips.clone(),
                 ..place.clone()
             };
             self.text(
@@ -1107,8 +1239,17 @@ impl<'a> Walker<'a> {
                     parent: Some(i),
                     flags: place.flags | IN_BLOCK,
                     depth: place.depth + 1,
+                    clips: clips.clone(),
                 };
                 self.block(&block_name, &inner);
+            }
+        }
+        if !clips.is_empty() && self.keys.len() == i + 1 {
+            // none of the reference's objects show through its clips
+            let empty = doc.entities_in_block(&block_name).next().is_none();
+            if !(empty && g::shows(&place.clips, world)) {
+                self.rollback(&mark);
+                return;
             }
         }
         self.close_extent(i);
@@ -1140,24 +1281,6 @@ impl<'a> Walker<'a> {
                 None => json!({"name": name, "anonymous": name.starts_with('*'), "xref": false, "description": "", "units": 0}),
             })
             .collect();
-        // Each clip hangs off its block reference through the reference's own dictionaries: find the reference.
-        let mut clipped_inserts: Vec<String> = vec![];
-        let mut clipped = 0;
-        for object in doc.objects.values() {
-            let ObjectType::SpatialFilter(filter) = object else {
-                continue;
-            };
-            clipped += 1;
-            let mut owner = Some(filter.owner);
-            for _ in 0..4 {
-                let Some(h) = owner else { break };
-                if let Some(EntityType::Insert(_)) = doc.get_entity(h) {
-                    clipped_inserts.push(format!("{:X}", h.value()));
-                    break;
-                }
-                owner = doc.object_owner(h);
-            }
-        }
         let stats = &outcome.stats;
         let diagnostics: Vec<String> = stats
             .diagnostics
@@ -1183,8 +1306,7 @@ impl<'a> Walker<'a> {
                 "recovered": stats.recovered_errors,
                 "diagnostics": diagnostics,
                 "not_read": self.not_read,
-                "clipped": clipped,
-                "clipped_inserts": clipped_inserts,
+                "clipped": self.clips.len(),
             },
         });
         let objects = json!({

@@ -116,6 +116,38 @@ def test_a_drawing_is_read_into_pages_of_its_words(client):
     assert image.status_code == 200 and image.content.startswith(b"\x89PNG")
 
 
+def test_a_clipped_block_counts_only_what_shows(tmp_path):
+    """A block reference clipped to part of its block (CAD's XCLIP) is measured as the drawing shows it: lines cut
+    where they leave the clip, an area kept inside it, and what lies wholly outside left out."""
+    grid = {
+        "name": "GRID",
+        "base": [0, 0],
+        "entities": [
+            {"type": "line", "from": [0, 0], "to": [10000, 0]},
+            {"type": "line", "from": [0, 5000], "to": [10000, 5000]},
+            {"type": "line", "from": [9000, 0], "to": [9000, 5000]},
+            {"type": "hatch", "loops": [[[0, 0], [10000, 0], [10000, 5000], [0, 5000]]]},
+        ],
+    }
+    clipped = {
+        "type": "insert",
+        "block": "GRID",
+        "layer": "GRID",
+        "at": [1000, 1000],
+        "rotation": 90,
+        "clip": [[-5000, 500], [2000, 500], [2000, 9000], [-5000, 9000]],
+    }
+    stored = tmp_path / "files" / "grid.dwg"
+    stored.parent.mkdir()
+    stored.write_bytes(make_drawing({"insunits": 4, "layers": ["GRID"], "blocks": [grid], "entities": [clipped]}))
+    d = cad.drawing(stored)
+    assert d.info["read"]["clipped"] == 1
+    lines = d.totals(d.select(1, cad.Rule(layers=["GRID"], types=["Line"])))
+    assert (lines["count"], lines["length"]) == (2, 16000.0)
+    hatch = d.totals(d.select(1, cad.Rule(layers=["GRID"], types=["Hatch"])))
+    assert hatch["area"] == pytest.approx(40_000_000)
+
+
 def test_quantities_come_from_the_objects_once_the_units_are_approved(client, flat):
     tender_id, drawing, _ = flat
     windows = measure(client, tender_id, drawing, {"blocks": ["WIN-1200"]}, kind="count", label="Windows", unit="nr")

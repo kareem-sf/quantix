@@ -7,7 +7,8 @@
 //! `{"type": "line", "from", "to"}`, `{"type": "polyline", "points", "bulges"?, "closed"?}`,
 //! `{"type": "circle", "centre", "radius"}`, `{"type": "arc", "centre", "radius", "start", "end"}` (degrees),
 //! `{"type": "text", "at", "value", "height"?}`, `{"type": "mtext", "at", "value", "height"?}`,
-//! `{"type": "insert", "block", "at", "rotation"?, "scale"?, "attributes"?: {tag: value}}`,
+//! `{"type": "insert", "block", "at", "rotation"?, "scale"?, "attributes"?: {tag: value}, "clip"?: [[x, y], …]}`
+//! (a clip boundary in the world, for a reference in model space),
 //! `{"type": "hatch", "loops": [[[x, y], …], …], "pattern"?}`, `{"type": "dimension", "from", "to", "text"?}` and
 //! `{"type": "viewport", "centre", "size": [w, h], "view_centre", "scale"}`, each with an optional `"layer"`.
 
@@ -17,8 +18,9 @@ use opencadcodec::entities::{
     Arc, AttributeEntity, BoundaryEdge, BoundaryPath, Circle, Dimension, DimensionAligned,
     EntityType, Hatch, Insert, Line, LwPolyline, MText, PolylineEdge, Text, Viewport,
 };
+use opencadcodec::objects::{Dictionary, ObjectType, SpatialFilter};
 use opencadcodec::tables::{BlockRecord, Layer};
-use opencadcodec::types::{DxfVersion, Vector2, Vector3};
+use opencadcodec::types::{DxfVersion, Handle, Matrix4, Vector2, Vector3};
 use opencadcodec::{CadDocument, DwgWriter, DxfWriter};
 use serde_json::Value;
 
@@ -66,8 +68,12 @@ pub fn run(spec: &str, out: &str) -> Result<(), Failure> {
         }
     }
     for item in spec["entities"].as_array().into_iter().flatten() {
-        doc.add_entity(build(item)?)
+        let handle = doc
+            .add_entity(build(item)?)
             .map_err(|e| Failure::Other(e.to_string()))?;
+        if item["clip"].is_array() {
+            clip(&mut doc, handle, item);
+        }
     }
     for layout in spec["layouts"].as_array().into_iter().flatten() {
         let name = layout["name"].as_str().unwrap_or("Layout");
@@ -85,6 +91,76 @@ pub fn run(spec: &str, out: &str) -> Result<(), Failure> {
         DwgWriter::write_to_file(out, &doc)
     };
     written.map_err(|e| Failure::Other(format!("Couldn't write the drawing: {e}")))
+}
+
+/// Clips a block reference to a boundary given in the world, as CAD's XCLIP stores it: a spatial filter in the
+/// reference's own dictionaries, with the inverse of the reference's placement.
+fn clip(doc: &mut CadDocument, insert: Handle, item: &Value) {
+    let base = doc
+        .block_records
+        .get(item["block"].as_str().unwrap_or("BLOCK"))
+        .map(|b| [b.base_point.x, b.base_point.y])
+        .unwrap_or([0.0, 0.0]);
+    let at = point(&item["at"]);
+    let scale = &item["scale"];
+    let (sx, sy) = if scale.is_array() {
+        (number(&scale[0], 1.0), number(&scale[1], 1.0))
+    } else {
+        (number(scale, 1.0), number(scale, 1.0))
+    };
+    let (sin, cos) = number(&item["rotation"], 0.0).to_radians().sin_cos();
+    // the world back into the block: p = base + S⁻¹ R⁻¹ (x − at)
+    let inverse = Matrix4 {
+        m: [
+            [
+                cos / sx,
+                sin / sx,
+                0.0,
+                base[0] - (cos * at[0] + sin * at[1]) / sx,
+            ],
+            [
+                -sin / sy,
+                cos / sy,
+                0.0,
+                base[1] - (-sin * at[0] + cos * at[1]) / sy,
+            ],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+    };
+    let (xdict, filters, handle) = (
+        doc.allocate_handle(),
+        doc.allocate_handle(),
+        doc.allocate_handle(),
+    );
+    let mut filter = SpatialFilter::new();
+    filter.handle = handle;
+    filter.owner = filters;
+    filter.boundary_points = item["clip"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|p| {
+            let p = point(p);
+            Vector2::new(p[0], p[1])
+        })
+        .collect();
+    filter.inverse_block_transform = inverse;
+    let mut own = Dictionary::new();
+    own.handle = xdict;
+    own.owner = insert;
+    own.add_entry("ACAD_FILTER", filters);
+    let mut named = Dictionary::new();
+    named.handle = filters;
+    named.owner = xdict;
+    named.add_entry("SPATIAL", handle);
+    doc.objects.insert(xdict, ObjectType::Dictionary(own));
+    doc.objects.insert(filters, ObjectType::Dictionary(named));
+    doc.objects
+        .insert(handle, ObjectType::SpatialFilter(filter));
+    if let Some(entity) = doc.get_entity_mut(insert) {
+        entity.common_mut().xdictionary_handle = Some(xdict);
+    }
 }
 
 fn point(value: &Value) -> [f64; 2] {

@@ -2,6 +2,7 @@
 //! lengths and areas. Straight lines, arcs, circles and bulged polylines are measured exactly by opencadkernel;
 //! ellipses and splines from a fine chain of points. Points are kept only to draw, pick and compare objects.
 
+use std::collections::HashMap;
 use std::f64::consts::TAU;
 
 use opencadcodec::types::{Matrix3, Vector3};
@@ -207,16 +208,32 @@ fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
 
 /// The area a ring of points encloses, summed about its own first point so survey coordinates keep their digits.
 pub fn ring_area(ring: &[[f64; 2]]) -> f64 {
+    signed_area(ring).abs()
+}
+
+/// A ring's area, positive when it runs counter-clockwise.
+fn signed_area(ring: &[[f64; 2]]) -> f64 {
     if ring.len() < 3 {
         return 0.0;
     }
     let o = ring[0];
     let mut twice = 0.0;
     for i in 1..ring.len() - 1 {
-        let (p, q) = (ring[i], ring[i + 1]);
-        twice += (p[0] - o[0]) * (q[1] - o[1]) - (q[0] - o[0]) * (p[1] - o[1]);
+        twice += cross(sub(ring[i], o), sub(ring[i + 1], o));
     }
-    (twice / 2.0).abs()
+    twice / 2.0
+}
+
+fn sub(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+    [a[0] - b[0], a[1] - b[1]]
+}
+
+fn cross(a: [f64; 2], b: [f64; 2]) -> f64 {
+    a[0] * b[1] - a[1] * b[0]
+}
+
+fn dot(a: [f64; 2], b: [f64; 2]) -> f64 {
+    a[0] * b[0] + a[1] * b[1]
 }
 
 /// Whether a point is inside a ring (ray casting).
@@ -504,6 +521,358 @@ pub fn bulge_chain(vertices: &[([f64; 2], f64)], closed: bool) -> Vec<[f64; 2]> 
         .unwrap_or_default()
 }
 
+type Segment = [[f64; 2]; 2];
+
+/// A clip boundary (CAD's XCLIP) in the space a block reference is placed in: of the reference's objects, only
+/// what lies inside it shows. An inverted clip is stored as a boundary with the hidden part cut into it, so it
+/// needs nothing of its own.
+#[derive(Clone, Debug)]
+pub struct Clip {
+    /// Counter-clockwise.
+    ring: Vec<[f64; 2]>,
+    bbox: [f64; 4],
+    tolerance: f64,
+}
+
+impl Clip {
+    pub fn new(mut ring: Vec<[f64; 2]>) -> Option<Clip> {
+        ring.dedup();
+        if ring.len() > 1 && ring.first() == ring.last() {
+            ring.pop();
+        }
+        let area = signed_area(&ring);
+        if ring.len() < 3 || area == 0.0 {
+            return None;
+        }
+        if area < 0.0 {
+            ring.reverse();
+        }
+        let bbox = ring.iter().fold(None, |b, p| Some(grow(b, *p)))?;
+        let tolerance = (bbox[2] - bbox[0]).hypot(bbox[3] - bbox[1]) * 1e-9;
+        Some(Clip {
+            ring,
+            bbox,
+            tolerance,
+        })
+    }
+
+    /// Whether a point shows: inside the boundary or on it.
+    pub fn shows(&self, p: [f64; 2]) -> bool {
+        overlaps([p[0], p[1], p[0], p[1]], self.bbox, self.tolerance)
+            && (inside(&self.ring, p) || along(&self.ring, p, self.tolerance).is_some())
+    }
+}
+
+/// Whether a point shows through every clip.
+pub fn shows(clips: &[Clip], p: [f64; 2]) -> bool {
+    clips.iter().all(|clip| clip.shows(p))
+}
+
+impl Shape {
+    /// What of the shape shows through clips: a line is cut where it leaves, and a closed shape keeps the area
+    /// inside and the part of its outline inside. `None` when none of it shows.
+    pub fn clipped(self, clips: &[Clip]) -> Option<Shape> {
+        clips.iter().try_fold(self, |shape, clip| shape.clip(clip))
+    }
+
+    fn clip(self, clip: &Clip) -> Option<Shape> {
+        let Some(bbox) = self.bbox() else {
+            return Some(self);
+        };
+        if !overlaps(bbox, clip.bbox, clip.tolerance) {
+            return None;
+        }
+        let Some(stretches) = chains_through(&self.parts, self.closed, clip) else {
+            return Some(self); // all of it shows
+        };
+        let length = stretches.iter().map(|s| chain_length(s, false)).sum();
+        let approximate = self.approximate || self.curved;
+        if !self.closed {
+            return (!stretches.is_empty()).then_some(Shape {
+                parts: stretches,
+                length,
+                approximate,
+                ..self
+            });
+        }
+        let (loops, area) = region_through(&self.parts, clip);
+        if loops.is_empty() && stretches.is_empty() {
+            return None;
+        }
+        Some(Shape {
+            parts: if loops.is_empty() { stretches } else { loops },
+            length,
+            area,
+            approximate,
+            ..self
+        })
+    }
+}
+
+fn overlaps(a: [f64; 4], b: [f64; 4], tolerance: f64) -> bool {
+    a[0] <= b[2] + tolerance
+        && b[0] <= a[2] + tolerance
+        && a[1] <= b[3] + tolerance
+        && b[1] <= a[3] + tolerance
+}
+
+fn edges(points: &[[f64; 2]], closed: bool) -> Vec<Segment> {
+    let n = points.len();
+    let count = if closed { n } else { n.saturating_sub(1) };
+    (0..count)
+        .map(|i| [points[i], points[(i + 1) % n]])
+        .filter(|s| s[0] != s[1])
+        .collect()
+}
+
+fn middle(s: Segment) -> [f64; 2] {
+    [(s[0][0] + s[1][0]) / 2.0, (s[0][1] + s[1][1]) / 2.0]
+}
+
+fn distance_to(s: Segment, p: [f64; 2]) -> f64 {
+    let d = sub(s[1], s[0]);
+    let t = (dot(sub(p, s[0]), d) / dot(d, d)).clamp(0.0, 1.0);
+    dist(p, [s[0][0] + t * d[0], s[0][1] + t * d[1]])
+}
+
+/// The edge of a ring a point lies on, if any.
+fn along(ring: &[[f64; 2]], p: [f64; 2], tolerance: f64) -> Option<Segment> {
+    edges(ring, true)
+        .into_iter()
+        .find(|&s| distance_to(s, p) <= tolerance)
+}
+
+/// Where two sets of segments meet: for each segment of each set, the points along it (with their share of its
+/// length) where the other set crosses or joins it. Each meeting is worked out once and both segments get the
+/// same point, so the pieces they are cut into meet exactly.
+#[allow(clippy::type_complexity)]
+fn meetings(
+    a: &[Segment],
+    b: &[Segment],
+    tolerance: f64,
+) -> (Vec<Vec<(f64, [f64; 2])>>, Vec<Vec<(f64, [f64; 2])>>) {
+    let mut on_a = vec![vec![]; a.len()];
+    let mut on_b = vec![vec![]; b.len()];
+    let bbox = |s: &Segment| {
+        [
+            s[0][0].min(s[1][0]),
+            s[0][1].min(s[1][1]),
+            s[0][0].max(s[1][0]),
+            s[0][1].max(s[1][1]),
+        ]
+    };
+    let b_boxes: Vec<[f64; 4]> = b.iter().map(bbox).collect();
+    for (i, s) in a.iter().enumerate() {
+        let s_box = bbox(s);
+        let r = sub(s[1], s[0]);
+        let r_len = r[0].hypot(r[1]);
+        let eu = tolerance / r_len;
+        for (j, t) in b.iter().enumerate() {
+            if !overlaps(s_box, b_boxes[j], tolerance) {
+                continue;
+            }
+            let q = sub(t[1], t[0]);
+            let q_len = q[0].hypot(q[1]);
+            let ev = tolerance / q_len;
+            let w = sub(t[0], s[0]);
+            let denominator = cross(r, q);
+            if denominator.abs() > 1e-12 * r_len * q_len {
+                let u = cross(w, q) / denominator;
+                let v = cross(w, r) / denominator;
+                if u < -eu || u > 1.0 + eu || v < -ev || v > 1.0 + ev {
+                    continue;
+                }
+                // a meeting at an end is that end exactly
+                let point = if u.abs() <= eu {
+                    s[0]
+                } else if (u - 1.0).abs() <= eu {
+                    s[1]
+                } else if v.abs() <= ev {
+                    t[0]
+                } else if (v - 1.0).abs() <= ev {
+                    t[1]
+                } else {
+                    [s[0][0] + u * r[0], s[0][1] + u * r[1]]
+                };
+                if u > eu && u < 1.0 - eu {
+                    on_a[i].push((u, point));
+                }
+                if v > ev && v < 1.0 - ev {
+                    on_b[j].push((v, point));
+                }
+            } else if cross(w, r).abs() / r_len <= tolerance {
+                // along one line: each gets the other's ends that lie within it
+                for p in t {
+                    let u = dot(sub(*p, s[0]), r) / (r_len * r_len);
+                    if u > eu && u < 1.0 - eu {
+                        on_a[i].push((u, *p));
+                    }
+                }
+                for p in s {
+                    let v = dot(sub(*p, t[0]), q) / (q_len * q_len);
+                    if v > ev && v < 1.0 - ev {
+                        on_b[j].push((v, *p));
+                    }
+                }
+            }
+        }
+    }
+    (on_a, on_b)
+}
+
+/// A segment cut at points along it, in order.
+fn pieces(s: Segment, mut cuts: Vec<(f64, [f64; 2])>) -> Vec<Segment> {
+    cuts.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out = vec![];
+    let mut from = s[0];
+    for (_, p) in cuts {
+        if p != from {
+            out.push([from, p]);
+            from = p;
+        }
+    }
+    if from != s[1] {
+        out.push([from, s[1]]);
+    }
+    out
+}
+
+/// The stretches of chains of points that show through a clip, or `None` when all of them show.
+fn chains_through(
+    parts: &[Vec<[f64; 2]>],
+    closed: bool,
+    clip: &Clip,
+) -> Option<Vec<Vec<[f64; 2]>>> {
+    let boundary = edges(&clip.ring, true);
+    let mut out = vec![];
+    let mut all = true;
+    for part in parts {
+        if part.len() == 1 {
+            if clip.shows(part[0]) {
+                out.push(part.clone());
+            } else {
+                all = false;
+            }
+            continue;
+        }
+        let segments = edges(part, closed);
+        let (cuts, _) = meetings(&segments, &boundary, clip.tolerance);
+        let mut stretches: Vec<Vec<[f64; 2]>> = vec![];
+        let mut open = false;
+        for (s, c) in segments.into_iter().zip(cuts) {
+            for piece in pieces(s, c) {
+                if clip.shows(middle(piece)) {
+                    match stretches.last_mut() {
+                        Some(last) if open => last.push(piece[1]),
+                        _ => stretches.push(vec![piece[0], piece[1]]),
+                    }
+                    open = true;
+                } else {
+                    all = false;
+                    open = false;
+                }
+            }
+        }
+        // a closed chain cut somewhere joins up again across its first point
+        if closed && open && stretches.len() > 1 && stretches[0][0] == part[0] {
+            let last = stretches.pop().unwrap_or_default();
+            let first = std::mem::take(&mut stretches[0]);
+            stretches[0] = last.into_iter().chain(first.into_iter().skip(1)).collect();
+        }
+        out.extend(stretches);
+    }
+    (!all).then_some(out)
+}
+
+/// What of a filled region shows through a clip: the loops around it and its area. The region is its rings'
+/// inside, islands taken off; its edges inside the clip and the clip's edges inside it bound what shows, and
+/// the area comes from them directly.
+fn region_through(parts: &[Vec<[f64; 2]>], clip: &Clip) -> (Vec<Vec<[f64; 2]>>, f64) {
+    let tolerance = clip.tolerance;
+    let rings: Vec<&Vec<[f64; 2]>> = parts.iter().filter(|p| p.len() >= 3).collect();
+    // outer rings run counter-clockwise and islands clockwise, so the region lies left of every edge
+    let mut own: Vec<Segment> = vec![];
+    for (i, ring) in rings.iter().enumerate() {
+        let depth = rings
+            .iter()
+            .enumerate()
+            .filter(|(j, other)| *j != i && inside(other, ring[0]))
+            .count();
+        let ring_edges = edges(ring, true);
+        if (signed_area(ring) > 0.0) == (depth % 2 == 0) {
+            own.extend(ring_edges);
+        } else {
+            own.extend(ring_edges.into_iter().rev().map(|[a, b]| [b, a]));
+        }
+    }
+    let boundary = edges(&clip.ring, true);
+    let (own_cuts, boundary_cuts) = meetings(&own, &boundary, tolerance);
+    let mut kept: Vec<Segment> = vec![];
+    for (s, c) in own.iter().zip(own_cuts) {
+        for piece in pieces(*s, c) {
+            let m = middle(piece);
+            let keep = match along(&clip.ring, m, tolerance) {
+                // along the clip's own edge: kept once, when both run the same way
+                Some(edge) => dot(sub(piece[1], piece[0]), sub(edge[1], edge[0])) > 0.0,
+                None => inside(&clip.ring, m),
+            };
+            if keep {
+                kept.push(piece);
+            }
+        }
+    }
+    for (s, c) in boundary.iter().zip(boundary_cuts) {
+        for piece in pieces(*s, c) {
+            let m = middle(piece);
+            let on_own = own.iter().any(|&e| distance_to(e, m) <= tolerance);
+            let filled = rings.iter().filter(|r| inside(r, m)).count() % 2 == 1;
+            if !on_own && filled {
+                kept.push(piece);
+            }
+        }
+    }
+    let o = clip.ring[0];
+    let area: f64 = kept
+        .iter()
+        .map(|s| cross(sub(s[0], o), sub(s[1], o)))
+        .sum::<f64>()
+        / 2.0;
+    (loops(kept), area.max(0.0))
+}
+
+/// Pieces that meet end to start, joined into loops.
+fn loops(pieces: Vec<Segment>) -> Vec<Vec<[f64; 2]>> {
+    let key = |p: [f64; 2]| (p[0].to_bits(), p[1].to_bits());
+    let mut starting: HashMap<(u64, u64), Vec<usize>> = HashMap::new();
+    for (i, s) in pieces.iter().enumerate() {
+        starting.entry(key(s[0])).or_default().push(i);
+    }
+    let mut used = vec![false; pieces.len()];
+    let mut out = vec![];
+    for first in 0..pieces.len() {
+        if used[first] {
+            continue;
+        }
+        used[first] = true;
+        let mut chain = vec![pieces[first][0], pieces[first][1]];
+        loop {
+            let end = chain[chain.len() - 1];
+            if end == chain[0] {
+                chain.pop();
+                break;
+            }
+            let next = starting
+                .get(&key(end))
+                .and_then(|c| c.iter().copied().find(|&i| !used[i]));
+            let Some(i) = next else { break };
+            used[i] = true;
+            chain.push(pieces[i][1]);
+        }
+        out.push(chain);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -548,6 +917,72 @@ mod tests {
         let outer = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
         let island = vec![[4.0, 4.0], [6.0, 4.0], [6.0, 6.0], [4.0, 6.0]];
         assert!(close(rings(vec![outer, island], false).area, 96.0));
+    }
+
+    fn square(x: f64, y: f64, size: f64) -> Vec<[f64; 2]> {
+        vec![[x, y], [x + size, y], [x + size, y + size], [x, y + size]]
+    }
+
+    /// An L: the 10 × 10 square at the origin with its top right 6 × 6 cut away.
+    fn l_clip() -> Clip {
+        Clip::new(vec![
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [10.0, 4.0],
+            [4.0, 4.0],
+            [4.0, 10.0],
+            [0.0, 10.0],
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn a_clip_cuts_a_line_where_it_leaves() {
+        let clip = Clip::new(square(0.0, 0.0, 10.0)).unwrap();
+        let cut = line([-5.0, 5.0], [15.0, 5.0])
+            .clipped(&[clip.clone()])
+            .unwrap();
+        assert!(close(cut.length, 10.0));
+        assert!(line([20.0, 0.0], [30.0, 0.0])
+            .clipped(&[clip.clone()])
+            .is_none());
+        let along = line([0.0, 0.0], [10.0, 0.0]).clipped(&[clip]).unwrap();
+        assert!(close(along.length, 10.0));
+        // across the L's corners
+        let across = line([2.0, 6.0], [8.0, 6.0]).clipped(&[l_clip()]).unwrap();
+        assert!(close(across.length, 2.0));
+        let through = line([8.0, 2.0], [8.0, 12.0]).clipped(&[l_clip()]).unwrap();
+        assert!(close(through.length, 2.0));
+    }
+
+    #[test]
+    fn a_clip_keeps_the_area_inside() {
+        // a large square with an island, over the whole L: the L less the island
+        let region = rings(vec![square(-5.0, -5.0, 20.0), square(1.0, 1.0, 2.0)], false);
+        let shown = region.clipped(&[l_clip()]).unwrap();
+        assert!(close(shown.area, 64.0 - 4.0));
+        assert!(close(shown.length, 8.0)); // only the island's outline is inside
+                                           // a square half over the L
+        let vertices: Vec<([f64; 2], f64)> = square(5.0, -5.0, 10.0)
+            .into_iter()
+            .map(|p| (p, 0.0))
+            .collect();
+        let shown = polyline(&vertices, true).clipped(&[l_clip()]).unwrap();
+        assert!(close(shown.area, 20.0) && close(shown.length, 4.0));
+        // sharing the L's edges: its bottom, part of its right side and its left
+        let vertices: Vec<([f64; 2], f64)> = [[0.0, 0.0], [10.0, 0.0], [10.0, 5.0], [0.0, 5.0]]
+            .into_iter()
+            .map(|p| (p, 0.0))
+            .collect();
+        let shown = polyline(&vertices, true).clipped(&[l_clip()]).unwrap();
+        assert!(close(shown.area, 44.0) && close(shown.length, 23.0));
+        assert_eq!(shown.parts.len(), 1);
+        // wholly inside, and wholly outside
+        let inside = rings(vec![square(1.0, 1.0, 2.0)], false);
+        assert!(close(inside.clipped(&[l_clip()]).unwrap().area, 4.0));
+        assert!(rings(vec![square(6.0, 6.0, 2.0)], false)
+            .clipped(&[l_clip()])
+            .is_none());
     }
 
     #[test]

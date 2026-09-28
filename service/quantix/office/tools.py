@@ -883,6 +883,10 @@ def drawing_overview(ctx: RunContext[Turn], document_id: str, page: int = 1, sta
     read = d.info["read"]
     if read["not_read"]:
         lines.append("Not read: " + ", ".join(f"{n} {what}" for what, n in read["not_read"].items()) + ".")
+    if read["clipped"]:
+        lines.append(
+            f"{read['clipped']} block references are clipped: only what shows inside their clip boundaries is read."
+        )
     missing = [x["path"] or x["name"] for x in d.info["xrefs"] if not x["loaded"]]
     if missing:
         lines.append("It refers to drawings it doesn't hold: " + ", ".join(missing) + ".")

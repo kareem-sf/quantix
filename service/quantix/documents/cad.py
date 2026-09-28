@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from quantix.documents.readers import PageText, Unreadable
 
-FORMAT = 1  # the folder format this service reads; qx-dwg writes the same number
+FORMAT = 2  # the folder format this service reads; qx-dwg writes the same number
 TIMEOUT = 600  # seconds for one drawing
 CLOSED, ANNOTATION, IN_BLOCK, APPROXIMATE, DERIVED = 1, 2, 4, 8, 16
 # Header units ($INSUNITS) Quantix names: the number, what it is called and metres in one unit

@@ -535,19 +535,6 @@ def drawing_problems(session: Session, home: Path, document: Document) -> list[P
                 [],
             )
         )
-    if read["clipped"]:
-        handles = set(read.get("clipped_inserts", []))
-        clipped = [k for i, k in enumerate(d.keys) if i in d.placed and k.rsplit("/", 1)[-1].split("#")[0] in handles]
-        found.append(
-            Problem(
-                f"drawing-clipped:{tag}",
-                "warning",
-                f"{document.name} clips {read['clipped']} block references to part of their drawing; Quantix places "
-                "them whole, so check counts and lengths near them.",
-                int(d.index[d.key_index[clipped[0]], 0]) if clipped else 1,
-                clipped[:50],
-            )
-        )
     for space in d.spaces:
         found += _hidden_layers(d, space, document, tag)
         found += _drawn_twice(d, space, document, tag)

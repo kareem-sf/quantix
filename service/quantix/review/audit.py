@@ -273,7 +273,7 @@ def _documents(session: Session, tender_id: str) -> list[Finding]:
     return found
 
 
-READ_PROBLEMS = ("drawing-units", "drawing-xref", "drawing-not-read", "drawing-records", "drawing-clipped")
+READ_PROBLEMS = ("drawing-units", "drawing-xref", "drawing-not-read", "drawing-records")
 
 
 def _drawings(session: Session, home: Path, tender_id: str) -> list[Finding]:
