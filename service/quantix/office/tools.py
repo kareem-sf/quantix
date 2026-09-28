@@ -858,6 +858,11 @@ def _amounts(totals: dict[str, float], metres: float | None) -> str:
             f"closed area {totals['area']:,.3f} square units"
             + (f" = {totals['area'] * metres * metres:,.3f} m2" if metres else "")
         )
+    if totals["volume"]:
+        parts.append(
+            f"3D solid volume {totals['volume']:,.3f} cubic units"
+            + (f" = {totals['volume'] * metres**3:,.3f} m3" if metres else "")
+        )
     return ", ".join(parts)
 
 
@@ -1068,8 +1073,9 @@ def measure_drawing(
     boq_item: str | None = None,
 ) -> str:
     """Take off from a CAD drawing's own objects in model space, by a rule: kind count (block copies or objects),
-    length (lines, polylines, arcs; a room's perimeter) or area (closed outlines and hatches; a room's area). unit:
-    count nr; length m, or m2 with a height as multiplier_m; area m2, or m3 with a thickness. Link the BOQ line it
+    length (lines, polylines, arcs; a room's perimeter), area (closed outlines, hatches and regions; a room's area)
+    or volume (3D solids). unit: count nr; length m, or m2 with a height as multiplier_m; area m2, or m3 with a
+    thickness; volume m3, or kg or t with the material's density per m3 (steel 7850 kg). Link the BOQ line it
     belongs to. Quantix takes the objects the rule finds, lists them for the Tender Manager and computes the quantity
     from their geometry and the drawing's units. A rule that finds nothing, linked to a BOQ line, records that the
     line's work isn't on this drawing. Try the rule with query_drawing first."""

@@ -199,6 +199,10 @@ count from the geometry and scale. Measurements link to BOQ items, and Quantix c
   A clipped reference (XCLIP) keeps only what shows inside its clip boundary: lines are cut where they leave it, a
   closed shape keeps the area inside and the part of its outline inside, and what lies wholly outside is left out.
   The boundary comes from the reference's spatial filter, taken back into the block by its inverse placement.
+  A 3D solid or region (`cad/src/solid.rs`) is lifted from its ACIS data into opencadkernel's B-rep and meshed: a
+  solid keeps its volume (exact for a cylinder or a sphere, else from its closed mesh; scaled by the reference's
+  scale cubed; none when a clip cuts it) in `num.bin`'s seventh column, a region its area, and both their edges seen
+  from above.
   A drawing that refers to another (an xref) gets it placed from the tender's package: `drawings.open_drawing`
   matches each unloaded xref to a package drawing by the file name of its path (or else its name), and `qx-dwg read`
   places that drawing's model space where the reference is, its layers and blocks named `XREF|NAME` as CAD names
@@ -219,7 +223,8 @@ count from the geometry and scale. Measurements link to BOQ items, and Quantix c
 - **Measurements by rule.** `measure_drawing` takes a `cad.Rule` (layers, blocks, types, words, block attributes,
   closed outlines, hatch pattern, region, rooms, or keys). Quantix resolves it to the keys of the objects it takes
   when it is filed (`Measurement.entities`, with `rule` kept; `points` stays empty), so the Manager reviews exactly
-  what was counted. `quantity()` computes from those objects' lengths, areas or copies and the drawing's units each
+  what was counted. A volume (m3, or kg or t with a density per m3 as the multiplier) is taken only from 3D solids.
+  `quantity()` computes from those objects' lengths, areas, volumes or copies and the drawing's units each
   time it is read. A rule that takes nothing, linked to a BOQ line, records that the work isn't on the drawing:
   `compare()` gives `not_on_drawings`.
 - **The layer map** (`LayerMap`, `takeoff/layers.py`) says what layers and blocks are, from a closed list
@@ -257,7 +262,7 @@ count from the geometry and scale. Measurements link to BOQ items, and Quantix c
 - **Screens.** `GET /documents/{id}/pages/{n}/screen` sends a page packed as `QXD1` (segments in 32-bit floats about
   the page's centre, each segment's object, each object's layer, type, flags and extent, and the texts). The
   Takeoff screen draws it with WebGL, with texts and highlights on a canvas over it; clicking picks the nearest
-  object, and `choose` gives Quantix's count, length and area of what is chosen. The Queries screen lists tender
+  object, and `choose` gives Quantix's count, length, area and volume of what is chosen. The Queries screen lists tender
   queries and layer maps for the engineer's decision, and what the checks find.
 
 ## Testing

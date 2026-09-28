@@ -125,7 +125,7 @@ export function useMeasureObjects(tenderId: string) {
   return useMutation({
     mutationFn: async (body: {
       document_id: string;
-      kind: "length" | "area" | "count";
+      kind: "length" | "area" | "count" | "volume";
       label: string;
       unit: string;
       stamp: string;

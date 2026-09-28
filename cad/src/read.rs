@@ -11,7 +11,7 @@
 //! The folder gets `drawing.json` (units, spaces, layers, blocks and what couldn't be read), `objects.json` (keys,
 //! names, text, block references, dimensions, tables, hatches and viewports) and three little-endian arrays:
 //! `index.bin` (u32 × 8 per object: space, type, layer, block + 1, first point, points, flags, parent + 1),
-//! `num.bin` (f64 × 6: extent left, bottom, right, top, length, area) and `coords.bin` (f64 pairs; a NaN pair
+//! `num.bin` (f64 × 7: extent left, bottom, right, top, length, area, volume) and `coords.bin` (f64 pairs; a NaN pair
 //! separates the parts of one object).
 
 use std::collections::{BTreeMap, HashMap};
@@ -21,20 +21,21 @@ use std::path::Path;
 use std::rc::Rc;
 
 use opencadcodec::entities::mtext_format::parse_mtext;
-use opencadcodec::entities::{AttachmentPoint, BoundaryEdge, EntityType, Hatch, Insert};
+use opencadcodec::entities::{AcisData, AttachmentPoint, BoundaryEdge, EntityType, Hatch, Insert};
 use opencadcodec::objects::ObjectType;
 use opencadcodec::types::{Handle, Matrix4, Vector3};
 use opencadcodec::{CadDocument, DwgReadOptions, DwgReader, DxfReader, ReadOutcome};
 use serde_json::{json, Value};
 
 use crate::geometry::{self as g, Affine, Clip, Shape};
+use crate::solid;
 use crate::Failure;
 
 /// Bumped whenever what the folder holds changes, so Quantix reads older folders again.
-pub const FORMAT: u32 = 2;
+pub const FORMAT: u32 = 3;
 pub const READER: &str = "opencadcodec a35f43e, opencadkernel ee41029";
 
-pub const TYPES: [&str; 20] = [
+pub const TYPES: [&str; 22] = [
     "Line",
     "Arc",
     "Circle",
@@ -55,6 +56,8 @@ pub const TYPES: [&str; 20] = [
     "Viewport",
     "MLine",
     "Face",
+    "Region",
+    "Solid3D",
 ];
 const LINE: usize = 0;
 const ARC: usize = 1;
@@ -75,6 +78,8 @@ const MULTILEADER: usize = 15;
 const TABLE: usize = 16;
 const VIEWPORT: usize = 17;
 const MLINE: usize = 18;
+const REGION: usize = 20;
+const SOLID3D: usize = 21;
 
 pub const CLOSED: u32 = 1;
 /// Part of a dimension, leader or table's own drawing: shown, never measured.
@@ -143,7 +148,7 @@ struct Walker<'a> {
     block_index: HashMap<String, u32>,
     keys: Vec<String>,
     index: Vec<[u32; 8]>,
-    num: Vec<[f64; 6]>,
+    num: Vec<[f64; 7]>,
     coords: Vec<f64>,
     texts: Vec<Value>,
     inserts: Vec<Value>,
@@ -558,7 +563,7 @@ impl<'a> Walker<'a> {
         ]);
         let e = extent.unwrap_or([f64::NAN; 4]);
         self.num
-            .push([e[0], e[1], e[2], e[3], round(length), round(area)]);
+            .push([e[0], e[1], e[2], e[3], round(length), round(area), 0.0]);
         i
     }
 
@@ -937,10 +942,9 @@ impl<'a> Walker<'a> {
                 }
             }
             EntityType::Face3D(_) => self.skipped("3D faces"),
-            EntityType::Solid3D(_)
-            | EntityType::Region(_)
-            | EntityType::Body(_)
-            | EntityType::Surface(_) => self.skipped("3D solids and surfaces"),
+            EntityType::Solid3D(e) => self.solid(place, handle, layer, &e.acis_data),
+            EntityType::Region(e) => self.region(place, handle, layer, &e.acis_data),
+            EntityType::Body(_) | EntityType::Surface(_) => self.skipped("3D bodies and surfaces"),
             EntityType::Mesh(_) | EntityType::PolyfaceMesh(_) | EntityType::PolygonMesh(_) => {
                 self.skipped("3D meshes")
             }
@@ -953,6 +957,60 @@ impl<'a> Walker<'a> {
             EntityType::Ray(_) | EntityType::XLine(_) => self.skipped("construction lines"),
             _ => {} // block markers, attribute definitions, wipeouts, shapes and other things with nothing to measure
         }
+    }
+
+    /// A 3D solid: its edges seen from above, and its volume, unless a clip cuts it.
+    fn solid(&mut self, place: &Place, handle: u64, layer: &str, data: &AcisData) {
+        let Some(measured) = solid::measure(data) else {
+            self.skipped("3D solids whose shape can't be read");
+            return;
+        };
+        let shape = Shape {
+            parts: measured.edges,
+            curved: true,
+            approximate: true,
+            ..Shape::default()
+        }
+        .transformed(&place.xf);
+        let whole = shape
+            .parts
+            .iter()
+            .flatten()
+            .all(|&p| g::shows(&place.clips, p));
+        let Some(i) = shape
+            .clipped(&place.clips)
+            .map(|shape| self.push(place, handle, SOLID3D, layer, None, Some(&shape), None, 0))
+        else {
+            return;
+        };
+        if whole {
+            // a transform that keeps shapes scales a volume by its scale cubed
+            self.num[i][6] = round(measured.volume * place.xf.det().abs().powf(1.5));
+        } else {
+            self.skipped("volumes of 3D solids a clip cuts");
+        }
+    }
+
+    /// A region: a flat area bounded by its edges.
+    fn region(&mut self, place: &Place, handle: u64, layer: &str, data: &AcisData) {
+        let Some(measured) = solid::measure(data) else {
+            self.skipped("regions whose shape can't be read");
+            return;
+        };
+        let length = measured
+            .edges
+            .iter()
+            .map(|e| g::chain_length(e, false))
+            .sum();
+        let shape = Shape {
+            parts: g::rings_of(measured.edges),
+            length,
+            area: measured.area,
+            closed: true,
+            curved: true,
+            approximate: true,
+        };
+        self.shape(place, handle, REGION, layer, shape);
     }
 
     /// The extent of an object that holds others: all of theirs together.

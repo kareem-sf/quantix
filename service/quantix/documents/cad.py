@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 
 from quantix.documents.readers import PageText, Unreadable
 
-FORMAT = 2  # the folder format this service reads; qx-dwg writes the same number
+FORMAT = 3  # the folder format this service reads; qx-dwg writes the same number
 TIMEOUT = 600  # seconds for one drawing
 CLOSED, ANNOTATION, IN_BLOCK, APPROXIMATE, DERIVED = 1, 2, 4, 8, 16
 # Header units ($INSUNITS) Quantix names: the number, what it is called and metres in one unit
@@ -241,7 +241,7 @@ class Drawing:
         self.block_names: list[str] = objects["blocks"]
         self.keys: list[str] = objects["keys"]
         self.index = np.fromfile(out / "index.bin", dtype="<u4").reshape(-1, 8)
-        self.num = np.fromfile(out / "num.bin", dtype="<f8").reshape(-1, 6)
+        self.num = np.fromfile(out / "num.bin", dtype="<f8").reshape(-1, 7)
         self.coords = np.fromfile(out / "coords.bin", dtype="<f8").reshape(-1, 2)
         self.texts = {row[0]: Text(*row[1:8]) for row in objects["texts"]}
         self.placed = {
@@ -304,6 +304,10 @@ class Drawing:
 
     def area(self, i: int) -> float:
         return float(self.num[i, 5])
+
+    def volume(self, i: int) -> float:
+        """A 3D solid's volume in cubic drawing units; nothing else has one."""
+        return float(self.num[i, 6])
 
     def copies(self, i: int) -> int:
         placed = self.placed.get(i)
@@ -384,12 +388,14 @@ class Drawing:
         return found.astype(int)
 
     def totals(self, found: np.ndarray) -> dict[str, float]:
-        """How many objects (a MINSERT counts each copy), their length and the area of the closed ones."""
+        """How many objects (a MINSERT counts each copy), their length, the area of the closed ones and the volume
+        of the 3D solids."""
         copies = sum(self.copies(int(i)) for i in found)
         return {
             "count": copies,
             "length": float(self.num[found, 4].sum()) if len(found) else 0.0,
             "area": float(self.num[found, 5].sum()) if len(found) else 0.0,
+            "volume": float(self.num[found, 6].sum()) if len(found) else 0.0,
         }
 
     # -- words -------------------------------------------------------------------------------------------------

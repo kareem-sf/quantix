@@ -1456,6 +1456,8 @@ export interface components {
             length_m: number | null;
             /** Area M2 */
             area_m2: number | null;
+            /** Volume M3 */
+            volume_m3: number | null;
         };
         /** ColumnsOut */
         ColumnsOut: {
@@ -1684,7 +1686,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "length" | "area" | "count";
+            kind: "length" | "area" | "count" | "volume";
             /** Label */
             label: string;
             /** Unit */

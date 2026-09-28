@@ -524,8 +524,7 @@ pub fn bulge_chain(vertices: &[([f64; 2], f64)], closed: bool) -> Vec<[f64; 2]> 
 type Segment = [[f64; 2]; 2];
 
 /// A clip boundary (CAD's XCLIP) in the space a block reference is placed in: of the reference's objects, only
-/// what lies inside it shows. An inverted clip is stored as a boundary with the hidden part cut into it, so it
-/// needs nothing of its own.
+/// what lies inside it shows.
 #[derive(Clone, Debug)]
 pub struct Clip {
     /// Counter-clockwise.
@@ -840,6 +839,47 @@ fn region_through(parts: &[Vec<[f64; 2]>], clip: &Clip) -> (Vec<Vec<[f64; 2]>>, 
     (loops(kept), area.max(0.0))
 }
 
+/// Edges given as chains of points, joined end to end into rings where their ends meet (within a billionth of
+/// their size).
+pub fn rings_of(edges: Vec<Vec<[f64; 2]>>) -> Vec<Vec<[f64; 2]>> {
+    let edges: Vec<Vec<[f64; 2]>> = edges.into_iter().filter(|e| e.len() > 1).collect();
+    let Some(bbox) = edges.iter().flatten().fold(None, |b, p| Some(grow(b, *p))) else {
+        return vec![];
+    };
+    let tolerance = (bbox[2] - bbox[0]).hypot(bbox[3] - bbox[1]) * 1e-9;
+    let meets = |a: [f64; 2], b: [f64; 2]| dist(a, b) <= tolerance;
+    let mut used = vec![false; edges.len()];
+    let mut rings = vec![];
+    for first in 0..edges.len() {
+        if used[first] {
+            continue;
+        }
+        used[first] = true;
+        let mut ring = edges[first].clone();
+        loop {
+            let end = ring[ring.len() - 1];
+            if ring.len() > 2 && meets(end, ring[0]) {
+                ring.pop();
+                break;
+            }
+            let next = (0..edges.len()).find(|&i| {
+                !used[i] && (meets(edges[i][0], end) || meets(edges[i][edges[i].len() - 1], end))
+            });
+            let Some(i) = next else { break };
+            used[i] = true;
+            if meets(edges[i][0], end) {
+                ring.extend(edges[i].iter().skip(1));
+            } else {
+                ring.extend(edges[i].iter().rev().skip(1));
+            }
+        }
+        if ring.len() >= 3 {
+            rings.push(ring);
+        }
+    }
+    rings
+}
+
 /// Pieces that meet end to start, joined into loops.
 fn loops(pieces: Vec<Segment>) -> Vec<Vec<[f64; 2]>> {
     let key = |p: [f64; 2]| (p[0].to_bits(), p[1].to_bits());
@@ -983,6 +1023,20 @@ mod tests {
         assert!(rings(vec![square(6.0, 6.0, 2.0)], false)
             .clipped(&[l_clip()])
             .is_none());
+    }
+
+    #[test]
+    fn edges_join_into_rings_either_way_round() {
+        // a square's edges in no order, one of them backwards, meeting within a hair
+        let edges = vec![
+            vec![[10.0, 10.0], [0.0, 10.0]],
+            vec![[0.0, 0.0], [10.0, 0.0]],
+            vec![[0.0, 0.0], [0.0, 10.0 + 1e-12]],
+            vec![[10.0, 0.0], [10.0, 10.0]],
+        ];
+        let rings = rings_of(edges);
+        assert_eq!(rings.len(), 1);
+        assert!(close(ring_area(&rings[0]), 100.0));
     }
 
     #[test]

@@ -11,13 +11,17 @@
 //! `{"type": "insert", "block", "at", "rotation"?, "scale"?, "attributes"?: {tag: value}, "clip"?: [[x, y], …]}`
 //! (a clip boundary in the world, for a reference in model space),
 //! `{"type": "hatch", "loops": [[[x, y], …], …], "pattern"?}`, `{"type": "dimension", "from", "to", "text"?}` and
-//! `{"type": "viewport", "centre", "size": [w, h], "view_centre", "scale"}`, each with an optional `"layer"`.
+//! `{"type": "viewport", "centre", "size": [w, h], "view_centre", "scale"}`, and the 3D solids
+//! `{"type": "box", "at": [x, y, z], "size": [l, w, h]}` (centred on `at`) and
+//! `{"type": "cylinder", "at", "radius", "height"}` (standing on `at`), each with an optional `"layer"`.
 
 use std::fs;
 
+use opencadcodec::entities::acis::{primitives, SatWriter};
 use opencadcodec::entities::{
-    Arc, AttributeEntity, BoundaryEdge, BoundaryPath, Circle, Dimension, DimensionAligned,
-    EntityType, Hatch, Insert, Line, LwPolyline, MText, PolylineEdge, Text, Viewport,
+    AcisData, Arc, AttributeEntity, BoundaryEdge, BoundaryPath, Circle, Dimension,
+    DimensionAligned, EntityType, Hatch, Insert, Line, LwPolyline, MText, PolylineEdge, Solid3D,
+    Text, Viewport,
 };
 use opencadcodec::objects::{Dictionary, ObjectType, SpatialFilter};
 use opencadcodec::tables::{BlockRecord, Layer};
@@ -279,6 +283,32 @@ fn build(item: &Value) -> Result<EntityType, Failure> {
             dimension.base.text_middle_point =
                 Vector3::new((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0 + 300.0, 0.0);
             EntityType::Dimension(Dimension::Aligned(dimension))
+        }
+        "box" | "cylinder" => {
+            let at = &item["at"];
+            let base = [
+                number(&at[0], 0.0),
+                number(&at[1], 0.0),
+                number(&at[2], 0.0),
+            ];
+            let sat = if item["type"] == "box" {
+                let size = &item["size"];
+                primitives::build_box(
+                    base,
+                    number(&size[0], 1.0),
+                    number(&size[1], 1.0),
+                    number(&size[2], 1.0),
+                )
+            } else {
+                primitives::build_cylinder(
+                    base,
+                    number(&item["radius"], 1.0),
+                    number(&item["height"], 1.0),
+                )
+            };
+            let mut solid = Solid3D::new();
+            solid.acis_data = AcisData::from_sat(&SatWriter::write(&sat));
+            EntityType::Solid3D(solid)
         }
         "viewport" => {
             let size = &item["size"];

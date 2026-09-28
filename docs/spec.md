@@ -76,7 +76,9 @@ choices · Markups and final price · Release.
    pages (OCR, Arabic included, in the correct reading order). Group the documents, search them by exact words and
    by meaning, and view them page by page. CAD drawings (DWG and DXF) are read too: each space (model space, then
    each layout) is a page of the words printed there, and every object is kept with its layer, block and exact
-   geometry. What couldn't be read in a drawing (3D solids, images, drawings it refers to) is said plainly. A newer
+   geometry, 3D solids with their volume. Clipped block references show only what their clip boundary shows, and
+   the drawings a drawing refers to (xrefs) are placed in it from the package. What couldn't be read in a drawing
+   (images, drawings it refers to that the package lacks) is said plainly. A newer
    copy of a file, such as an addendum's revised bill or drawing, replaces the older one. The office's work moves
    onto the newer copy wherever what it cites is unchanged there, and Quantix says how much moved. The rest must be
    done again from the newer copy, and holds the release until it is.
@@ -86,12 +88,13 @@ choices · Markups and final price · Release.
    geometry on PDF drawings. Quantix computes the quantities. The engineer sees every measurement on the sheet and
    can edit or redo it, or measure by hand. On CAD drawings there is no scale to calibrate: staff propose the
    drawing's units from what it states, and take off by rule from the drawing's own objects (count a block, the
-   length or area of what is on a layer, a room's area and perimeter); the engineer can click objects and measure
-   them. Staff propose a layer map (what each layer and block is), which the engineer approves; Quantix finds the
+   length or area of what is on a layer, a room's area and perimeter, the volume of 3D solids or their weight by a
+   density); the engineer can click objects and measure them. Staff propose a layer map (what each layer and block is), which the engineer approves; Quantix finds the
    rooms from it. Quantix compares the takeoff with the BOQ: matches, differs, missing from the BOQ, or not on the
    drawings.
    Quantix's own checks find what to look into: lines drawn twice, written dimensions that disagree with the
    drawing, drawn work nothing measures, room names outside any closed room, services crossing fire-rated walls,
+   doors, windows and fittings drawn as loose lines instead of their block,
    grids that differ between drawings, and in the BOQ lines billed twice, provisional sums and lines with no
    quantity. Staff raise **tender queries** for work drawn or specified but not billed, documents that disagree and
    errors in the BOQ, each with its sources and which document governs under the tender's order of precedence (a
@@ -148,8 +151,9 @@ built so a hosted web version with several users can follow.
 ## Later (not in the MVP)
 
 Tender programme, cash flow, Arabic interface, web version and firm accounts, AI spending in money rather than
-tokens, supplier email sending. For CAD drawings: 3D solids' volumes, drawings a drawing refers to but doesn't hold
-(xrefs), clipped blocks, and symbols drawn as loose lines rather than blocks.
+tokens, supplier email sending. For CAD drawings: views of 3D models (a solid is measured from its shape and drawn
+as seen from above), front and back clipping, and checking inverted clips against a drawing that has one (they are
+read as the boundary the file stores).
 
 ## Done when
 

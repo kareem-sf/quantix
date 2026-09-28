@@ -21,7 +21,9 @@ from quantix.office.models import ENGINEER
 from quantix.takeoff import drawings
 from quantix.takeoff.models import Measurement, Scale
 
-UNITS = {"length": ("m", "m2"), "area": ("m2", "m3"), "count": ("nr",)}
+UNITS = {"length": ("m", "m2"), "area": ("m2", "m3"), "count": ("nr",), "volume": ("m3", "kg", "t")}
+# (kind, unit) pairs a multiplier turns one into the other: a height, a thickness, or a density per m3
+MULTIPLIED = {("length", "m2"), ("area", "m3"), ("volume", "kg"), ("volume", "t")}
 MAX_OBJECTS = 20_000  # objects one drawing measurement may take: more means the rule is too wide
 TOLERANCE = Decimal("0.02")  # takeoff and BOQ within 2% are a match
 _UNIT_NAMES = {
@@ -29,6 +31,8 @@ _UNIT_NAMES = {
     "m2": ("m2", "م2", "m²", "sqm", "sq.m", "م²"),
     "m3": ("m3", "م3", "m³", "cum", "cu.m", "م³"),
     "nr": ("nr", "no", "no.", "nos", "each", "ea", "عدد", "pcs", "item"),
+    "kg": ("kg", "kgs", "كجم", "كغ"),
+    "t": ("t", "ton", "tons", "tonne", "tonnes", "طن"),
 }
 
 
@@ -173,13 +177,13 @@ def _replace_older_scales(session: Session, scale: Scale) -> None:
 
 def _kind_and_unit(kind: str, unit: str, multiplier: Decimal | None) -> None:
     if kind not in UNITS:
-        raise ValueError("A measurement is a length, an area or a count.")
+        raise ValueError("A measurement is a length, an area, a volume or a count.")
     if unit not in UNITS[kind]:
         raise ValueError(f"A {kind} is measured in {' or '.join(UNITS[kind])}.")
-    needs_multiplier = (kind, unit) in (("length", "m2"), ("area", "m3"))
-    if needs_multiplier != (multiplier is not None):
+    if ((kind, unit) in MULTIPLIED) != (multiplier is not None):
         raise ValueError(
-            "Give a height (length to m2) or a thickness (area to m3) in metres as the multiplier, and only then."
+            "Give a height (length to m2) or a thickness (area to m3) in metres, or a density in kg or t per m3 "
+            "(volume to kg or t), as the multiplier, and only then."
         )
 
 
@@ -199,6 +203,8 @@ def measure(
 ) -> Measurement:
     document, found = _page(session, tender_id, document_id, page)
     _kind_and_unit(kind, unit, multiplier)
+    if kind == "volume":
+        raise ValueError("A volume is taken only from a CAD drawing's 3D solids.")
     least = {"length": 2, "area": 3, "count": 1}[kind]
     if len(points) < least:
         raise ValueError(f"A {kind} needs at least {least} points.")
@@ -278,8 +284,10 @@ def set_units(
 
 
 def measurable(d: cad.Drawing, found, kind: str) -> list[int]:
-    """The objects a measurement of this kind takes: outlines with an area, lines with a length, or anything to
-    count."""
+    """The objects a measurement of this kind takes: outlines with an area, lines with a length, 3D solids with a
+    volume, or anything to count."""
+    if kind == "volume":
+        return [int(i) for i in found if d.volume(int(i)) > 0]
     if kind == "area":
         return [int(i) for i in found if d.flags(int(i)) & cad.CLOSED and d.area(int(i)) > 0]
     if kind == "length":
@@ -332,7 +340,7 @@ def measure_drawing(
         raise ValueError(f"That rule takes {len(keys):,} objects: narrow it to the work you mean.")
     item_id = boq.find_item(session, tender_id, boq_item).id if boq_item else None
     if not keys and item_id is None:
-        what = {"area": "closed outline or hatch", "length": "line", "count": "object"}[kind]
+        what = {"area": "closed outline or hatch", "length": "line", "count": "object", "volume": "3D solid"}[kind]
         raise ValueError(
             f"No {what} on {document.name} matches that rule. Look at the layers and blocks with drawing_overview, "
             "or try the rule with query_drawing first."
@@ -359,7 +367,7 @@ def measure_drawing(
 
 
 def _drawing_base(session: Session, m: Measurement) -> Decimal | None:
-    """The count, or the length or area in square metres, of the objects a drawing measurement took."""
+    """The count, or the length, area or volume in metres, of the objects a drawing measurement took."""
     document = session.get(Document, m.document_id)
     home = library.home_of(session)
     try:
@@ -378,6 +386,8 @@ def _drawing_base(session: Session, m: Measurement) -> Decimal | None:
     if m.kind == "length":
         units = sum(d.length(i) for i in objects) + sum(r.perimeter for r in found_rooms)
         return Decimal(str(units * metres))
+    if m.kind == "volume":
+        return Decimal(str(sum(d.volume(i) for i in objects) * metres**3))
     units = sum(d.area(i) for i in objects) + sum(r.area for r in found_rooms)
     return Decimal(str(units * metres * metres))
 

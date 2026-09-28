@@ -86,6 +86,7 @@ class Chosen(BaseModel):
     count: int
     length_m: float | None
     area_m2: float | None
+    volume_m3: float | None
 
 
 class UnitsIn(BaseModel):
@@ -95,7 +96,7 @@ class UnitsIn(BaseModel):
 
 class DrawingMeasurementIn(BaseModel):
     document_id: str
-    kind: Literal["length", "area", "count"]
+    kind: Literal["length", "area", "count", "volume"]
     label: str
     unit: str
     choice: Choice
@@ -284,6 +285,7 @@ def choose(document_id: str, number: int, body: Choice, session: DB, home: Home)
         count=int(totals["count"]),
         length_m=round(totals["length"] * metres, 3) if metres else None,
         area_m2=round(totals["area"] * metres * metres, 3) if metres else None,
+        volume_m3=round(totals["volume"] * metres**3, 3) if metres else None,
     )
 
 

@@ -5130,6 +5130,17 @@
               }
             ],
             "title": "Area M2"
+          },
+          "volume_m3": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volume M3"
           }
         },
         "type": "object",
@@ -5138,7 +5149,8 @@
           "keys",
           "count",
           "length_m",
-          "area_m2"
+          "area_m2",
+          "volume_m3"
         ],
         "title": "Chosen"
       },
@@ -5869,7 +5881,8 @@
             "enum": [
               "length",
               "area",
-              "count"
+              "count",
+              "volume"
             ],
             "title": "Kind"
           },

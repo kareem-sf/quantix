@@ -34,7 +34,7 @@ import {
   type Sheet,
 } from "./queries";
 
-type Tool = "select" | Kind | "scale";
+type Tool = "select" | Exclude<Kind, "volume"> | "scale";
 const TOOLS: [Tool, string][] = [
   ["select", "Select"],
   ["length", "Length"],
@@ -232,7 +232,7 @@ export function Takeoff() {
           tool === "scale" ? (
             <ScaleForm tenderId={tenderId} sheet={sheet.data} line={draft} onDone={() => choose("select")} />
           ) : (
-            <MeasureForm tenderId={tenderId} sheet={sheet.data} kind={tool as Kind} points={draft} onDone={() => choose("select")} />
+            <MeasureForm tenderId={tenderId} sheet={sheet.data} kind={tool as Exclude<Kind, "volume">} points={draft} onDone={() => choose("select")} />
           )
         ) : (
           <SheetPanel tenderId={tenderId} measurements={onSheet} selected={selected} />
@@ -567,8 +567,10 @@ function ObjectsForm(props: {
   const [unit, setUnit] = useState(UNITS.count[0]);
   const [multiplier, setMultiplier] = useState("");
   const [item, setItem] = useState("");
-  const needsMultiplier = (kind === "length" && unit === "m2") || (kind === "area" && unit === "m3");
+  const needsMultiplier =
+    (kind === "length" && unit === "m2") || (kind === "area" && unit === "m3") || (kind === "volume" && unit !== "m3");
   const t = totals.data;
+  const kinds: Kind[] = t?.volume_m3 ? ["count", "length", "area", "volume"] : ["count", "length", "area"];
   return (
     <form
       className="flex flex-col gap-3"
@@ -597,11 +599,12 @@ function ObjectsForm(props: {
           {t.count.toLocaleString("en-US")} to count
           {t.length_m ? ` · ${t.length_m.toLocaleString("en-US")} m long` : ""}
           {t.area_m2 ? ` · ${t.area_m2.toLocaleString("en-US")} m² enclosed` : ""}
+          {t.volume_m3 ? ` · ${t.volume_m3.toLocaleString("en-US")} m³ solid` : ""}
           {t.length_m === null && " · set the units for lengths and areas"}
         </p>
       )}
       <div role="radiogroup" aria-label="Measure as" className="flex gap-1">
-        {(["count", "length", "area"] as Kind[]).map((k) => (
+        {kinds.map((k) => (
           <button
             type="button"
             key={k}
@@ -612,7 +615,7 @@ function ObjectsForm(props: {
             }}
             className={`h-7 rounded-md px-2.5 text-[13px] ${kind === k ? "bg-ink text-white" : "text-ink-2 shadow-[0_0_0_1px_var(--color-line-strong)]"}`}
           >
-            {k === "count" ? "Count" : k === "length" ? "Length" : "Area"}
+            {{ count: "Count", length: "Length", area: "Area", volume: "Volume" }[k]}
           </button>
         ))}
       </div>
@@ -631,7 +634,9 @@ function ObjectsForm(props: {
       </label>
       {needsMultiplier && (
         <label className="flex flex-col gap-1">
-          <span className="text-ink-2">{kind === "length" ? "Height" : "Thickness"} in metres</span>
+          <span className="text-ink-2">
+            {kind === "volume" ? `Density in ${unit} per m³` : `${kind === "length" ? "Height" : "Thickness"} in metres`}
+          </span>
           <input aria-label="Multiplier" required inputMode="decimal" value={multiplier} onChange={(e) => setMultiplier(e.target.value)}
             className="h-9 rounded-lg border border-line-strong px-3 outline-none focus:border-ink" />
         </label>
@@ -658,7 +663,7 @@ function ObjectsForm(props: {
   );
 }
 
-function MeasureForm(props: { tenderId: string; sheet: Sheet; kind: Kind; points: Point[]; onDone: () => void }) {
+function MeasureForm(props: { tenderId: string; sheet: Sheet; kind: Exclude<Kind, "volume">; points: Point[]; onDone: () => void }) {
   const measure = useMeasure(props.tenderId);
   const boq = useBoq(props.tenderId);
   const [label, setLabel] = useState("");

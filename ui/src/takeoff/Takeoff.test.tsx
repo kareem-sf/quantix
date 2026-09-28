@@ -231,4 +231,31 @@ describe("Takeoff from a CAD drawing", () => {
       }),
     );
   });
+
+  it("measures 3D solids by volume, and by weight with a density", async () => {
+    const service = fakeService({
+      tenders: [tender],
+      documents: [cadDocument],
+      sheets: [cadSheet],
+      drawing: drawingInfo,
+      screen: screenCopy(),
+      volume: 0.061,
+    });
+    openApp("/tenders/t1/takeoff?doc=d3&page=1");
+
+    const view = await screen.findByRole("img", { name: "Model: 3 objects" });
+    fireEvent.pointerDown(view, { clientX: 400, clientY: 300 });
+    fireEvent.pointerUp(view, { clientX: 400, clientY: 300 });
+    expect(await screen.findByText(/0.061 m³ solid/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Volume" }));
+    await userEvent.type(screen.getByLabelText("What is it"), "Ladder steel");
+    await userEvent.selectOptions(screen.getByLabelText("Unit"), "kg");
+    expect(screen.getByText("Density in kg per m³")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Multiplier"), "7850");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(service.state.measured[0]).toMatchObject({ kind: "volume", unit: "kg", multiplier: "7850" }),
+    );
+  });
 });

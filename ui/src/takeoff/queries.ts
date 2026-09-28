@@ -5,10 +5,15 @@ import type { components } from "../api/schema";
 export type Sheet = components["schemas"]["Sheet"];
 export type Measurement = components["schemas"]["MeasurementOut"];
 export type Comparison = components["schemas"]["ComparisonOut"];
-export type Kind = "length" | "area" | "count";
+export type Kind = "length" | "area" | "count" | "volume";
 export type Point = [number, number];
 
-export const UNITS: Record<Kind, string[]> = { length: ["m", "m2"], area: ["m2", "m3"], count: ["nr"] };
+export const UNITS: Record<Kind, string[]> = {
+  length: ["m", "m2"],
+  area: ["m2", "m3"],
+  count: ["nr"],
+  volume: ["m3", "kg", "t"],
+};
 
 export function useTakeoff(tenderId: string) {
   return useQuery({
@@ -83,7 +88,7 @@ export function useMeasure(tenderId: string) {
     mutationFn: async (body: {
       document_id: string;
       page: number;
-      kind: Kind;
+      kind: Exclude<Kind, "volume">;
       label: string;
       points: Point[];
       unit: string;

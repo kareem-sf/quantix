@@ -12,6 +12,7 @@ mod faces;
 mod geometry;
 mod read;
 mod sample;
+mod solid;
 
 use std::process::ExitCode;
 

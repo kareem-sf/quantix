@@ -2,6 +2,7 @@
 drawing's own checks, newer copies, tender queries and the office's tools."""
 
 import io
+import math
 from decimal import Decimal
 
 import openpyxl
@@ -21,6 +22,7 @@ from quantix.review import checks, queries
 from quantix.review import records as reviews
 from quantix.takeoff import drawings, layers
 from quantix.takeoff import records as takeoff
+from quantix.takeoff.models import Measurement
 
 PLAN = make_drawing(plan())
 
@@ -190,6 +192,43 @@ def test_a_drawing_it_refers_to_is_placed_once_the_package_holds_it(client):
     ).json()
     assert (walls["count"], walls["length_m"]) == (2, 18.0)
     assert all(key.count("/") == 1 for key in walls["keys"])  # inside the reference to the base plan
+
+
+def test_3d_solids_are_measured_by_volume(client):
+    """A 3D solid's volume comes from its shape, placed as its block is (a rung at twice the size holds eight times
+    the steel), and a density turns it into a weight."""
+    bar = {"type": "cylinder", "at": [0, 0, 0], "radius": 10, "height": 500}
+    rung = {"name": "RUNG", "base": [0, 0], "entities": [bar]}
+    spec = {
+        "insunits": 4,
+        "layers": ["S-STEEL"],
+        "blocks": [rung],
+        "entities": [
+            {"type": "box", "layer": "S-STEEL", "at": [1000, 1000, 50], "size": [2000, 300, 100]},
+            {"type": "insert", "block": "RUNG", "layer": "S-STEEL", "at": [5000, 0]},
+            {"type": "insert", "block": "RUNG", "layer": "S-STEEL", "at": [6000, 0], "scale": 2},
+        ],
+    }
+    tender_id = client.post("/tenders", json={"name": "Synthetic steel"}).json()["id"]
+    upload(client, tender_id, {"S-101.dwg": make_drawing(spec)})
+    drawing = read_all(client, tender_id)["S-101.dwg"]["id"]
+    client.post(f"/tenders/{tender_id}/units", json={"document_id": drawing, "units": "millimetres"})
+    chosen = client.post(
+        f"/documents/{drawing}/pages/1/choose",
+        json={"stamp": stamp(client, drawing), "rule": {"types": ["Solid3D"]}},
+    ).json()
+    volume = 0.06 + math.pi * 0.01**2 * 0.5 * (1 + 8)
+    assert chosen["count"] == 3 and chosen["volume_m3"] == pytest.approx(volume, abs=0.0005)
+    steel = measure(
+        client, tender_id, drawing, {"layers": ["S-STEEL"]}, kind="volume", label="Steel", unit="kg", multiplier="7850"
+    )
+    assert steel.status_code == 201, steel.text
+    assert float(steel.json()["quantity"]) == pytest.approx(volume * 7850, abs=0.01)
+    with client.app.state.sessions() as session:
+        taken = session.get(Measurement, steel.json()["id"]).entities
+    assert len(taken) == 3 and all("/" in key for key in taken[1:])  # the solids, not the references around them
+    weightless = measure(client, tender_id, drawing, {"layers": ["S-STEEL"]}, kind="volume", label="Steel", unit="kg")
+    assert weightless.status_code == 400 and "density" in weightless.text
 
 
 def test_quantities_come_from_the_objects_once_the_units_are_approved(client, flat):

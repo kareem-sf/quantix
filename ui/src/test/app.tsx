@@ -66,6 +66,8 @@ export interface FakeState {
   /** A CAD drawing: what it holds, its packed screen copy, and what the engineer set and measured on it. */
   drawing: DrawingInfo | null;
   screen: ArrayBuffer | null;
+  /** The volume of 3D solids among the objects chosen, in m³. */
+  volume: number | null;
   units: unknown[];
   measured: unknown[];
   queries: TenderQuery[];
@@ -115,6 +117,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     fail: {},
     drawing: null,
     screen: null,
+    volume: null,
     units: [],
     measured: [],
     queries: [],
@@ -297,7 +300,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     if (path.match(/^\/documents\/\w+\/drawing$/) && state.drawing) return json(state.drawing);
     if (path.match(/^\/documents\/\w+\/rooms$/)) return json([]);
     if (path.match(/^\/documents\/\w+\/pages\/\d+\/choose$/))
-      return json({ objects: body.objects, keys: body.objects.map((o: number) => `K${o}`), count: body.objects.length, length_m: 20, area_m2: null });
+      return json({ objects: body.objects, keys: body.objects.map((o: number) => `K${o}`), count: body.objects.length, length_m: 20, area_m2: null, volume_m3: state.volume });
     if (path.match(/^\/tenders\/\w+\/units$/)) {
       state.units.push(body);
       return json({ id: "u1", name: body.units, metres: 0.001, status: "approved", note: body.units }, 201);
