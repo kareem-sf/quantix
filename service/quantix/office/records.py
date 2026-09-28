@@ -249,6 +249,6 @@ def turns_since_engineer(session: Session, tender_id: str) -> int:
     query = select(func.max(Message.created_at)).where(Message.tender_id == tender_id, Message.sender == ENGINEER)
     spoke = session.scalar(query)
     turns = select(func.count()).select_from(TurnRecord).where(TurnRecord.tender_id == tender_id)
-    if spoke is not None:
-        turns = turns.where(TurnRecord.started_at > spoke)
+    if spoke is not None:  # a turn in the same clock tick counts: Windows' clock moves in 15.6 ms steps
+        turns = turns.where(TurnRecord.started_at >= spoke)
     return session.scalar(turns)

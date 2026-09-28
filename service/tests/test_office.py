@@ -792,16 +792,36 @@ def test_the_turn_budget_is_kept_across_a_restart(client, office, tmp_path, monk
         rania = office_records.hire(session, tender_id, "Rania Farouk", "Tender Manager", {}, is_manager=True)
         office_records.post(session, tender_id, ENGINEER, TEAM, "Price the asphalt.")
         session.flush()
-        later = datetime.now(UTC) + timedelta(seconds=1)  # clearly after the message, whatever the clock's grain
         for _ in range(runtime.TURN_BUDGET):  # a long stretch of work since the engineer last wrote
-            session.add(
-                TurnRecord(tender_id=tender_id, staff_id=rania.id, model="scripted", ended="done", started_at=later)
-            )
+            session.add(TurnRecord(tender_id=tender_id, staff_id=rania.id, model="scripted", ended="done"))
         session.commit()
     with restarted(tmp_path) as again:
         wait_for(lambda o: o["state"] == "paused", again, tender_id)
     assert team_room(client, tender_id)[-1]["text"].startswith("The office paused after a long stretch of work.")
     assert asked == []
+
+
+def test_turns_in_the_same_clock_tick_as_the_engineers_message_count_against_the_budget(client):
+    from quantix.office import records as office_records
+
+    tender_id = client.post("/tenders", json={"name": "Synthetic school"}).json()["id"]
+    tick = datetime.now(UTC)  # Windows' clock moves in 15.6 ms steps: a message and the turns after it can share one
+    with client.app.state.sessions() as session:
+        rania = office_records.hire(session, tender_id, "Rania Farouk", "Tender Manager", {}, is_manager=True)
+
+        def turn(started_at):
+            session.add(
+                TurnRecord(
+                    tender_id=tender_id, staff_id=rania.id, model="scripted", ended="done", started_at=started_at
+                )
+            )
+
+        turn(tick - timedelta(minutes=1))  # before the engineer last wrote: not counted
+        office_records.post(session, tender_id, ENGINEER, TEAM, "Price the asphalt.").created_at = tick
+        for _ in range(3):
+            turn(tick)
+        session.commit()
+        assert office_records.turns_since_engineer(session, tender_id) == 3
 
 
 def test_the_office_pauses_once_the_tender_has_used_its_ai_allowance(client, office):
