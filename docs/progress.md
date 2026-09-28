@@ -949,11 +949,12 @@ was already marked as read, so it would not have come back as new.
     conservative allowance", against the engineer's answer. A warning on work whose earlier version the engineer
     corrected can no longer be accepted: the Manager sends it back with their decision, or escalates.
   - **A reply is owed.** Salem gave out and reviewed the work, all in the team room, and never wrote back. Someone
-    the engineer wrote to directly who ends a turn with no message to them, no escalation and no work filed is woken
-    once more, to tell the engineer what they did.
+    the engineer wrote to last whose one finished turn since gave no message, no question and no work filed is
+    woken once more, to tell the engineer what they did. It is read from the records, so a restart keeps it.
   - **Questions show in the chat.** His question to the engineer went to the Overview only, and a second one was
-    refused because the first was still waiting. A direct chat now shows the person's questions as cards: pick an
-    option and send it, or answer in your own words.
+    refused because the first was still waiting, while the chat said "Asked you to decide". A direct chat now shows
+    the person's questions as cards (a waiting one at the end): pick an option and send it, or answer in your own
+    words. A refused question reads "Question not sent".
 - **Chat layout.** Each run of one person's turns, messages and questions sits under their face and name, as a
   chatbot shows its thinking above its reply. A turn's folded line says what they last did ("Worked for 12 s ·
   Briefing Rashid"). Tools that don't describe themselves get plain words ("Wrote to you", "Gave the review"). A

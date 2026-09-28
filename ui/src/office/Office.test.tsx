@@ -303,6 +303,9 @@ describe("Office", () => {
 
     const card = within(room).getByRole("group", { name: "Tender security wording" });
     expect(heading).toContainElement(card);
+    // asked before his reply, but still waiting: it stays at the end, where the engineer is
+    const reply = within(room).getByText("Omar is redoing them.");
+    expect(reply.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(card).getByText("Needs your decision")).toBeInTheDocument();
     await userEvent.click(within(card).getByRole("button", { name: "Yes, 1%" }));
     await userEvent.click(within(card).getByRole("button", { name: "Send answer" }));

@@ -505,6 +505,11 @@ def test_a_person_asks_one_question_at_a_time(client, office):
         "Your question “Zero-quantity lines” is still waiting for the engineer. Ask the next one after."
     )
     assert len(client.get(f"/tenders/{tender_id}/decisions").json()) == 1
+    # the chat once said "Asked you to decide" for the question that wasn't sent
+    wait_for(lambda o: client.get(f"/tenders/{tender_id}/turns").json()[-1]["ended"], client, tender_id)
+    [turn] = client.get(f"/tenders/{tender_id}/turns").json()
+    asked = [s["doing"] for s in client.get(f"/turns/{turn['id']}").json()["log"] if s["kind"] == "tool"]
+    assert asked == ["Asked you to decide", "Question not sent"]
 
 
 def test_an_empty_or_failing_reply_ends_the_turn_not_the_office(client, office):

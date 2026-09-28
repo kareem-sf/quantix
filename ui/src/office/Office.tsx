@@ -119,7 +119,7 @@ export function Conversation(props: {
     ...(messages.data ?? []).map((message) => ({ at: message.created_at, message })),
     ...(turns.data ?? []).map((turn) => ({ at: turn.started_at, turn })),
     ...(decisions.data ?? []).filter((d) => d.raised_by === direct).map((decision) => ({ at: decision.created_at, decision })),
-  ].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  ].sort((a, b) => order(a) - order(b) || 0); // two waiting questions keep their order
   const count = timeline.length;
   // one heading per run of the same person's work and words, as a chatbot shows its thinking above its reply
   const groups: { author: string | null; items: Item[] }[] = [];
@@ -215,6 +215,11 @@ function authorOf(item: Item): string | null {
   if ("turn" in item) return item.turn.staff_id;
   if ("decision" in item) return item.decision.raised_by;
   return item.message.kind === "task" || item.message.kind === "note" ? null : item.message.sender;
+}
+
+/** Where an item sits: when it happened, but a question still waiting stays at the end, where the engineer is. */
+function order(item: Item): number {
+  return "decision" in item && item.decision.status === "waiting" ? Infinity : Date.parse(item.at);
 }
 
 function keyOf(item: Item): string {
