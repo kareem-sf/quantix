@@ -137,7 +137,13 @@ export function TurnLog(props: { turn: Turn; name: string; technical: boolean; o
           </label>
           {detail.isPending && <p className="text-[13px] text-ink-3">Opening…</p>}
           {!detail.isPending && shown.length === 0 && (
-            <p className="text-[13px] text-ink-3">{turn.running ? "Thinking…" : "Nothing was written or done in this turn."}</p>
+            <p className="text-[13px] text-ink-3">
+              {turn.running
+                ? "Thinking…"
+                : log.length === 0
+                  ? "This turn's steps weren't kept: Quantix keeps them from 28 September 2026."
+                  : "Nothing was written or done in this turn."}
+            </p>
           )}
           {shown.map((step, index) => (
             <Step key={index} step={step} technical={technical} name={name} running={turn.running} />
