@@ -109,6 +109,10 @@ describe("Overview and decisions", () => {
     );
     expect(await screen.findByText("18.00 is -40% from the firm's own rates.")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Price excavation in rock with a breaker/ })).toBeInTheDocument();
+    // the Manager's recommended correction comes first, and says so
+    const [first, second] = screen.getAllByRole("radio").map((r) => r.closest("label")!);
+    expect(first).toHaveTextContent("Recommended");
+    expect(second).not.toHaveTextContent("Recommended");
 
     await userEvent.type(screen.getByLabelText("Or answer in your own words"), "Use the rock rate from the depot job.");
     await userEvent.click(screen.getByRole("button", { name: "Confirm" }));

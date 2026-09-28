@@ -254,6 +254,10 @@ def test_the_manager_puts_a_problem_in_approved_work_to_the_engineer_who_decides
         correction = "Price the site engineer and foreman for 2 months, the programme's 40 working days."
         where = [reviews.Source(boq_item="3.1", what="the excavation that sets the programme")]
         problem = "Site staff are priced for 4 months, but the approved programme is 40 working days."
+        # on the real tender Salem offered his own "keep", which would have reopened the work to be kept
+        keep = "Keep the allowance as approved, as a fixed site support cost."
+        with pytest.raises(ValueError, match="Give only corrections"):
+            reviews.escalate(session, tender_id, session.get(Staff, rania_id), ref, problem, where, [correction, keep])
         decision = reviews.escalate(session, tender_id, session.get(Staff, rania_id), ref, problem, where, [correction])
         session.commit()
         options, decision_id = decision.options, decision.id

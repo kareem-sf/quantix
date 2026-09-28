@@ -24,6 +24,8 @@ export function DecisionPage() {
   const position = waiting.findIndex((d) => d.id === decision.id);
   const next = waiting.find((d) => d.id !== decision.id);
   const reply = own.trim() || choice;
+  // an escalation about a record: the Manager puts his recommended correction first
+  const escalated = isChecked(decision.subject_kind) && Boolean(decision.subject_id);
 
   function confirm() {
     answer.mutate(
@@ -85,6 +87,7 @@ export function DecisionPage() {
                   className="mt-0.5 accent-ink"
                 />
                 <span className="grow text-sm font-medium">{option}</span>
+                {i === 0 && escalated && <span className="text-xs font-medium text-ink-2">Recommended</span>}
                 <span className="text-xs text-ink-4">{i + 1}</span>
               </label>
             ))}

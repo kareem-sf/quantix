@@ -592,6 +592,9 @@ def escalate(
     suggestions = [s.strip() for s in suggestions if s.strip()]
     if not 1 <= len(suggestions) <= 4:
         raise ValueError("Suggest 1 to 4 corrections for the engineer to choose from, each complete enough to act on.")
+    if approved and any(s.lower().startswith(("keep", "leave")) for s in suggestions):
+        # any choice but Quantix's own keep reopens the work: a second "keep" would reopen it to be kept
+        raise ValueError(f"Give only corrections: Quantix adds “{KEEP_APPROVED}” itself.")
     shown = _own_sources(session, p)
     for s in sources:
         if approved and (s.boq_item or "").strip().lower() in (ref.strip().lower(), p.ref):

@@ -816,3 +816,10 @@ it: the audit hid it, nothing woke him for it, and approved work was not his to 
 - **The engineer's answer acts.** A correction they choose reopens the work, with the answer as the instruction for
   whoever made it; keeping it changes nothing. Once put to them, the problem isn't raised again.
 - **Checks:** 3 new service tests. 185 service tests and 72 interface tests pass.
+- **Live, on the real tender:** the first run, Salem accepted the warning himself; then he named the markups as a
+  BOQ line and was refused, twice; then the briefing ended "Nothing new" and he wrote that there was nothing to
+  clear. Each was fixed (the Manager can't accept a warning on approved work; approved work needs no page or BOQ
+  line, and naming the work itself is let through; what woke him is under "New for you"). On the fourth run he
+  escalated the markups unprompted, in one turn: reduce the site staff to the 72-day programme (recommended), extend
+  the programme to 104 days, or keep them. A "keep" of his own would have reopened the work to be kept, so Quantix
+  refuses one and adds its own; the decision page marks an escalation's first option "Recommended".
