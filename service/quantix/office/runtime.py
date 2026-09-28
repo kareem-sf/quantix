@@ -30,6 +30,19 @@ NOT_REPLIED = (
     "The engineer wrote to you in your chat and you haven't written back. Tell them now with message_engineer what "
     "you did about it and what happens next, giving what it rests on as sources."
 )
+APPROVALS_WAITING = (
+    "Work you accepted now waits for the engineer's approval, and you haven't told them. Tell them now with "
+    "message_engineer, in one short message: what waits for them, anything to look at before they approve it, and on "
+    "which screen, giving the records as sources.\nWaiting for the engineer:\n"
+)
+ALL_APPROVED = (
+    "The engineer has approved the last of the work that waited for them: nothing waits for their approval now. Tell "
+    "them so with message_engineer in a line or two, with what the office does next or what it still needs from them."
+)
+QUEUE_LEFT = (
+    "Work is still in your review queue after your last turn, neither decided nor escalated. Settle each now: accept "
+    "it, send it back, or escalate it to the engineer if the office can't. Nothing may wait unresolved."
+)
 RETRIES = 4  # turns cut short by a passing AI failure that are tried again before the office pauses
 RETRY_WAIT = 5.0  # seconds before the first retry; each further one waits three times longer, over 3 minutes in all
 ALLOWANCE_USED = (
@@ -204,10 +217,14 @@ class Office:
                 or bool(unseen)
             )
             owed = self._reply_owed(session, member)
+            approvals = self._approvals_owed(session, member)
+            left = self._queue_left(session, member)
             if (
                 not new
                 and not to_review
                 and not owed
+                and not approvals
+                and not left
                 and not records.unfinished(session, staff_id)
                 and not records.new_task(session, member)
             ):
@@ -218,6 +235,10 @@ class Office:
                 records.note_opened(session, tender_id, staff_id, "finding", finding.key[:80])
             if history is not None:
                 prompt = f"{CARRY_ON}\n\n{prompt}"
+            if approvals:
+                prompt = f"{approvals}\n\n{prompt}"
+            if left:
+                prompt = f"{QUEUE_LEFT}\n\n{prompt}"
             if owed:
                 prompt = f"{NOT_REPLIED}\n\n{prompt}"
             self._read_before.setdefault(staff_id, (tender_id, member.last_read))
@@ -294,6 +315,51 @@ class Office:
             and session.scalars(asked).first() is None
             and not reviews.filed_since(session, member.id, since)
         )
+
+    @staticmethod
+    def _queue_left(session: Session, member: Staff) -> bool:
+        """Work in the Tender Manager's queue that one finished turn of his since it came left undecided and not
+        escalated: woken once more to settle it. On the real tender his escalation of the markups redo was turned away
+        and his turn ended, and the engineer waited for markups no one would bring. Read from the records."""
+        if not member.is_manager:
+            return False
+        escalated = reviews.escalated(session, member.tender_id)
+        waiting = [p for p in reviews.pending(session, member.tender_id) if p.record.id not in escalated]
+        if not waiting:
+            return False
+        since = max(p.since for p in waiting)
+        done = select(func.count()).select_from(TurnRecord)
+        done = done.where(TurnRecord.staff_id == member.id, TurnRecord.started_at >= since, TurnRecord.ended == "done")
+        return session.scalar(done) == 1
+
+    @staticmethod
+    def _approvals_owed(session: Session, member: Staff) -> str | None:
+        """What the Tender Manager hasn't told the engineer about their approvals: work he accepted that now waits
+        for them, or, once they approved the last of it, that nothing does. On the real tender he accepted the redone
+        markups the engineer had asked to see, and they found them by chance. Each wakes him once: not again after a
+        finished turn of his that started since. Read from the records, so a restart keeps it."""
+        if not member.is_manager:
+            return None
+        waiting = reviews.with_engineer(session, member.tender_id)
+        since = max(p.since for p in waiting) if waiting else reviews.last_approved(session, member.tender_id)
+        if since is None:
+            return None
+        mine = select(Message).where(
+            Message.tender_id == member.tender_id, Message.channel == member.id, Message.sender == member.id
+        )
+        told = session.scalars(mine.order_by(Message.id.desc()).limit(1)).first()
+        if told is not None and told.created_at >= since:
+            return None
+        done = select(func.count()).select_from(TurnRecord)
+        done = done.where(TurnRecord.staff_id == member.id, TurnRecord.started_at >= since, TurnRecord.ended == "done")
+        if session.scalar(done):
+            return None
+        if not waiting:
+            return ALL_APPROVED
+        names = {m.id: m.first_name for m in records.team(session, member.tender_id, include_released=True)}
+        listed = [f"- {reviews.describe(session, p, names)} · on {reviews.WHERE[p.kind]}" for p in waiting[:15]]
+        more = [f"- … and {len(waiting) - 15} more."] if len(waiting) > 15 else []
+        return APPROVALS_WAITING + "\n".join(listed + more)
 
     def _save_steps(self, record_id: int, steps: list[dict]) -> None:
         with self.sessions() as session:

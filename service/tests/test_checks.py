@@ -108,7 +108,8 @@ def test_a_rate_is_checked_against_the_same_work_and_the_firms_own_rates(client,
     assert "Accept it with warnings_reason saying why each is acceptable" in refused
 
     reason = "The 8486 yard is rock: the geotechnical report prices it higher."
-    assert decide(client, tender_id, second_id, reason=reason) == "Accepted 1 (waiting for the engineer). Sent back 0."
+    accepted = decide(client, tender_id, second_id, reason=reason)
+    assert accepted.startswith("Accepted 1 (waiting for the engineer). Sent back 0.")
     [shown, _] = client.get(f"/records/rate/{second_id}/findings").json()
     assert (shown["accepted_by"], shown["reason"]) == ("Rania", reason)  # the engineer sees why he accepted it
 
@@ -173,7 +174,7 @@ def test_measuring_the_same_area_twice_is_a_blocker(client, tender):
     assert "Quantix's checks stop it: It covers the same area" in decide(client, tender_id, again)
     decide(client, tender_id, again, accept=False, note="The yard is already measured; remove this one.")
     assert findings(client, "measurement", yard) == []  # 800.02 m2 against the BOQ's 800
-    assert decide(client, tender_id, yard) == "Accepted 1 (waiting for the engineer). Sent back 0."
+    assert decide(client, tender_id, yard).startswith("Accepted 1 (waiting for the engineer). Sent back 0.")
 
 
 def test_a_fact_must_say_what_its_clause_says(client, tender):
@@ -260,6 +261,27 @@ def test_the_schedule_and_the_markups_are_checked_against_each_other(client, ten
             "Site engineer: 2 month is about 52 working days at 26 a month; the work schedule is 104 working days.",
         ),
     ]
+
+
+def test_work_quantix_warns_about_is_escalated_where_its_finding_shows(client, tender):
+    """The real tender: Salem escalated markups whose preliminaries came to 155% of the net cost, naming the markups
+    as a BOQ line; the tool turned him away, and the engineer waited for markups no one brought."""
+    tender_id, omar, _ = tender
+    with client.app.state.sessions() as session:
+        for item in ("8485 · Earthwork / C.1", "8485 · Earthwork / C.2", "8486 · Earthwork / C.1"):
+            estimate.propose_rate(
+                session, tender_id, ENGINEER, item, "estimate", NOTE, unit_rate=Decimal(25), status="approved"
+            )
+        site = estimate.PreliminaryIn(item="Site engineer", quantity=72, unit="day", rate=18000)  # a month's rate
+        zero = Decimal(0)
+        markups = estimate.propose_markups(session, tender_id, omar, [site], zero, zero, zero, "Site staff.")
+        ref, manager = f"markups {markups.id[:8]}", office.manager(session, tender_id)
+        problem = "Preliminaries are many times the net cost: the monthly rates are priced by the day."
+        itself = reviews.Source(boq_item=ref, what="The markups")
+        decision = reviews.escalate(session, tender_id, manager, ref, problem, [itself], ["Price the staff by month"])
+        session.commit()
+        assert (decision.subject_kind, decision.sources) == ("markups", [])  # its finding shows beside the decision
+        assert reviews.counts(session, tender_id) == ""  # it waits for the engineer's answer, not for him
 
 
 def test_a_draft_with_notes_to_the_office_is_flagged(client, tender):

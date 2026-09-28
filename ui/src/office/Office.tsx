@@ -1,6 +1,7 @@
-import { IconArrowRight, IconArrowUp } from "@tabler/icons-react";
+import { IconArrowRight, IconArrowUp, IconChevronRight } from "@tabler/icons-react";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
+import { useNeedsYou } from "../tenders/needsYou";
 import { Face } from "./Face";
 import { Prose } from "./Prose";
 import {
@@ -182,6 +183,7 @@ export function Conversation(props: {
             </Block>
           ),
         )}
+        {props.staff.some((m) => m.is_manager && m.id === props.channel) && <WaitingForYou tenderId={props.tenderId} />}
         <div ref={end} />
       </div>
       <form onSubmit={submit} className="px-8 pt-3.5 pb-6">
@@ -341,6 +343,29 @@ function Question({ tenderId, decision }: { tenderId: string; decision: Decision
       ) : (
         <span className="text-sm text-ink-2">{decision.answer}</span>
       )}
+    </div>
+  );
+}
+
+/** What the Tender Manager accepted that waits for the engineer, each one click from the screen it is decided on. At
+ * the end of his chat, where he tells them about it; gone once nothing waits. */
+function WaitingForYou({ tenderId }: { tenderId: string }) {
+  const { approvals } = useNeedsYou(tenderId);
+  if (approvals.length === 0) return null;
+  return (
+    <div
+      role="group"
+      aria-label="Waiting for your approval"
+      className="ml-10 flex max-w-[640px] flex-col gap-1 rounded-xl border border-line-strong px-4 py-3"
+    >
+      <span className="pb-1 text-xs font-semibold text-ink-2">Waiting for your approval</span>
+      {approvals.map((a) => (
+        <Link key={a.key} to={a.to} className="flex items-center gap-2.5 py-1 text-sm hover:text-ink-2">
+          <span className="size-[7px] shrink-0 rounded-full bg-attention" />
+          <span className="grow">{a.title}</span>
+          <IconChevronRight className="size-4 shrink-0 text-ink-4" stroke={1.75} />
+        </Link>
+      ))}
     </div>
   );
 }

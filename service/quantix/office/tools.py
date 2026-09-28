@@ -1675,7 +1675,7 @@ def escalate(
     """Bring the engineer a problem the office can't settle: a record in your review queue that keeps coming back
     wrong, one only the engineer can decide, or work the engineer already approved that Quantix finds a problem in.
     problem: what is wrong, what it costs or risks, and why the office can't settle it. sources: where it shows, each
-    a document page or a BOQ line, with what the engineer will find there; for approved work Quantix found a problem
+    a document page or a BOQ line, with what the engineer will find there; for work Quantix's checks found a problem
     in, they may be left out, as its finding says where. suggestions: 1 to 4 corrections, your
     recommended one first, each complete enough to act on. A record in your queue waits there; the engineer's answer
     comes to your chat, and you apply it with review. For approved work Quantix adds "Keep it as approved"; a

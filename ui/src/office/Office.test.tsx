@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
+import type { BoqItem } from "../estimate/queries";
 import { fakeService, openApp } from "../test/app";
 import type { Decision, Message, Staff } from "./queries";
 
@@ -73,6 +74,41 @@ describe("Overview and decisions", () => {
     await userEvent.click(screen.getByRole("button", { name: "Confirm" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/tenders/t1"));
     expect(service.state.decisions[0]).toMatchObject({ status: "answered", answer: "Yes, 1%" });
+  });
+
+  it("keeps what waits for the engineer's approval at the end of the Manager's chat, counted on the rail", async () => {
+    const line: BoqItem = {
+      id: "i31",
+      section: null,
+      item: "3.1",
+      description: "Excavation",
+      unit: "m3",
+      quantity: "1240",
+      status: "reviewed",
+      proposed_by: "s2",
+      reason: null,
+      reviewed_by: "s1",
+      review_note: "Matches Bill.xlsx.",
+      source: { document_id: "d1", document_name: "Bill.xlsx", page: 1, quote: "A2=3.1" },
+    };
+    fakeService({
+      tenders: [tender],
+      settings: ready,
+      staff: [rania, omar],
+      items: [line],
+      messages: [said(1, "s1", "s1", "BOQ line 3.1 waits for your approval on the Estimate screen.")],
+    });
+    openApp("/tenders/t1/office?with=s1");
+
+    const waiting = await screen.findByRole("group", { name: "Waiting for your approval" });
+    expect(within(waiting).getByRole("link", { name: "1 BOQ item to approve" })).toHaveAttribute(
+      "href",
+      "/tenders/t1/estimate?show=waiting",
+    );
+    expect(within(screen.getByRole("navigation", { name: "Quantix" })).getByLabelText("1 decision needs you")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Team room/ }));
+    await screen.findByText(/Everything the team says to each other/);
+    expect(screen.queryByRole("group", { name: "Waiting for your approval" })).not.toBeInTheDocument();
   });
 
   it("shows an escalation with where it shows and what Quantix found, and takes the engineer's own answer", async () => {

@@ -112,6 +112,9 @@ items, quotes): your staff do, so every record gets a second pair of eyes.
   general rule, which the whole office follows from then on.
 - Leave nothing unresolved. When the office can't get something right after two send-backs, or only the engineer
   can decide it, escalate it: the problem, where it shows, and the corrections you suggest. Then apply their answer.
+- What you accept waits for the engineer's approval. Once your review is done, tell them in one message what now
+  waits for them and on which screen; when they have approved the last of it, tell them nothing is waiting for them
+  and what comes next. "Where the tender stands" says what waits for them.
 - Before you tell the engineer the tender is ready, run audit_tender and clear it: nothing may block the release.
 - Keep the engineer informed in your chat with them (message_engineer): what you found, what is next, what you need.
 - Bring the engineer's decisions to them with ask_engineer, one question at a time, including what your staff raise.
@@ -270,6 +273,7 @@ def standing(session: Session, tender_id: str) -> str:
     approved = sum(i.status in APPROVED for i in items)
     reviewed = sum(i.status == REVIEWED for i in items)
     older = len(revisions.stale(session, tender_id))
+    engineer = reviews.for_engineer(session, tender_id)
     return "\n".join(
         ([f"- Work on older copies of documents, to do again from the newer copies: {older}."] if older else [])
         + [
@@ -289,6 +293,9 @@ def standing(session: Session, tender_id: str) -> str:
             f"- Submission: {checklist.count('ready')} of {len(checklist)} checklist items ready; "
             f"{checklist.count('manager')} drafts with the Tender Manager, {checklist.count('review')} waiting for "
             "the engineer.",
+            f"- Waiting for the engineer's approval: {engineer}."
+            if engineer
+            else "- Nothing is waiting for the engineer's approval.",
         ]
     )
 

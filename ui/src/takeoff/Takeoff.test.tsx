@@ -165,6 +165,7 @@ describe("Takeoff", () => {
     expect(within(panel).getByText("Differs -40.0%")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Approve scale" })).toBeInTheDocument();
     expect(screen.getByText("· about 1:283")).toBeInTheDocument(); // to compare with the title block
+    expect(screen.getByRole("option", { name: "A-101.pdf · page 1 · needs you" })).toBeInTheDocument(); // found from the list
 
     const sheetArea = screen.getByRole("region", { name: "Drawing" });
     await userEvent.click(within(sheetArea).getByRole("button", { name: "Send back" }));

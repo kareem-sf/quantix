@@ -2,6 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { Priced } from "../estimate/queries";
+import type { Package } from "../subcontract/queries";
 import { fakeService, openApp } from "../test/app";
 
 const tender = { id: "t1", name: "Synthetic school", due_date: null, created_at: "2026-09-23T10:00:00Z" };
@@ -95,6 +96,26 @@ describe("Overview", () => {
 
     expect(await screen.findByText("2 pieces of work with Rania for review before they come to you.")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Nothing needs you right now" })).toBeInTheDocument();
+  });
+
+  it("counts the enquiries the Manager accepted, for the engineer to send", async () => {
+    const enquiry = {
+      id: "e1",
+      company: "Red Sea Membranes",
+      email: null,
+      subject: "Groundworks enquiry",
+      body: "Please price item 3.1.",
+      status: "draft",
+      created_by: "s2",
+      reviewed_by: "s1",
+      review_note: "Scope matches the package.",
+    };
+    const groundworks = { id: "p1", name: "Groundworks", kind: "subcontract", items: [], enquiries: [enquiry], quotes: [] };
+    fakeService({ tenders: [tender], documents: [doc], packages: [groundworks as unknown as Package] });
+    openApp("/tenders/t1");
+
+    expect(await screen.findByRole("heading", { name: "1 decision needs you" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /1 enquiry to send/ })).toHaveAttribute("href", "/tenders/t1/subcontract");
   });
 
   it("sets the due date where it is shown", async () => {

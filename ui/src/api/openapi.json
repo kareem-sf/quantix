@@ -6580,6 +6580,10 @@
             "type": "integer",
             "title": "Subcontract"
           },
+          "enquiries": {
+            "type": "integer",
+            "title": "Enquiries"
+          },
           "submission": {
             "type": "integer",
             "title": "Submission"
@@ -6594,6 +6598,7 @@
           "drawings",
           "pricing",
           "subcontract",
+          "enquiries",
           "submission"
         ],
         "title": "Gates"

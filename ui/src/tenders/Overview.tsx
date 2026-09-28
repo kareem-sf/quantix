@@ -6,10 +6,11 @@ import { useDocuments } from "../documents/queries";
 import { money, useEstimate, useGates } from "../estimate/queries";
 import { Face } from "../office/Face";
 import { Prose, tidy } from "../office/Prose";
-import { TEAM, firstName, useDecisions, useMessages, useOffice, useSend } from "../office/queries";
+import { TEAM, firstName, useMessages, useOffice, useSend } from "../office/queries";
 import { Opening } from "../app/Opening";
 import { useAudit, useDecideLesson, useLessons } from "../review/queries";
 import { dueSentence, dueSource, type DueSource as DueSourceOut } from "./due";
+import { useNeedsYou } from "./needsYou";
 import { usePackages } from "../subcontract/queries";
 import { useSubmission } from "../submission/queries";
 import { useDeleteTender, useSetDueDate, useSetOutcome, useTender } from "./queries";
@@ -19,57 +20,12 @@ export function Overview() {
   const tender = useTender(tenderId);
   const documents = useDocuments(tenderId);
   const office = useOffice(tenderId);
-  const decisions = useDecisions(tenderId);
   const gates = useGates(tenderId);
+  const { approvals, questions } = useNeedsYou(tenderId);
 
   if (tender.isError) return <p className="pt-14 text-ink-2">{tender.error.message}</p>;
   if (!tender.data || !documents.data || !office.data) return <Opening error={documents.isError || office.isError} />;
 
-  const questions = (decisions.data ?? []).filter((d) => d.status === "waiting");
-  const approvals = [
-    gates.data?.facts && {
-      key: "facts",
-      title: `${gates.data.facts} tender ${gates.data.facts === 1 ? "fact" : "facts"} to approve`,
-      text: "Method of measurement, currency or VAT, as the office read them",
-      to: `/tenders/${tenderId}/estimate`,
-    },
-    gates.data?.takeoff && {
-      key: "takeoff",
-      title: `${gates.data.takeoff} takeoff ${gates.data.takeoff === 1 ? "mark" : "marks"} to check`,
-      text: "Scales and measurements the team drew on the drawings",
-      to: `/tenders/${tenderId}/takeoff`,
-    },
-    gates.data?.drawings && {
-      key: "drawings",
-      title: `${gates.data.drawings} ${gates.data.drawings === 1 ? "query or layer map" : "queries and layer maps"} to decide`,
-      text: "Tender queries for the client, and what the drawings’ layers are",
-      to: `/tenders/${tenderId}/queries`,
-    },
-    gates.data?.pricing && {
-      key: "pricing",
-      title: `${gates.data.pricing} ${gates.data.pricing === 1 ? "price" : "prices"} to approve`,
-      text: "Rates and markups from the office, each with its build-up or source",
-      to: `/tenders/${tenderId}/estimate?show=waiting`,
-    },
-    gates.data?.subcontract && {
-      key: "subcontract",
-      title: `${gates.data.subcontract} ${gates.data.subcontract === 1 ? "quote" : "quotes"} to choose`,
-      text: "Levelled subcontract and supplier quotes with the office’s recommendation",
-      to: `/tenders/${tenderId}/subcontract`,
-    },
-    gates.data?.submission && {
-      key: "submission",
-      title: `${gates.data.submission} ${gates.data.submission === 1 ? "draft" : "drafts"} to review`,
-      text: "Submission documents the office drafted from the tender’s requirements",
-      to: `/tenders/${tenderId}/submission?show=review`,
-    },
-    gates.data?.boq && {
-      key: "boq",
-      title: `${gates.data.boq} BOQ ${gates.data.boq === 1 ? "item" : "items"} to approve`,
-      text: "Entered by the office from the client’s BOQ, each with its page",
-      to: `/tenders/${tenderId}/estimate?show=waiting`,
-    },
-  ].filter((a): a is { key: string; title: string; text: string; to: string } => Boolean(a));
   const waiting = [...questions, ...approvals];
   const manager = office.data.staff.find((m) => m.is_manager);
   const current = documents.data.filter((d) => d.status !== "replaced");

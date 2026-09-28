@@ -959,3 +959,31 @@ was already marked as read, so it would not have come back as new.
   chatbot shows its thinking above its reply. A turn's folded line says what they last did ("Worked for 12 s ·
   Briefing Rashid"). Tools that don't describe themselves get plain words ("Wrote to you", "Gave the review"). A
   written "Sources:" line is hidden when the sources show as links.
+
+## 28 September 2026: the Manager tells the engineer what waits for their approval
+
+On the real tender Salem accepted the redone markups the engineer had asked to see ("Bring the new markups to me
+when you've reviewed them") and never said so. The engineer found them by chance under Markups and summary. Nothing
+told the engineer when the last approval was done, either. The same gap showed in several places:
+
+- **He tells them, and says when nothing waits.** `reviews.with_engineer` lists what the Manager accepted that waits
+  for the engineer (the rates and markups the Estimate shows, quote recommendations, enquiries to send), and
+  `for_engineer` says it in a line with the screen for each. His duties say to tell the engineer once his review is
+  done, and to say when nothing waits. His review's answer reminds him, and every briefing ends with the line.
+  Quantix wakes him once (not after a finished turn of his that started since) when:
+  - work he accepted waits and his last message to the engineer is older than it; the brief lists each record and
+    its screen;
+  - the engineer approved the last of it (or sent the last enquiry) after his last message.
+- **Stuck in his queue.** The next redo priced monthly site staff by the day (preliminaries 155% of net). Salem
+  couldn't send it back a third time, and his escalation was turned away twice: he named the markups themselves
+  as a BOQ line, and markups have no page of their own. His turn ended and nothing woke him again. Now:
+  - a source naming the escalated work is left out;
+  - work Quantix's checks find a problem in needs no page, since its finding shows beside the decision (as for
+    approved work);
+  - work still in his queue after one finished turn since it came, neither decided nor escalated, wakes him once
+    more to settle it.
+- **Where to approve.** The Overview's "1 price to approve" opened the Estimate's "Needs you · 0". Markups waiting
+  now count there, with a dot on Markups and summary and a line that opens them. The Takeoff sheet list marks
+  sheets with marks waiting ("· needs you"). The Overview counts enquiries to send (`gates.enquiries`). The rail
+  shows the count beside the open tender's Overview. The Manager's chat ends with "Waiting for your approval", one
+  click from each screen, until nothing waits (`tenders/needsYou.ts`, shared with the Overview).

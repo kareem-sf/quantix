@@ -210,6 +210,36 @@ describe("Pricing", () => {
     expect(within(panel).getByRole("button", { name: "Approve markups" })).toBeInTheDocument();
   });
 
+  it("counts markups waiting for the engineer under Needs you, one click from them", async () => {
+    fakeService({
+      tenders: [tender],
+      items: [rebar],
+      priced: [{ ...priced, rate: { ...priced.rate!, status: "approved" } }],
+      summary,
+      markups: {
+        id: "mk1",
+        preliminary_items: [],
+        overheads: "0.06",
+        profit: "0.08",
+        adjustment: "0.00",
+        note: "Site support for the 72-working-day programme.",
+        status: "reviewed",
+        proposed_by: "s3",
+        reviewed_by: "s1",
+        review_note: "Checked against the programme.",
+      },
+    });
+    openApp("/tenders/t1/estimate?show=waiting");
+
+    // on the real tender the Overview sent the engineer here for a price to approve, and the list was empty
+    expect(await screen.findByRole("button", { name: "Needs you · 1" })).toBeInTheDocument();
+    expect(screen.getByText(/1 of 1 item priced · 1 needs you/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Approve all/ })).not.toBeInTheDocument(); // markups are approved on their own
+    await userEvent.click(screen.getByRole("button", { name: /The markups need your approval/ }));
+    const panel = await screen.findByRole("complementary", { name: "Price summary" });
+    expect(within(panel).getByRole("button", { name: "Approve markups" })).toBeInTheDocument();
+  });
+
   it("keeps a company library", async () => {
     const service = fakeService({});
     openApp("/library");

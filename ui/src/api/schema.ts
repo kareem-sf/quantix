@@ -1900,6 +1900,8 @@ export interface components {
             pricing: number;
             /** Subcontract */
             subcontract: number;
+            /** Enquiries */
+            enquiries: number;
             /** Submission */
             submission: number;
         };

@@ -11,6 +11,7 @@ import { Link, NavLink, useLocation, useParams } from "react-router";
 import { Face } from "../office/Face";
 import { firstName, useOffice } from "../office/queries";
 import { dueShort, dueSource } from "../tenders/due";
+import { useNeedsYou } from "../tenders/needsYou";
 import { useTenders } from "../tenders/queries";
 
 const STAGES = [
@@ -63,19 +64,7 @@ export function Rail() {
                 {dueShort(tender.due_date)}
               </span>
             </Link>
-            {tender.id === tenderId &&
-              STAGES.map(([label, path]) => (
-                <NavLink
-                  key={label}
-                  to={`/tenders/${tender.id}${path}`}
-                  end
-                  className={({ isActive }) =>
-                    `rounded-md py-1.5 pr-2 pl-5 ${isActive ? "bg-white font-semibold shadow-[0_0_0_1px_var(--color-line)]" : "text-ink-2"}`
-                  }
-                >
-                  {label}
-                </NavLink>
-              ))}
+            {tender.id === tenderId && <Stages tenderId={tender.id} />}
           </div>
         ))}
         {tenderId && <People tenderId={tenderId} />}
@@ -85,6 +74,32 @@ export function Rail() {
       </div>
     </nav>
   );
+}
+
+/** The open tender's screens. The Overview counts what needs the engineer, so it shows from anywhere. */
+function Stages({ tenderId }: { tenderId: string }) {
+  const { approvals, questions } = useNeedsYou(tenderId);
+  const needs = approvals.length + questions.length;
+  return STAGES.map(([label, path]) => (
+    <NavLink
+      key={label}
+      to={`/tenders/${tenderId}${path}`}
+      end
+      className={({ isActive }) =>
+        `flex items-center justify-between rounded-md py-1.5 pr-2 pl-5 ${isActive ? "bg-white font-semibold shadow-[0_0_0_1px_var(--color-line)]" : "text-ink-2"}`
+      }
+    >
+      {label}
+      {label === "Overview" && needs > 0 && (
+        <span
+          aria-label={`${needs} ${needs === 1 ? "decision needs" : "decisions need"} you`}
+          className="min-w-[18px] rounded-full bg-attention px-1.5 text-center text-[11px] leading-[18px] font-medium text-white"
+        >
+          {needs}
+        </span>
+      )}
+    </NavLink>
+  ));
 }
 
 function SettingsMenu() {

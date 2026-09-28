@@ -103,6 +103,12 @@ export function Takeoff() {
           <SheetPicker
             tenderId={tenderId}
             sheets={takeoff.data?.sheets ?? []}
+            needsYou={
+              new Set([
+                ...(takeoff.data?.sheets ?? []).filter((s) => s.scale?.status === "reviewed"),
+                ...(takeoff.data?.measurements ?? []).filter((m) => m.status === "reviewed"),
+              ].map((s) => `${s.document_id}|${s.page}`))
+            }
             current={{ documentId, page }}
             onOpen={open}
           />
@@ -245,6 +251,7 @@ export function Takeoff() {
 function SheetPicker(props: {
   tenderId: string;
   sheets: Sheet[];
+  needsYou: Set<string>; // "document|page" of sheets with a scale or measurements waiting for the engineer
   current: { documentId: string | null; page: number };
   onOpen: (doc: string, page: number) => void;
 }) {
@@ -270,6 +277,7 @@ function SheetPicker(props: {
               <option key={`${s.document_id}|${s.page}`} value={`${s.document_id}|${s.page}`}>
                 {s.name} · page {s.page}
                 {s.scale ? "" : s.kind === "cad" ? " · no units" : " · no scale"}
+                {props.needsYou.has(`${s.document_id}|${s.page}`) ? " · needs you" : ""}
               </option>
             ))}
           </optgroup>

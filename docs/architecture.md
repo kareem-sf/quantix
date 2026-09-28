@@ -94,7 +94,10 @@ Each domain module owns its models, its service functions and the agent tools th
   sender opened, or `next_steps`: up to 3 open at a time, each becomes the sender's own "Follow up" task. An open
   task given, sent back or set since someone's last turn began wakes them once. Someone who ends a turn with open
   tasks, having filed nothing and told no one, gets a plain notice from Quantix in the team room, which wakes the
-  Manager to find out why; Quantix's notices never wake the staff they name. The chat shows the sources as
+  Manager to find out why; Quantix's notices never wake the staff they name. The Manager is woken once more to tell
+  the engineer when work he accepted waits for them and his last message to them is older, or when they approved
+  the last of it; and once more when work stays in his queue after a finished turn, neither decided nor escalated.
+  His chat with the engineer ends with what waits for their approval, one click from each screen. The chat shows the sources as
   links (`messages.sources`, the same shape as a decision's sources).
 - **Looking up the office's work.** `quantix/review/lookup.py` opens any record by its reference or BOQ line: what
   it says and rests on, with Quantix's figures, who made and decided it, the checks while it is undecided, and
@@ -120,7 +123,8 @@ Each domain module owns its models, its service functions and the agent tools th
   named constants that each message states: plausibility checks, not standards.
 - **Escalations.** The Manager's `escalate` tool turns a record in his queue into a `Decision` with its subject
   (`subject_kind`, `subject_id`), its sources (document pages and BOQ lines, checked to exist) and his suggested
-  corrections as the options. A record has at least one source and one open escalation at most. While it is
+  corrections as the options. A record has at least one source, unless Quantix's checks find a problem in it (the
+  finding shows beside the decision), and one open escalation at most. While it is
   open, he can't decide the record. Once the same work has been sent back twice, he can't send it back again
   until the engineer has answered an escalation about it. The answer reaches his chat through the usual
   decision answer.

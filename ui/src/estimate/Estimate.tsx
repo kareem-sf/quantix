@@ -60,6 +60,8 @@ export function Estimate() {
   const waitingItems = items.filter((i) => i.status === "reviewed").length;
   const waitingRates = (estimate.data?.items ?? []).filter((p) => p.rate?.status === "reviewed").length;
   const waiting = waitingItems + waitingRates;
+  const markupsWaiting = estimate.data?.markups?.status === "reviewed"; // behind Markups and summary, not in the table
+  const needsYou = waiting + (markupsWaiting ? 1 : 0);
   const withManager =
     items.filter((i) => i.status === "proposed").length +
     (estimate.data?.items ?? []).filter((p) => p.rate?.status === "proposed").length;
@@ -81,7 +83,7 @@ export function Estimate() {
             <h1 className="text-[22px] font-semibold tracking-tight">Estimate</h1>
             <span className="text-ink-2">
               {summary?.priced ?? 0} of {items.length} {items.length === 1 ? "item" : "items"} priced
-              {waiting > 0 && ` · ${waiting} need${waiting === 1 ? "s" : ""} you`}
+              {needsYou > 0 && ` · ${needsYou} need${needsYou === 1 ? "s" : ""} you`}
               {withManager > 0 && ` · ${withManager} with the Manager`}
             </span>
           </div>
@@ -96,8 +98,9 @@ export function Estimate() {
             )}
             <button
               onClick={() => keep({ view: "summary" })}
-              className="h-[34px] rounded-lg border border-line-strong bg-white px-3 text-[13px] whitespace-nowrap"
+              className="flex h-[34px] items-center gap-2 rounded-lg border border-line-strong bg-white px-3 text-[13px] whitespace-nowrap"
             >
+              {markupsWaiting && <span aria-hidden className="size-[7px] rounded-full bg-attention" />}
               Markups and summary
             </button>
             {waiting > 0 && (
@@ -126,7 +129,7 @@ export function Estimate() {
         <div className="mt-[18px] flex gap-[18px] border-b border-line">
           {[
             ["all", "All items"],
-            ["waiting", `Needs you · ${waiting}`],
+            ["waiting", `Needs you · ${needsYou}`],
             ["unpriced", `Not priced · ${summary?.unpriced.length ?? 0}`],
           ].map(([key, label]) => (
             <button
@@ -139,6 +142,16 @@ export function Estimate() {
           ))}
         </div>
 
+        {filter === "waiting" && markupsWaiting && (
+          <button
+            onClick={() => keep({ view: "summary" })}
+            className="mt-3 flex items-center gap-2 self-start rounded-lg bg-rail px-3 py-2 text-left"
+          >
+            <span className="size-[7px] shrink-0 rounded-full bg-attention" />
+            The markups need your approval
+            <span className="font-medium underline underline-offset-4">Open them</span>
+          </button>
+        )}
         {items.length === 0 ? (
           <p className="pt-6 text-ink-2">
             No BOQ yet. Ask the office to enter the client’s BOQ, for example: “Enter the BOQ from the package.”

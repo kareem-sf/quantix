@@ -359,7 +359,9 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     if (path.match(/^\/tenders\/\w+\/gates$/)) {
       const count = (list: { status: string }[], status = "reviewed") => list.filter((r) => r.status === status).length;
       const manager = [state.items, state.facts, state.measurements].reduce((n, list) => n + count(list, "proposed"), 0);
-      return json({ manager, boq: count(state.items), facts: count(state.facts), takeoff: count(state.measurements), drawings: 0, pricing: 0, subcontract: 0, submission: 0 });
+      const pricing = state.priced.filter((p) => p.rate?.status === "reviewed").length + (state.markups?.status === "reviewed" ? 1 : 0);
+      const enquiries = state.packages.flatMap((p) => p.enquiries).filter((e) => e.status === "draft" && e.reviewed_by).length;
+      return json({ manager, boq: count(state.items), facts: count(state.facts), takeoff: count(state.measurements), drawings: 0, pricing, subcontract: 0, enquiries, submission: 0 });
     }
     if (path.match(/^\/tenders\/\w+\/review$/)) return json([]);
     if (path.match(/^\/tenders\/\w+\/audit$/)) return json(state.audit);
