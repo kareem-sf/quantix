@@ -51,7 +51,7 @@ export function Takeoff() {
   const documentId = params.get("doc");
   const page = Number(params.get("page") ?? 1);
   const sheet = useSheet(documentId, page);
-  const vertices = useVertices(documentId, page);
+  const vertices = useVertices(documentId, page, sheet.data?.kind === "pdf");
   const [tool, setTool] = useState<Tool>("select");
   const [draft, setDraft] = useState<Point[]>([]);
   const [finished, setFinished] = useState(false);

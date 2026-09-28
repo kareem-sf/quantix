@@ -230,6 +230,8 @@ describe("Takeoff from a CAD drawing", () => {
         choice: { stamp: "st1", objects: [0] },
       }),
     );
+    const asked = service.fetch.mock.calls.map(([input]) => (input instanceof Request ? input.url : String(input)));
+    expect(asked.some((url) => url.includes("/vertices"))).toBe(false); // a drawing has no PDF vertices to snap to
   });
 
   it("measures 3D solids by volume, and by weight with a density", async () => {

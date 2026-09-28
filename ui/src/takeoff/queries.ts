@@ -38,10 +38,11 @@ export function useSheet(documentId: string | null, page: number) {
 }
 
 /** The drawing's own corners and line ends, so clicks snap exactly onto the drawing. */
-export function useVertices(documentId: string | null, page: number) {
+/** A PDF page's own corners and line ends, to snap clicks to; a CAD drawing is measured from its objects instead. */
+export function useVertices(documentId: string | null, page: number, isPdf: boolean) {
   return useQuery({
     queryKey: ["vertices", documentId, page],
-    enabled: Boolean(documentId),
+    enabled: Boolean(documentId) && isPdf,
     staleTime: Infinity,
     queryFn: async () =>
       must(
