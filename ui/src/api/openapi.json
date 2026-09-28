@@ -2575,7 +2575,7 @@
           "drawings"
         ],
         "summary": "Get Drawing",
-        "description": "What a drawing holds: its pages, units, what couldn't be read, and one page's layers and blocks.",
+        "description": "What a drawing holds: its pages, units, what couldn't be read, and one page's layers and blocks. A PDF page\ndrawn in lines is a drawing of one page, whose layers are its pens (or the PDF's own layers).",
         "operationId": "get_drawing_documents__document_id__drawing_get",
         "parameters": [
           {
@@ -2742,6 +2742,78 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Chosen"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{document_id}/pages/{number}/region": {
+      "post": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Region",
+        "description": "The region around a point that the page's lines close off: what the engineer clicked inside, found with\nopencadkernel from the lines themselves, so an area needn't be drawn as one closed outline to be measured.",
+        "operationId": "region_documents__document_id__pages__number__region_post",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Number"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegionIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegionOut"
                 }
               }
             }
@@ -6174,6 +6246,11 @@
             "type": "string",
             "title": "Document Id"
           },
+          "page": {
+            "type": "integer",
+            "title": "Page",
+            "default": 1
+          },
           "kind": {
             "type": "string",
             "enum": [
@@ -7002,6 +7079,17 @@
               }
             ],
             "title": "Meaning"
+          },
+          "colour": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Colour"
           }
         },
         "type": "object",
@@ -8681,6 +8769,92 @@
         ],
         "title": "ReadyIn"
       },
+      "RegionIn": {
+        "properties": {
+          "stamp": {
+            "type": "string",
+            "title": "Stamp"
+          },
+          "point": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Point"
+          },
+          "hidden": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Hidden",
+            "default": []
+          },
+          "within": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Within"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stamp",
+          "point"
+        ],
+        "title": "RegionIn"
+      },
+      "RegionOut": {
+        "properties": {
+          "ring": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Ring"
+          },
+          "area_m2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Area M2"
+          },
+          "perimeter_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Perimeter M"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ring",
+          "area_m2",
+          "perimeter_m"
+        ],
+        "title": "RegionOut"
+      },
       "ReopenIn": {
         "properties": {
           "reason": {
@@ -9385,6 +9559,11 @@
               }
             ],
             "title": "Units"
+          },
+          "lines": {
+            "type": "boolean",
+            "title": "Lines",
+            "default": false
           }
         },
         "type": "object",

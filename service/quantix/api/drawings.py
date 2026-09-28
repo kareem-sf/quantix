@@ -15,7 +15,7 @@ from quantix.api.documents import Home
 from quantix.api.tenders import DB
 from quantix.boq.models import BoqItem
 from quantix.core.review import UNDECIDED
-from quantix.documents import cad
+from quantix.documents import cad, vectors
 from quantix.documents.models import Document
 from quantix.documents.readers import Unreadable
 from quantix.office.models import ENGINEER
@@ -50,6 +50,7 @@ class LayerOut(BaseModel):
     types: dict[str, int]
     prints: bool
     meaning: str | None
+    colour: str | None = None  # a PDF pen's colour, "#RRGGBB"
 
 
 class BlockOut(BaseModel):
@@ -96,12 +97,26 @@ class UnitsIn(BaseModel):
 
 class DrawingMeasurementIn(BaseModel):
     document_id: str
+    page: int = 1  # a CAD drawing's model space, or the page of a PDF drawn in lines
     kind: Literal["length", "area", "count", "volume"]
     label: str
     unit: str
     choice: Choice
     multiplier: Decimal | None = None
     boq_item: str | None = None
+
+
+class RegionIn(BaseModel):
+    stamp: str
+    point: list[float]  # [x, y] in drawing units
+    hidden: list[str] = []  # layers the engineer hid: their lines don't close the region
+    within: list[float] | None = None  # [left, bottom, right, top]: only the lines in this part of the page
+
+
+class RegionOut(BaseModel):
+    ring: list[list[float]]  # drawing units
+    area_m2: float | None
+    perimeter_m: float | None
 
 
 class ProblemOut(BaseModel):
@@ -172,13 +187,14 @@ def stamp(d: cad.Drawing) -> str:
     return f"{name[:16]}{name[64:]}-{cad.FORMAT}"
 
 
-def _drawing(session: Session, home, document_id: str) -> tuple[Document, cad.Drawing]:
+def _drawing(session: Session, home, document_id: str, page: int = 1) -> tuple[Document, cad.Drawing]:
+    """A CAD drawing, or the lines of a PDF page."""
     document = session.get(Document, document_id)
     if document is None or tenders.get_tender(session, document.tender_id) is None:
         raise HTTPException(status_code=404, detail="Document not found.")
     try:
-        document = drawings.drawing_document(session, document.tender_id, document_id)
-        return document, drawings.open_drawing(home, document)
+        document = drawings.drawing_page(session, document.tender_id, document_id, page)
+        return document, drawings.open_page(home, document, page)
     except (ValueError, Unreadable) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -203,13 +219,15 @@ def _units(session: Session, document_id: str) -> UnitsOut | None:
 
 @router.get("/documents/{document_id}/drawing")
 def get_drawing(document_id: str, session: DB, home: Home, page: int = 1) -> DrawingOut:
-    """What a drawing holds: its pages, units, what couldn't be read, and one page's layers and blocks."""
-    document, d = _drawing(session, home, document_id)
+    """What a drawing holds: its pages, units, what couldn't be read, and one page's layers and blocks. A PDF page
+    drawn in lines is a drawing of one page, whose layers are its pens (or the PDF's own layers)."""
+    document, d = _drawing(session, home, document_id, page)
     try:
         d.space(page)
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     known = drawings.meanings(session, document.tender_id)
+    cad_drawing = document.kind == "cad"
     return DrawingOut(
         document_id=document.id,
         name=document.name,
@@ -225,8 +243,8 @@ def get_drawing(document_id: str, session: DB, home: Home, page: int = 1) -> Dra
             for s in d.spaces
         ],
         header_units=d.units[0] if d.units else None,
-        units=_units(session, document.id),
-        evidence=drawings.units_evidence(d),
+        units=_units(session, document.id) if cad_drawing else None,
+        evidence=drawings.units_evidence(d) if cad_drawing else [],
         not_read=d.info["read"]["not_read"],
         layers=[
             LayerOut(
@@ -235,6 +253,7 @@ def get_drawing(document_id: str, session: DB, home: Home, page: int = 1) -> Dra
                 types=dict(f.types),
                 prints=not (f.off or f.frozen),
                 meaning=drawings.meaning_of(known.layers, f.name),
+                colour=d.layers.get(f.name, {}).get("colour"),
             )
             for f in drawings.layer_facts(d, page)
         ],
@@ -249,7 +268,7 @@ def get_drawing(document_id: str, session: DB, home: Home, page: int = 1) -> Dra
 @router.get("/documents/{document_id}/pages/{number}/screen", response_class=Response)
 def screen_copy(document_id: str, number: int, session: DB, home: Home) -> Response:
     """A page of a drawing for the Takeoff screen to draw: its segments, objects and texts, packed."""
-    document, d = _drawing(session, home, document_id)
+    document, d = _drawing(session, home, document_id, number)
     try:
         d.space(number)
     except ValueError as error:
@@ -274,10 +293,10 @@ def _chosen(session: Session, home, document: Document, d: cad.Drawing, page: in
 @router.post("/documents/{document_id}/pages/{number}/choose")
 def choose(document_id: str, number: int, body: Choice, session: DB, home: Home) -> Chosen:
     """What Quantix measures of the objects chosen: how many, their length and closed area."""
-    document, d = _drawing(session, home, document_id)
+    document, d = _drawing(session, home, document_id, number)
     found = _chosen(session, home, document, d, number, body)
     totals = d.totals(found)
-    metres = drawings.metres_per_unit(session, document.id)
+    metres = drawings.metres_per_unit(session, document.id, number)
     on_screen = cad.objects_on_screen(d, number)
     return Chosen(
         objects=[int(n) for n in np.searchsorted(on_screen, found)],
@@ -292,12 +311,42 @@ def choose(document_id: str, number: int, body: Choice, session: DB, home: Home)
 def screen_numbers(home, document: Document, keys: list[str], page: int = 1) -> list[int]:
     """The screen numbers of objects named by key, to show a measurement's objects."""
     try:
-        d = drawings.open_drawing(home, document)
+        d = drawings.open_page(home, document, page)
     except (ValueError, Unreadable, OSError):
         return []
     on_screen = cad.objects_on_screen(d, page)
     wanted = sorted(d.key_index[k] for k in keys if k in d.key_index)
     return [int(n) for n in np.searchsorted(on_screen, wanted) if n < len(on_screen)]
+
+
+@router.post("/documents/{document_id}/pages/{number}/region")
+def region(document_id: str, number: int, body: RegionIn, session: DB, home: Home) -> RegionOut:
+    """The region around a point that the page's lines close off: what the engineer clicked inside, found with
+    opencadkernel from the lines themselves, so an area needn't be drawn as one closed outline to be measured."""
+    document, d = _drawing(session, home, document_id, number)
+    if body.stamp != stamp(d):
+        raise HTTPException(status_code=409, detail="The drawing was read again: reload it and click again.")
+    if len(body.point) != 2 or (body.within is not None and len(body.within) != 4):
+        raise HTTPException(status_code=400, detail="Give the point as [x, y] and the part of the page as 4 numbers.")
+    metres = drawings.metres_per_unit(session, document.id, number)
+    space = d.space(number)
+    if document.kind == "pdf":
+        tolerance = vectors.JOIN
+    elif metres:
+        tolerance = 0.001 / metres  # a millimetre
+    else:
+        tolerance = max(space.width or 1.0, space.height or 1.0) * 1e-7
+    within = tuple(body.within) if body.within else None
+    try:
+        ring = drawings.enclosure(d, number, (body.point[0], body.point[1]), set(body.hidden), within, tolerance)
+    except (ValueError, OSError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    area, perimeter = cad.ring_area(ring), cad.ring_length(ring)
+    return RegionOut(
+        ring=[[float(x), float(y)] for x, y in ring],
+        area_m2=round(area * metres * metres, 3) if metres else None,
+        perimeter_m=round(perimeter * metres, 3) if metres else None,
+    )
 
 
 @router.get("/documents/{document_id}/rooms")
@@ -341,8 +390,8 @@ def set_units(tender_id: str, body: UnitsIn, session: DB, home: Home) -> UnitsOu
 def add_drawing_measurement(tender_id: str, body: DrawingMeasurementIn, session: DB, home: Home) -> dict[str, Any]:
     """The engineer measures objects they chose on the Takeoff screen, or by a rule."""
     _tender(session, tender_id)
-    document, d = _drawing(session, home, body.document_id)
-    found = _chosen(session, home, document, d, 1, body.choice)
+    document, d = _drawing(session, home, body.document_id, body.page)
+    found = _chosen(session, home, document, d, body.page, body.choice)
     rule = body.choice.rule if body.choice.rule and not body.choice.rule.empty() else None
     if rule is None:
         if not len(found):
@@ -355,7 +404,7 @@ def add_drawing_measurement(tender_id: str, body: DrawingMeasurementIn, session:
             tender_id,
             ENGINEER,
             body.document_id,
-            1,
+            body.page,
             body.kind,
             body.label,
             rule,

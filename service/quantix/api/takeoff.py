@@ -43,6 +43,7 @@ class Sheet(BaseModel):
     scale: ScaleOut | None
     kind: str = "pdf"  # pdf | cad: a CAD drawing's page is measured by its objects, in its units
     units: str | None = None  # a CAD drawing's units, once set
+    lines: bool = False  # a PDF page drawn in lines: measured by its objects too, with its scale
 
 
 class MeasurementOut(BaseModel):
@@ -135,7 +136,7 @@ def _measurement(session: Session, m: Measurement) -> MeasurementOut:
     drawn = {}
     if m.entities is not None:
         document = session.get(Document, m.document_id)
-        objects = drawing_api.screen_numbers(library.home_of(session), document, m.entities)
+        objects = drawing_api.screen_numbers(library.home_of(session), document, m.entities, m.page)
         drawn = {"rule": m.rule, "object_count": len(m.entities), "objects": objects}
     return MeasurementOut(
         **drawn,
@@ -182,6 +183,7 @@ def _sheet(session: Session, document: Document, number: int) -> Sheet:
         scale=_scale(scale),
         kind=document.kind,
         units=units,
+        lines=drawings.drawn_in_lines(library.home_of(session), document, number),
     )
 
 

@@ -196,7 +196,7 @@ def _measurement(session: Session, home: Path, m: Measurement, read_drawing: boo
         twice, alike = [], []
         for other in others:
             theirs = takeoff.quantity(session, other)
-            same_sheet = other.document_id == m.document_id and other.page == m.page
+            same_sheet = other.document_id == m.document_id and other.page == m.page and m.points and other.points
             if same_sheet and _shared(_box(m.points), _box(other.points)) >= OVERLAP:
                 twice.append(other)
             elif mine and theirs and abs(mine - theirs) <= max(mine, theirs) * Decimal("0.05"):
@@ -221,8 +221,8 @@ def _measurement(session: Session, home: Path, m: Measurement, read_drawing: boo
                     where + [r for o in alike for r in _page_ref(session, o.document_id, o.page) if r not in where],
                 )
             )
-    if m.kind != "count" and read_drawing:
-        document = session.get(Document, m.document_id)
+    document = session.get(Document, m.document_id)
+    if m.kind != "count" and read_drawing and document.kind == "pdf":
         vertices = readers.vector_points(library.stored_file(home, document), m.page)
         if vertices:
             exact = set(vertices)  # snapping puts a point exactly on a corner or line end
@@ -243,13 +243,13 @@ def _measurement(session: Session, home: Path, m: Measurement, read_drawing: boo
 
 
 def _drawing_measurement(session: Session, home: Path, m: Measurement) -> list[Finding]:
-    """A measurement of a CAD drawing's objects: they must all still be in the drawing, none may be measured twice
-    for the same BOQ line, and none should sit on a layer that doesn't print."""
+    """A measurement of a drawing's objects: they must all still be in the drawing, none may be measured twice for
+    the same BOQ line, and none should sit on a layer that doesn't print."""
     found: list[Finding] = []
     where = _page_ref(session, m.document_id, m.page)
     document = session.get(Document, m.document_id)
     try:
-        d = drawings.open_drawing(home, document)
+        d = drawings.open_page(home, document, m.page)
     except (ValueError, OSError):
         return [Finding(f"drawing-unread:{m.id}", BLOCKER, f"{document.name} can't be read now.", where)]
     keys = m.entities or []

@@ -710,7 +710,8 @@ export interface paths {
         };
         /**
          * Get Drawing
-         * @description What a drawing holds: its pages, units, what couldn't be read, and one page's layers and blocks.
+         * @description What a drawing holds: its pages, units, what couldn't be read, and one page's layers and blocks. A PDF page
+         *     drawn in lines is a drawing of one page, whose layers are its pens (or the PDF's own layers).
          */
         get: operations["get_drawing_documents__document_id__drawing_get"];
         put?: never;
@@ -755,6 +756,27 @@ export interface paths {
          * @description What Quantix measures of the objects chosen: how many, their length and closed area.
          */
         post: operations["choose_documents__document_id__pages__number__choose_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{document_id}/pages/{number}/region": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Region
+         * @description The region around a point that the page's lines close off: what the engineer clicked inside, found with
+         *     opencadkernel from the lines themselves, so an area needn't be drawn as one closed outline to be measured.
+         */
+        post: operations["region_documents__document_id__pages__number__region_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1796,6 +1818,11 @@ export interface components {
             /** Document Id */
             document_id: string;
             /**
+             * Page
+             * @default 1
+             */
+            page: number;
+            /**
              * Kind
              * @enum {string}
              */
@@ -2056,6 +2083,8 @@ export interface components {
             prints: boolean;
             /** Meaning */
             meaning: string | null;
+            /** Colour */
+            colour?: string | null;
         };
         /** LessonDecision */
         LessonDecision: {
@@ -2568,6 +2597,29 @@ export interface components {
              */
             note: string;
         };
+        /** RegionIn */
+        RegionIn: {
+            /** Stamp */
+            stamp: string;
+            /** Point */
+            point: number[];
+            /**
+             * Hidden
+             * @default []
+             */
+            hidden: string[];
+            /** Within */
+            within?: number[] | null;
+        };
+        /** RegionOut */
+        RegionOut: {
+            /** Ring */
+            ring: number[][];
+            /** Area M2 */
+            area_m2: number | null;
+            /** Perimeter M */
+            perimeter_m: number | null;
+        };
         /** ReopenIn */
         ReopenIn: {
             /** Reason */
@@ -2814,6 +2866,11 @@ export interface components {
             kind: string;
             /** Units */
             units?: string | null;
+            /**
+             * Lines
+             * @default false
+             */
+            lines: boolean;
         };
         /** SheetTab */
         SheetTab: {
@@ -4978,6 +5035,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Chosen"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    region_documents__document_id__pages__number__region_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                document_id: string;
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegionOut"];
                 };
             };
             /** @description Validation Error */

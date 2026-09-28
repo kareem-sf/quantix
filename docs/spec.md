@@ -89,7 +89,11 @@ choices · Markups and final price · Release.
    can edit or redo it, or measure by hand. On CAD drawings there is no scale to calibrate: staff propose the
    drawing's units from what it states, and take off by rule from the drawing's own objects (count a block, the
    length or area of what is on a layer, a room's area and perimeter, the volume of 3D solids or their weight by a
-   density); the engineer can click objects and measure them. Staff propose a layer map (what each layer and block is), which the engineer approves; Quantix finds the
+   density); the engineer can click objects and measure them. A PDF printed from CAD keeps its lines, and is
+   measured by them the same way, with its sheet's scale: its pens (colour and line weight) are its layers, and
+   strokes that meet are joined back into lines and closed outlines. On a drawing's own lines the engineer's
+   points snap to ends, middles and crossings, and a click inside an area the lines close off measures it.
+   Staff propose a layer map (what each layer and block is), which the engineer approves; Quantix finds the
    rooms from it. Quantix compares the takeoff with the BOQ: matches, differs, missing from the BOQ, or not on the
    drawings.
    Quantix's own checks find what to look into: lines drawn twice, written dimensions that disagree with the

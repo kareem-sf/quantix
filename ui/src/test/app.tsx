@@ -338,6 +338,10 @@ export function fakeService(initial: Partial<FakeState> = {}) {
       state.measured.push(body);
       return json({ id: "m9", quantity: "20.000" }, 201);
     }
+    if (path.match(/^\/documents\/\w+\/pages\/\d+\/region$/)) {
+      const [x, y] = body.point; // the square of 10 drawing units around the click
+      return json({ ring: [[x - 5, y - 5], [x + 5, y - 5], [x + 5, y + 5], [x - 5, y + 5]], area_m2: 100, perimeter_m: 40 });
+    }
     if (path.match(/^\/tenders\/\w+\/queries$/)) return json(state.queries);
     if (path.match(/^\/tenders\/\w+\/layer-maps$/)) return json(state.layerMaps);
     if (path.match(/^\/tenders\/\w+\/checks$/)) return json(state.checks);

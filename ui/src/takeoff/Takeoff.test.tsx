@@ -23,7 +23,7 @@ const drawing: TenderDocument = {
   opened: 0,
   cited: 0,
 };
-const sheet: Sheet = { document_id: "d1", name: "A-101.pdf", page: 1, width: 612, height: 792, scale: null, kind: "pdf", units: null };
+const sheet: Sheet = { document_id: "d1", name: "A-101.pdf", page: 1, width: 612, height: 792, scale: null, kind: "pdf", units: null, lines: false };
 const scaled: Sheet = {
   ...sheet,
   scale: {
@@ -181,7 +181,7 @@ describe("Takeoff", () => {
 });
 
 const cadDocument: TenderDocument = { ...drawing, id: "d3", path: "Drawings/A-201.dwg", name: "A-201.dwg", kind: "cad" };
-const cadSheet: Sheet = { document_id: "d3", name: "A-201.dwg", page: 1, width: 20, height: 20, scale: null, kind: "cad", units: null };
+const cadSheet: Sheet = { document_id: "d3", name: "A-201.dwg", page: 1, width: 20, height: 20, scale: null, kind: "cad", units: null, lines: false };
 
 describe("Takeoff from a CAD drawing", () => {
   it("sets the drawing's units from what it says", async () => {
@@ -216,13 +216,16 @@ describe("Takeoff from a CAD drawing", () => {
     expect(await screen.findByText("1 object chosen")).toBeInTheDocument();
     expect(await screen.findByText(/1 to count · 20 m long/)).toBeInTheDocument(); // Quantix's figures
 
-    await userEvent.click(screen.getByRole("button", { name: "Length" }));
+    expect(screen.getByText("line on A-WALL")).toBeInTheDocument(); // what the one object is
+    const panel = screen.getByRole("complementary", { name: "Measurements" });
+    await userEvent.click(within(panel).getByRole("button", { name: "Length" }));
     await userEvent.type(screen.getByLabelText("What is it"), "Wall");
     await userEvent.selectOptions(screen.getByLabelText("BOQ item"), "5.1 · External wall");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(service.state.measured[0]).toEqual({
         document_id: "d3",
+        page: 1,
         kind: "length",
         label: "Wall",
         unit: "m",
@@ -260,5 +263,118 @@ describe("Takeoff from a CAD drawing", () => {
     await waitFor(() =>
       expect(service.state.measured[0]).toMatchObject({ kind: "volume", unit: "kg", multiplier: "7850" }),
     );
+  });
+});
+
+const units = { ...scaled.scale!, id: "u1", metres_per_point: 0.001, ratio: 0, line: [], dimension: "millimetres", status: "approved" };
+
+/** The screen copy's page is 20 units square about its centre; jsdom's drawing is 800 × 600 pixels, so it is drawn
+ * 28.2 pixels to the unit about the point 400, 300. */
+const at = (x: number, y: number) => ({ clientX: 400 + x * 28.2, clientY: 300 - y * 28.2 });
+
+describe("Measuring on a drawing's own lines", () => {
+  it("places points on a CAD drawing, snapped onto its lines' ends", async () => {
+    const service = fakeService({
+      tenders: [tender],
+      documents: [cadDocument],
+      sheets: [{ ...cadSheet, scale: units }],
+      drawing: drawingInfo,
+      screen: screenCopy(),
+    });
+    openApp("/tenders/t1/takeoff?doc=d3&page=1");
+    const view = await screen.findByRole("img", { name: "Model: 3 objects" });
+    expect(screen.queryByRole("button", { name: "Scale" })).not.toBeInTheDocument(); // a CAD drawing has units
+
+    await userEvent.click(screen.getByRole("button", { name: "Length" }));
+    for (const [x, y] of [
+      [-9.9, 0.1], // near the wall's west end
+      [9.85, -0.1], // near its east end
+    ]) {
+      fireEvent.pointerDown(view, at(x, y));
+      fireEvent.pointerUp(view, at(x, y));
+    }
+    expect(screen.getByText("0.02 m so far")).toBeInTheDocument(); // 20 of the drawing's millimetres, as placed
+    await userEvent.click(screen.getByRole("button", { name: "Finish" }));
+    await userEvent.type(screen.getByLabelText("What is it"), "Kerb");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(service.state.measurements[0]).toMatchObject({
+        document_id: "d3",
+        page: 1,
+        kind: "length",
+        points: [
+          [4990, 4000], // snapped onto the ends, in the drawing's own units
+          [5010, 4000],
+        ],
+      }),
+    );
+  });
+
+  it("takes the area the lines close off around a click", async () => {
+    const service = fakeService({
+      tenders: [tender],
+      documents: [cadDocument],
+      sheets: [{ ...cadSheet, scale: units }],
+      drawing: drawingInfo,
+      screen: screenCopy(),
+    });
+    openApp("/tenders/t1/takeoff?doc=d3&page=1");
+    const view = await screen.findByRole("img", { name: "Model: 3 objects" });
+    await userEvent.click(screen.getByRole("button", { name: "Enclosed" }));
+    fireEvent.pointerDown(view, at(0, 3));
+    fireEvent.pointerUp(view, at(0, 3));
+    expect(await screen.findByText("New area")).toBeInTheDocument();
+    expect(screen.getByText("The lines close off 100.00 m², 40.00 m round.")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("What is it"), "Yard");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(service.state.measurements[0]).toMatchObject({
+        kind: "area",
+        points: [
+          [4995, 3998],
+          [5005, 3998],
+          [5005, 4008],
+          [4995, 4008],
+        ],
+      }),
+    );
+  });
+
+  it("draws a PDF printed from CAD from its lines, and chooses by box, by likeness and by words", async () => {
+    const pdfDrawing = { ...drawing, id: "d4", name: "Site.pdf", path: "Drawings/Site.pdf" };
+    const lines: Sheet = { ...scaled, document_id: "d4", name: "Site.pdf", width: 20, height: 20, lines: true };
+    const service = fakeService({
+      tenders: [tender],
+      documents: [pdfDrawing],
+      sheets: [lines],
+      drawing: drawingInfo,
+      screen: screenCopy(),
+      items: [wall],
+    });
+    openApp("/tenders/t1/takeoff?doc=d4&page=1");
+    const view = await screen.findByRole("img", { name: "Model: 3 objects" });
+    expect(screen.getByText(/Scale checked on the 40.00 dimension/)).toBeInTheDocument();
+
+    // a box dragged left to right with shift takes what lies wholly inside it: the wall, not the door above it
+    fireEvent.pointerDown(view, { ...at(-11, -1), shiftKey: true });
+    fireEvent.pointerMove(view, { ...at(11, 1), shiftKey: true });
+    fireEvent.pointerUp(view, { ...at(11, 1), shiftKey: true });
+    expect(await screen.findByText("1 object chosen")).toBeInTheDocument();
+    expect(screen.getByText("line on A-WALL")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Clear the choice" }));
+
+    await userEvent.type(screen.getByLabelText("Find words on the drawing"), "kitchen");
+    expect(screen.getByText("1 of 1")).toBeInTheDocument();
+    await userEvent.clear(screen.getByLabelText("Find words on the drawing"));
+    await userEvent.click(screen.getByRole("button", { name: "Fit" })); // finding the word zoomed to it
+
+    fireEvent.pointerDown(view, at(0, 0));
+    fireEvent.pointerUp(view, at(0, 0));
+    await userEvent.click(within(screen.getByRole("complementary", { name: "Measurements" })).getByRole("button", { name: "Length" }));
+    await userEvent.type(screen.getByLabelText("What is it"), "Wall");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(service.state.measured[0]).toMatchObject({ document_id: "d4", page: 1, kind: "length" }));
+    const asked = service.fetch.mock.calls.map(([input]) => (input instanceof Request ? input.url : String(input)));
+    expect(asked.some((url) => url.includes("/vertices"))).toBe(false); // it snaps to the lines themselves
   });
 });

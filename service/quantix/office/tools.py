@@ -860,12 +860,20 @@ LAYERS_AT_ONCE = 60  # drawing_overview rows at a time
 UNIT_WORDS = {"mm": "millimetres", "cm": "centimetres", "m": "metres", "in": "inches", "ft": "feet"}
 
 
-def _drawing(ctx: RunContext[Turn], session: Session, document_id: str) -> tuple[Document, cad.Drawing]:
-    document = drawings.drawing_document(session, ctx.deps.tender_id, document_id)
-    return document, drawings.open_drawing(ctx.deps.home, document)
+def _drawing(ctx: RunContext[Turn], session: Session, document_id: str, page: int = 1) -> tuple[Document, cad.Drawing]:
+    """A CAD drawing, or the lines of a PDF page drawn in them."""
+    document = drawings.drawing_page(session, ctx.deps.tender_id, document_id, page)
+    return document, drawings.open_page(ctx.deps.home, document, page)
 
 
-def _units_line(session: Session, document: Document, d: cad.Drawing) -> tuple[str, float | None]:
+def _units_line(session: Session, document: Document, d: cad.Drawing, page: int = 1) -> tuple[str, float | None]:
+    if document.kind == "pdf":
+        record = drawings.units_record(session, document.id, page)
+        if record is None:
+            return "Scale: not set yet (set it with set_scale on a dimension printed on the sheet).", None
+        state = "approved" if record.status in APPROVED else "waiting for approval"
+        ratio = takeoff.drawing_ratio(record.metres_per_point)
+        return f"Scale: about 1:{ratio:,} ({state}); lengths are in points on the sheet.", record.metres_per_point
     record = drawings.units_record(session, document.id)
     if record is not None:
         state = "approved" if record.status in APPROVED else "waiting for approval"
@@ -894,17 +902,18 @@ def _amounts(totals: dict[str, float], metres: float | None) -> str:
 
 
 def drawing_overview(ctx: RunContext[Turn], document_id: str, page: int = 1, start: int = 1) -> str:
-    """A CAD drawing (DWG or DXF) at a glance: its units and what in it says so, its pages (page 1 is model space,
-    the others its layouts), what Quantix couldn't read, every layer with what it holds (objects by type, total length
-    in drawing units, closed outlines, blocks placed on it, hatch patterns, sample words, whether it prints) 60 at a
-    time from start, and every block with its copies. With the layer map, each one's meaning. Work out what a layer
-    is from what it holds, not from its name alone."""
+    """A CAD drawing (DWG or DXF), or a PDF page drawn in lines, at a glance: its units (a PDF page's scale) and
+    what in it says so, its pages (page 1 is model space, the others its layouts), what Quantix couldn't read, every
+    layer with what it holds (objects by type, total length in drawing units, closed outlines, blocks placed on it,
+    hatch patterns, sample words, whether it prints) 60 at a time from start, and every block with its copies. A PDF's
+    layers are its pens (colour and line weight) unless it keeps the drawing's own. With the layer map, each one's
+    meaning. Work out what a layer is from what it holds, not from its name alone."""
     with _working(ctx) as (session, me):
-        document, d = _drawing(ctx, session, document_id)
+        document, d = _drawing(ctx, session, document_id, page)
         space = d.space(page)
         me.now = f"Looking over {document.name}"
         _opened(ctx, session, "page", f"{document_id}:{page}")
-        units, metres = _units_line(session, document, d)
+        units, metres = _units_line(session, document, d, page)
         known = drawings.meanings(session, ctx.deps.tender_id)
         facts = drawings.layer_facts(d, page)
         counts = drawings.block_counts(d, page)
@@ -955,16 +964,17 @@ def drawing_overview(ctx: RunContext[Turn], document_id: str, page: int = 1, sta
 def query_drawing(
     ctx: RunContext[Turn], document_id: str, rule: cad.Rule, page: int = 1, group_by: str = "layer", show: int = 20
 ) -> str:
-    """Find objects on a CAD drawing by a rule and see what Quantix measures of them: how many (each copy of a block
-    counted), their total length and closed area, in drawing units and in metres once the units are set, grouped by
-    layer, block, type, room or a block attribute's tag ("attribute:TYPE"), with the first objects and their keys.
-    types ['Room'] lists the rooms Quantix finds from the layer map. Try a rule here before you measure with it."""
+    """Find objects on a CAD drawing, or a PDF page drawn in lines, by a rule and see what Quantix measures of them:
+    how many (each copy of a block counted), their total length and closed area, in drawing units and in metres once
+    the units (a PDF page's scale) are set, grouped by layer, block, type, room or a block attribute's tag
+    ("attribute:TYPE"), with the first objects and their keys. types ['Room'] lists the rooms Quantix finds from a
+    CAD drawing's layer map. Try a rule here before you measure with it."""
     with _working(ctx) as (session, me):
-        document, d = _drawing(ctx, session, document_id)
+        document, d = _drawing(ctx, session, document_id, page)
         me.now = f"Looking through {document.name}"
         _opened(ctx, session, "page", f"{document_id}:{page}")
         found, found_rooms = drawings.choose(session, ctx.deps.home, document, page, rule)
-        metres = drawings.metres_per_unit(session, document.id)
+        metres = drawings.metres_per_unit(session, document.id, page)
     if [t.lower() for t in rule.types] == ["room"]:
         if not found_rooms:
             return (
@@ -1027,11 +1037,12 @@ def view_drawing(
     region: list[float] | None = None,
     rule: cad.Rule | None = None,
 ) -> ToolReturn:
-    """Look at a CAD drawing as a picture: a whole page, or a region of it as [left, bottom, right, top] in drawing
-    units. With a rule, the objects it takes are drawn in orange and numbered, and the reply gives each number's
-    key. A picture is for checking what things are; count and measure with query_drawing, never by eye."""
+    """Look at a CAD drawing, or a PDF page drawn in lines, as a picture: a whole page, or a region of it as [left,
+    bottom, right, top] in drawing units. With a rule, the objects it takes are drawn in orange and numbered, and the
+    reply gives each number's key. A picture is for checking what things are; count and measure with query_drawing,
+    never by eye."""
     with _working(ctx) as (session, me):
-        document, d = _drawing(ctx, session, document_id)
+        document, d = _drawing(ctx, session, document_id, page)
         me.now = f"Looking at {document.name}"
         _opened(ctx, session, "page", f"{document_id}:{page}")
         marked: dict[int, str] = {}
@@ -1060,7 +1071,7 @@ def find_problems(ctx: RunContext[Turn], document_id: str | None = None) -> str:
     with _working(ctx, "Checking the drawings and the BOQ") as (session, _):
         _opened(ctx, session, "summary", "find_problems")
         if document_id:
-            document, _d = _drawing(ctx, session, document_id)
+            document = drawings.drawing_document(session, ctx.deps.tender_id, document_id)
             _opened(ctx, session, "page", f"{document_id}:1")
             found = drawings.drawing_problems(session, ctx.deps.home, document)
             where = document.name
@@ -1098,23 +1109,25 @@ def measure_drawing(
     unit: str,
     multiplier_m: float | None = None,
     boq_item: str | None = None,
+    page: int = 1,
 ) -> str:
-    """Take off from a CAD drawing's own objects in model space, by a rule: kind count (block copies or objects),
-    length (lines, polylines, arcs; a room's perimeter), area (closed outlines, hatches and regions; a room's area)
-    or volume (3D solids). unit: count nr; length m, or m2 with a height as multiplier_m; area m2, or m3 with a
-    thickness; volume m3, or kg or t with the material's density per m3 (steel 7850 kg). Link the BOQ line it
-    belongs to. Quantix takes the objects the rule finds, lists them for the Tender Manager and computes the quantity
-    from their geometry and the drawing's units. A rule that finds nothing, linked to a BOQ line, records that the
-    line's work isn't on this drawing. Try the rule with query_drawing first."""
+    """Take off from a drawing's own objects by a rule: a CAD drawing's in model space (page 1), or a PDF page's
+    lines (its page). kind count (block copies or objects), length (lines, polylines, arcs; a room's perimeter), area
+    (closed outlines, hatches and regions; a room's area) or volume (a CAD drawing's 3D solids). unit: count nr;
+    length m, or m2 with a height as multiplier_m; area m2, or m3 with a thickness; volume m3, or kg or t with the
+    material's density per m3 (steel 7850 kg). Link the BOQ line it belongs to. Quantix takes the objects the rule
+    finds, lists them for the Tender Manager and computes the quantity from their geometry and the drawing's units or
+    the PDF page's scale. A rule that finds nothing, linked to a BOQ line, records that the line's work isn't on this
+    drawing. Try the rule with query_drawing first."""
     with _working(ctx, f"Measuring {label}") as (session, me):
-        _read_first(ctx, session, {(document_id, 1)})
+        _read_first(ctx, session, {(document_id, page)})
         m = takeoff.measure_drawing(
             session,
             ctx.deps.home,
             ctx.deps.tender_id,
             me.id,
             document_id,
-            1,
+            page,
             kind,
             label,
             rule,
@@ -1125,8 +1138,11 @@ def measure_drawing(
         q = takeoff.quantity(session, m)
         item = session.get(BoqItem, m.boq_item_id) if m.boq_item_id else None
         name = session.get(Document, document_id).name
+        on_pdf = session.get(Document, document_id).kind == "pdf"
     if not m.entities:
         return f"Recorded that {label} isn't on {name}: nothing there matches the rule."
+    if q is None and on_pdf:
+        return f"Took {len(m.entities)} objects, but page {page} of {name} has no scale yet: set it with set_scale."
     if q is None:
         return f"Took {len(m.entities)} objects, but {name} has no units yet: set them with set_drawing_units."
     report = f"Measured {label}: {len(m.entities)} objects, {q} {unit} (Quantix's figure)."

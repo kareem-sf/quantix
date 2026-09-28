@@ -13,7 +13,9 @@
 //! `{"type": "hatch", "loops": [[[x, y], …], …], "pattern"?}`, `{"type": "dimension", "from", "to", "text"?}` and
 //! `{"type": "viewport", "centre", "size": [w, h], "view_centre", "scale"}`, and the 3D solids
 //! `{"type": "box", "at": [x, y, z], "size": [l, w, h]}` (centred on `at`) and
-//! `{"type": "cylinder", "at", "radius", "height"}` (standing on `at`), each with an optional `"layer"`.
+//! `{"type": "cylinder", "at", "radius", "height"}` (standing on `at`), each with an optional `"layer"` and an
+//! optional `"colour"` (a colour index: 0 is by block, 256 by layer). `"layer_colours": {name: index}` colours the
+//! layers.
 
 use std::fs;
 
@@ -25,7 +27,7 @@ use opencadcodec::entities::{
 };
 use opencadcodec::objects::{Dictionary, ObjectType, SpatialFilter};
 use opencadcodec::tables::{BlockRecord, Layer};
-use opencadcodec::types::{DxfVersion, Handle, Matrix4, Vector2, Vector3};
+use opencadcodec::types::{Color, DxfVersion, Handle, Matrix4, Vector2, Vector3};
 use opencadcodec::{CadDocument, DwgWriter, DxfWriter};
 use serde_json::Value;
 
@@ -46,6 +48,9 @@ pub fn run(spec: &str, out: &str) -> Result<(), Failure> {
         if doc.layers.get(name).is_none() {
             let mut layer = Layer::new(name);
             layer.handle = doc.allocate_handle();
+            if let Some(index) = spec["layer_colours"][name].as_i64() {
+                layer.color = Color::from_index(index as i16);
+            }
             doc.layers.add(layer).map_err(Failure::Other)?;
         }
     }
@@ -326,5 +331,8 @@ fn build(item: &Value) -> Result<EntityType, Failure> {
         other => return Err(Failure::Other(format!("Unknown sample entity {other:?}"))),
     };
     entity.common_mut().layer = layer;
+    if let Some(index) = item["colour"].as_i64() {
+        entity.common_mut().color = Color::from_index(index as i16);
+    }
     Ok(entity)
 }

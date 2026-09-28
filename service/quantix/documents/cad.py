@@ -26,9 +26,10 @@ from pydantic import BaseModel, Field
 
 from quantix.documents.readers import PageText, Unreadable
 
-FORMAT = 3  # the folder format this service reads; qx-dwg writes the same number
+FORMAT = 4  # the folder format this service reads; qx-dwg writes the same number
 TIMEOUT = 600  # seconds for one drawing
 CLOSED, ANNOTATION, IN_BLOCK, APPROXIMATE, DERIVED = 1, 2, 4, 8, 16
+INVISIBLE = 64  # a PDF's words written invisibly over the strokes that print them (see vectors)
 # Header units ($INSUNITS) Quantix names: the number, what it is called and metres in one unit
 UNITS = {
     1: ("inches", 0.0254),
@@ -134,6 +135,8 @@ class Space:
 
     @property
     def label(self) -> str:
+        if self.kind == "sheet":  # a PDF page's drawing
+            return f"page {self.number}"
         return "model space" if self.kind == "model" else f"layout “{self.name}”"
 
 
@@ -243,6 +246,8 @@ class Drawing:
         self.index = np.fromfile(out / "index.bin", dtype="<u4").reshape(-1, 8)
         self.num = np.fromfile(out / "num.bin", dtype="<f8").reshape(-1, 7)
         self.coords = np.fromfile(out / "coords.bin", dtype="<f8").reshape(-1, 2)
+        # each object's colour as 0xRRGGBB, where the reader gives them
+        self.colours = np.fromfile(out / "colours.bin", dtype="<u4") if (out / "colours.bin").exists() else None
         self.texts = {row[0]: Text(*row[1:8]) for row in objects["texts"]}
         self.placed = {
             row[0]: Placed(row[1], row[2], row[3], row[4], row[5], (row[6], row[7]), row[8], row[9])
@@ -550,20 +555,24 @@ def render(
     if layers is not None:
         keep = np.array([n in layers for n in d.layer_names])
         visible &= keep[d.index[:, 2]]
-    for i in np.flatnonzero(visible):
+    shown = np.flatnonzero(visible)
+    inks = {int(i): int(c) for i, c in zip(shown, screen_colours(d, shown), strict=True)}
+    for i in shown:
         if i in marked:
             continue
         closed = d.flags(i) & CLOSED
+        c = inks[int(i)]
+        ink = ((c >> 16) & 255, (c >> 8) & 255, c & 255)
         for part in d.parts(i):
             if len(part) == 1:
                 x, y = pixel(part)[0]
-                draw.point((x, y), fill=INK)
+                draw.point((x, y), fill=ink)
             elif len(part) > 1:
                 points = pixel(part)
-                draw.line(points + ([points[0]] if closed else []), fill=INK, width=1)
+                draw.line(points + ([points[0]] if closed else []), fill=ink, width=1)
     font_cache: dict[int, ImageFont.ImageFont] = {}
     for i, t in d.texts.items():
-        if not visible[i] or i in marked:
+        if not visible[i] or i in marked or d.flags(i) & INVISIBLE:
             continue
         size = int(t.height * scale)
         if size < 7 or size > 200:
@@ -596,35 +605,72 @@ def render(
 # -- the screen's copy -------------------------------------------------------------------------------------------
 
 
+def screen_colours(d: Drawing, objects: np.ndarray) -> np.ndarray:
+    """Each object's colour as it shows on white paper, 0xRRGGBB: white prints in ink, and pale colours are
+    darkened to read."""
+    if d.colours is None:
+        return np.full(len(objects), (INK[0] << 16) | (INK[1] << 8) | INK[2], dtype="<u4")
+    found = d.colours[objects].astype(np.int64)
+    rgb = np.column_stack([(found >> 16) & 255, (found >> 8) & 255, found & 255]).astype(float)
+    light = rgb @ np.array([0.299, 0.587, 0.114])
+    rgb = np.where((light > 170)[:, None], rgb * (170 / np.maximum(light, 1))[:, None], rgb)
+    rgb[light > 235] = INK
+    rgb = rgb.astype(np.int64)
+    return ((rgb[:, 0] << 16) | (rgb[:, 1] << 8) | rgb[:, 2]).astype("<u4")
+
+
+def segments_of(d: Drawing, objects: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Every straight piece of the objects' chains, object by object, with the number (among `objects`) of the object
+    each belongs to: a closed chain's last point joins its first, and a lone point is a piece of no length."""
+    counts = d.index[objects, 5].astype(np.int64)
+    if not counts.sum():
+        return np.zeros((0, 4)), np.zeros(0, "<u4")
+    own = np.repeat(np.arange(len(objects)), counts)
+    offsets = np.arange(counts.sum()) - np.repeat(np.cumsum(counts) - counts, counts)
+    xy = d.coords[np.repeat(d.index[objects, 4].astype(np.int64), counts) + offsets]
+    gap = np.isnan(xy[:, 0])
+    new_object = np.r_[True, own[1:] != own[:-1]]
+    last_of_object = np.r_[own[1:] != own[:-1], True]
+    pairs = ~new_object[1:] & ~gap[:-1] & ~gap[1:]
+    starts = np.flatnonzero(~gap & (new_object | np.r_[True, gap[:-1]]))  # where each part begins
+    ends = np.flatnonzero(~gap & (last_of_object | np.r_[gap[1:], True]))  # and ends
+    closed = (d.index[objects, 6] & CLOSED) != 0
+    closing = closed[own[starts]] & (ends - starts >= 2)
+    lone = ends == starts
+    first = np.r_[xy[:-1][pairs], xy[ends[closing]], xy[starts[lone]]]
+    second = np.r_[xy[1:][pairs], xy[starts[closing]], xy[starts[lone]]]
+    owner = np.r_[own[:-1][pairs], own[ends[closing]], own[starts[lone]]]
+    order = np.argsort(owner, kind="stable")
+    return np.hstack([first, second])[order], owner[order].astype("<u4")
+
+
 def screen_copy(d: Drawing, page: int, stamp: str) -> bytes:
     """A space for the Takeoff screen to draw: every segment in 32-bit floats about the space's centre, with the
-    object each belongs to, each object's layer, type, flags and extent, and the texts.
+    object each belongs to, each object's layer, type, flags, extent and colour, and the texts (each with whether it
+    is printed: a PDF's invisible words are for finding, as their strokes print them).
 
-    Layout: b"QXD1", a u32 header length, the header JSON (padded to 4 bytes), then segments (f32 × 4 each), the
-    object of each segment (u32), each object's layer, type and flags (u32 × 3) and extent (f32 × 4)."""
+    Layout: b"QXD2", a u32 header length, the header JSON (padded to 4 bytes), then segments (f32 × 4 each), the
+    object of each segment (u32), each object's layer, type and flags (u32 × 3), extent (f32 × 4) and colour
+    (u32, 0xRRGGBB)."""
     space = d.space(page)
     ext = space.extents or (0.0, 0.0, 1.0, 1.0)
     ox, oy = (ext[0] + ext[2]) / 2, (ext[1] + ext[3]) / 2
     objects = np.flatnonzero(d.index[:, 0] == page)
-    segments: list[np.ndarray] = []
-    owners: list[np.ndarray] = []
-    for n, i in enumerate(objects):
-        closed = d.flags(i) & CLOSED
-        for part in d.parts(int(i)):
-            if len(part) == 1:
-                part = np.vstack([part, part])
-            if closed and len(part) > 2:
-                part = np.vstack([part, part[:1]])
-            pairs = np.hstack([part[:-1], part[1:]]) - np.array([ox, oy, ox, oy])
-            segments.append(pairs)
-            owners.append(np.full(len(pairs), n, dtype="<u4"))
-    segs = np.vstack(segments).astype("<f4") if segments else np.zeros((0, 4), "<f4")
-    owner = np.concatenate(owners) if owners else np.zeros(0, "<u4")
+    segs, owner = segments_of(d, objects)
+    segs = (segs - np.array([ox, oy, ox, oy])).astype("<f4")
     meta = d.index[objects][:, [2, 1, 6]].astype("<u4")
     boxes = (d.num[objects, :4] - np.array([ox, oy, ox, oy])).astype("<f4")
     position = {int(i): n for n, i in enumerate(objects)}
     texts = [
-        [position[i], t.text, round(t.x - ox, 3), round(t.y - oy, 3), round(t.height, 3), t.rotation]
+        [
+            position[i],
+            t.text,
+            round(t.x - ox, 3),
+            round(t.y - oy, 3),
+            round(t.height, 3),
+            t.rotation,
+            0 if d.flags(i) & INVISIBLE else 1,
+        ]
         for i, t in d.texts.items()
         if i in position and t.text.strip()
     ]
@@ -646,8 +692,8 @@ def screen_copy(d: Drawing, page: int, stamp: str) -> bytes:
         ensure_ascii=False,
     ).encode("utf-8")
     header += b" " * (-len(header) % 4)
-    parts = [b"QXD1", len(header).to_bytes(4, "little"), header, segs.tobytes(), owner.tobytes()]
-    parts += [meta.tobytes(), boxes.tobytes()]
+    parts = [b"QXD2", len(header).to_bytes(4, "little"), header, segs.tobytes(), owner.tobytes()]
+    parts += [meta.tobytes(), boxes.tobytes(), screen_colours(d, objects).tobytes()]
     return b"".join(parts)
 
 

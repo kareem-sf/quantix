@@ -216,8 +216,9 @@ count from the geometry and scale. Measurements link to BOQ items, and Quantix c
   flags (closed, annotation, inside a block), extent, and exact length and area in drawing units. The folder,
   `tenders/<id>/drawings/<sha256>/` beside the stored file, holds `drawing.json` (units, spaces, layers, blocks,
   xrefs, what couldn't be read), `objects.json` (keys, texts, block references with attributes, dimensions with
-  their written text, tables, hatches, viewports) and three little-endian arrays. A drawing is read once; a newer
-  reader format reads it again. A file the failsafe reader returns empty is unreadable.
+  their written text, tables, hatches, viewports) and four little-endian arrays, the last each object's colour
+  (its own, its layer's, or by block the reference's). A drawing is read once; a newer reader format reads it
+  again. A file the failsafe reader returns empty is unreadable.
 - **Pages.** Each space is a page: model space first, then the layouts. A page's text is the words printed there,
   top to bottom, then tables as `A1=… | B1=…` and dimensions whose text was written by hand, so search, quotes and
   citations work unchanged. The page's width and height are its extent in drawing units.
@@ -263,10 +264,36 @@ count from the geometry and scale. Measurements link to BOQ items, and Quantix c
 - **Office tools** (the `drawings` pack): `drawing_overview`, `query_drawing`, `view_drawing` (the only one that
   needs an AI that reads images) and `find_problems` read; `set_drawing_units`, `measure_drawing`,
   `propose_layer_map` and `raise_query` produce.
-- **Screens.** `GET /documents/{id}/pages/{n}/screen` sends a page packed as `QXD1` (segments in 32-bit floats about
-  the page's centre, each segment's object, each object's layer, type, flags and extent, and the texts). The
-  Takeoff screen draws it with WebGL, with texts and highlights on a canvas over it; clicking picks the nearest
-  object, and `choose` gives Quantix's count, length, area and volume of what is chosen. The Queries screen lists tender
+- **PDFs printed from CAD** (`documents/vectors.py`). A PDF page with 200 strokes or more is a drawing too: its
+  paths are read with PDFium into the same folder format (`tenders/<id>/drawings/<sha256>-p<n>/`, one space
+  numbered as the page, kind `sheet`), so choosing, rules, `choose`, the screen copy and the record checks work
+  unchanged. Strokes of one pen whose ends meet, where no third stroke meets them, are joined into one line, and
+  one that returns to its start is a closed outline with an area; fills are hatches (holes by nesting), curves
+  flattened to 0.01 point and four curves round a centre a circle. Clipping paths cut what they clip (hatch
+  lines to their boundary), and white doesn't print. A pen (colour and line weight) is a layer, unless the PDF
+  keeps optional content groups, whose names are used. CAD prints text as strokes with the words written
+  invisibly over them: strokes inside a word's box become that word's object (flag `INVISIBLE` on the word), so
+  they are drawn and found by the words but never measured. Coordinates are page points from the bottom left;
+  the page's `Scale` is its metres per unit (`drawings.metres_per_unit(document, page)`), so a measurement by
+  objects keeps its page. `drawings.drawing_page` and `open_page` give a CAD drawing or a PDF page alike;
+  layer maps, rooms, units and the drawing checks stay CAD's.
+- **Regions by a click** (`POST /documents/{id}/pages/{n}/region`, `drawings.enclosure`): the smallest region
+  the lines close off around a point, found by `qx-dwg faces`, in a window around the point that doubles until a
+  region lies wholly inside it (so it is exact), up to the part of the page on screen; hidden layers, words and
+  annotation are left out, and lines sticking into the region are trimmed from its outline. It comes back as
+  points, measured like any area.
+- **Points on CAD drawings.** The engineer may measure by points in a CAD drawing's model space, in drawing
+  units; `quantity()` uses the units as the scale. Staff measure CAD drawings by rule only.
+- **Screens.** `GET /documents/{id}/pages/{n}/screen` sends a page packed as `QXD2` (segments in 32-bit floats about
+  the page's centre, each segment's object, each object's layer, type, flags, extent and colour as it shows on
+  white paper, and the texts with whether they print). The Takeoff screen draws a CAD drawing, or a PDF page
+  drawn in lines (`Sheet.lines`), with WebGL in its own colours, with texts and highlights on a canvas over it
+  and a third canvas for what follows the pointer. A grid of the segments (`cad.ts`) finds the object under the
+  pointer and the points to snap to (a line's end or middle, where two lines cross, or onto a line) among a few
+  segments. Clicking picks the nearest object, shift-drag chooses by a box (left to right what lies inside,
+  right to left what it touches), and `choose` gives Quantix's count, length, area and volume of what is
+  chosen. Length, Area, Enclosed, Count and Scale place points in the same view; a PDF's points are saved in
+  sheet points from the top left, so they also show on the page picture. The Queries screen lists tender
   queries and layer maps for the engineer's decision, and what the checks find.
 
 ## Testing

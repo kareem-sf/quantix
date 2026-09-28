@@ -1013,3 +1013,34 @@ its words, a workbook "A1=… | B1=…". Each kind now opens as its own app show
 - **The list** is narrower, with an icon per kind and plainer coverage ("12 pages opened by the office · 3 cited").
   A search can be cleared with × or Escape, keeps the open document, and says how many pages it found. Zoom works
   with the controls and Ctrl + wheel; moving through a document replaces the address instead of adding steps to Back.
+
+## 28 September 2026: the drawing tools on PDFs printed from CAD, and a CAD viewer to measure with
+
+The engineer asked why the Takeoff screen offered none of what came with OpenCADStudio's libraries on the SEC 8485
+and 8486 tender. Its drawings are all PDFs, and only DWG and DXF files were read as drawings; its PDFs were printed
+from CAD, and keep their lines.
+
+- **PDFs read as drawings** (`documents/vectors.py`). The 8485 addendum's 130,498 strokes read as 96,044 objects
+  in its CAD colours, in about 8 s, once: a closed outline is found from strokes printed one side at a time, so
+  clicking the control room's outline gives 86.509 m round and 401.663 m² at the sheet's 1:214 scale. Hatch lines
+  are cut to their clipping outlines as the PDF shows them, AutoCAD's text strokes become their words (the words
+  written invisibly over them), and white masking is left out. The civil base design reads as 158,156 objects.
+- **The Takeoff screen** draws a CAD drawing, or a PDF page drawn in lines, in its own colours, and gains:
+  points placed on the drawing (Length, Area, Count and, on PDFs, Scale), snapped to a line's end or middle, where
+  two lines cross, or onto a line, with the snap named beside the pointer and shift keeping a line square; the
+  length or area placed so far; **Enclosed**, a click inside an area the lines close off, found with opencadkernel
+  in a window around the click that widens until the region lies inside it (0.8 s inside the real control room);
+  choosing by a box (shift-drag), everything like the chosen, or everything on a layer; each layer's colour; what
+  one chosen object is ("closed polyline on orange FF7F00 · 0.51 mm"); words found on the drawing; zooming to a
+  measurement's objects or points with Show; and Esc, Enter and Backspace as in CAD. A scanned page keeps the page
+  picture and its tools.
+- **CAD drawings** now keep their colours (qx-dwg format 4: by layer, by block and true colours), and the engineer
+  can measure by points in model space, in its units.
+- **Staff tools** take a PDF page drawn in lines as they take a CAD drawing: `drawing_overview`, `query_drawing`,
+  `view_drawing` and `measure_drawing` (with its page) work on its pens and objects with the sheet's scale.
+- **Faster:** the screen copy is built without a loop per object (3.7 s to 0.15 s on the addendum).
+- **Checks:** 6 new service tests with a synthetic vector PDF (strokes joined, a tee left apart, a circle, a fill,
+  letters and their word, a clipped hatch line, white, the PDF's own layers, a scan page) and a colour DWG; 5 new
+  interface tests (snapping, crossings, choosing by a box, likeness, words) and 3 screen tests (points on a CAD
+  drawing, Enclosed, a PDF drawn in lines).
+
