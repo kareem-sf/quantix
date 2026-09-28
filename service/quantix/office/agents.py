@@ -34,7 +34,7 @@ from quantix.estimate import records as estimate
 from quantix.office import packs, records, tools
 from quantix.office.models import ENGINEER, OFFICE, TEAM, Message, Staff
 from quantix.office.tools import Persona, Turn
-from quantix.review import lessons, queries, revisions
+from quantix.review import lessons, lookup, queries, revisions
 from quantix.review import records as reviews
 from quantix.subcontract import records as subcontract
 from quantix.submission import records as submission
@@ -253,7 +253,8 @@ def situation(
 def _markups_state(session: Session, tender_id: str) -> str:
     markups = estimate.current_markups(session, tender_id)
     if markups is None:
-        return "none proposed yet"
+        returned = lookup.returned_markups(session, tender_id) is not None
+        return "the last set was sent back, and none proposed since" if returned else "none proposed yet"
     return {PROPOSED: "with the Tender Manager for review", REVIEWED: "waiting for the engineer"}.get(
         markups.status, "approved"
     )

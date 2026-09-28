@@ -103,7 +103,7 @@ def find(session: Session, tender_id: str, ref: str) -> tuple[str, Any]:
     kind = {"recommendation": "package", "requirement": "checklist"}.get(kind.lower(), kind.lower())
     short = short.strip().lower()
     if kind == "markups" and not short:
-        markups = estimate.current_markups(session, tender_id)
+        markups = estimate.current_markups(session, tender_id) or returned_markups(session, tender_id)
         if markups is None:
             raise ValueError("No markups have been proposed yet.")
         return kind, markups
@@ -119,6 +119,14 @@ def find(session: Session, tender_id: str, ref: str) -> tuple[str, Any]:
         raise ValueError(
             f"“{text}” is neither a record like “rate 42a9fb15” nor a BOQ line like “C.1.2”: {error}"
         ) from error
+
+
+def returned_markups(session: Session, tender_id: str) -> Markups | None:
+    """The newest markups when they were sent back and nothing has replaced them: what to correct."""
+    if estimate.current_markups(session, tender_id) is not None:
+        return None
+    query = select(Markups).where(Markups.tender_id == tender_id, Markups.status == "rejected")
+    return session.scalars(query.order_by(Markups.created_at.desc())).first()
 
 
 def returned_draft(session: Session, requirement: Requirement) -> Draft | None:
@@ -395,14 +403,16 @@ def search(session: Session, tender_id: str, words: str, kind: str | None = None
                 f"{q.title} {q.detail} {queries.KINDS[q.kind]}",
                 f"query {q.id[:8]} · {queries.KINDS[q.kind]}: {q.title} · {SHORT.get(q.status, q.status)}",
             )
-    markups = estimate.current_markups(session, tender_id) if kind in (None, "markups") else None
+    markups = None
+    if kind in (None, "markups"):
+        markups = estimate.current_markups(session, tender_id) or returned_markups(session, tender_id)
     if markups is not None:  # one record, found by what it holds: its preliminaries by name, and its note
         heads = ", ".join(i["item"] for i in markups.preliminary_items)
         add(
             f"markups markup preliminaries overheads profit adjustment {heads} {markups.note}",
             f"markups · preliminaries priced item by item ({len(markups.preliminary_items)} items: {heads or 'none'}), "
             f"overheads {markups.overheads:.1%} and profit {markups.profit:.1%} of cost, adjustment "
-            f"{markups.adjustment} as a lump sum · {STATES.get(markups.status, markups.status)}",
+            f"{markups.adjustment:.2f} as a lump sum · {STATES.get(markups.status, markups.status)}",
         )
     if kind in (None, "package", "quote"):
         for p in subcontract.packages(session, tender_id):

@@ -20,8 +20,8 @@ from quantix import settings
 from quantix.boq import records as boq
 from quantix.documents import library
 from quantix.estimate import records as estimate
+from quantix.office import agents, tools
 from quantix.office import records as office
-from quantix.office import tools
 from quantix.office.models import Staff, Task
 from quantix.review import lookup
 from quantix.review import records as reviews
@@ -230,12 +230,19 @@ def test_find_records_and_the_priced_boq(client, tender):
             item="Site support allowance", quantity=Decimal(4), unit="month", rate=Decimal(9000)
         )
         zero, six = Decimal(0), Decimal("0.06")
-        estimate.propose_markups(session, tender_id, priya_id, [site], six, zero, zero, "Four months of site staff.")
+        filed = estimate.propose_markups(session, tender_id, priya_id, [site], six, zero, zero, "Four months of staff.")
         [markups] = lookup.search(session, tender_id, "site support allowance")
         assert markups.startswith("markups · preliminaries priced item by item (1 items: Site support allowance)")
         assert "overheads 6.0% and profit 0.0% of cost, adjustment 0.00 as a lump sum" in markups
         assert lookup.search(session, tender_id, "markup") == [markups]
         assert lookup.search(session, tender_id, "", "markups") == [markups]
+        # the real tender again: every set was sent back, so the office saw "none proposed yet" and nothing to open
+        filed.status = "rejected"
+        [returned] = lookup.search(session, tender_id, "markup")
+        assert returned.endswith("· sent back") and lookup.find(session, tender_id, "markups") == ("markups", filed)
+        assert agents.standing(session, tender_id).count(
+            "Markups: the last set was sent back, and none proposed since."
+        )
 
         text = lookup.priced(session, tender_id)
         head, *rows, foot = text.splitlines()

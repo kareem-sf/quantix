@@ -917,3 +917,8 @@ was already marked as read, so it would not have come back as new.
   preliminaries' names, their note and the words markup, preliminaries, overheads, profit and adjustment. The line it
   returns says how each part is priced: preliminaries item by item, overheads and profit as percentages of cost, and
   the adjustment as a lump sum.
+- **Sent-back markups can be opened.** Asked again after that fix, Salem still found nothing: every set of markups on
+  the real tender had been sent back, and the office saw only live records, so its briefing said "none proposed yet".
+  Sent-back drafts were already shown for correcting. Now the newest sent-back set of markups is too:
+  `find_records` and `open_record("markups")` return it marked "sent back", and "where the tender stands" says the
+  last set was sent back and none has been proposed since.
