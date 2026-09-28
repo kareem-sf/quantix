@@ -587,7 +587,7 @@ def escalate(
         raise ValueError("You already escalated it. The engineer's answer will come to your chat.")
     if len(problem.split()) < 5:
         raise ValueError("Say what is wrong and why the office can't settle it.")
-    if not sources:
+    if not sources and not approved:  # approved work: Quantix's own finding says where
         raise ValueError("Show the engineer where the problem is: at least one document page or BOQ line.")
     suggestions = [s.strip() for s in suggestions if s.strip()]
     if not 1 <= len(suggestions) <= 4:

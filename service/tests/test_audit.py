@@ -272,10 +272,10 @@ def test_keeping_approved_work_as_it_is_changes_nothing(client, tender):
     tender_id, rania_id, docs = tender
     markups_id = markups_before_programme(client, tender_id, docs)
     with client.app.state.sessions() as session:
-        where = [reviews.Source(boq_item="3.1", what="the excavation that sets the programme")]
         problem = "Site staff are priced for 4 months, but the approved programme is 40 working days."
         manager = session.get(Staff, rania_id)
-        decision = reviews.escalate(session, tender_id, manager, "markups", problem, where, ["Price 2 months."])
+        # no page or BOQ line to show for markups: Quantix's finding says where
+        decision = reviews.escalate(session, tender_id, manager, "markups", problem, [], ["Price 2 months."])
         session.commit()
         decision_id = decision.id
     client.post(f"/decisions/{decision_id}/answer", json={"answer": "Keep it as approved"})
