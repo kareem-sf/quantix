@@ -199,6 +199,11 @@ count from the geometry and scale. Measurements link to BOQ items, and Quantix c
   A clipped reference (XCLIP) keeps only what shows inside its clip boundary: lines are cut where they leave it, a
   closed shape keeps the area inside and the part of its outline inside, and what lies wholly outside is left out.
   The boundary comes from the reference's spatial filter, taken back into the block by its inverse placement.
+  A drawing that refers to another (an xref) gets it placed from the tender's package: `drawings.open_drawing`
+  matches each unloaded xref to a package drawing by the file name of its path (or else its name), and `qx-dwg read`
+  places that drawing's model space where the reference is, its layers and blocks named `XREF|NAME` as CAD names
+  them. The folder's name then carries a hash of the drawings placed, so a newer copy of one reads it again, and
+  the screen's object numbers get a new stamp.
   Each placed object gets a key (the block references it sits in, then its handle, e.g. `1F3/2A`), its layer, block,
   flags (closed, annotation, inside a block), extent, and exact length and area in drawing units. The folder,
   `tenders/<id>/drawings/<sha256>/` beside the stored file, holds `drawing.json` (units, spaces, layers, blocks,

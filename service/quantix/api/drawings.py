@@ -164,8 +164,11 @@ class DecisionIn(BaseModel):
     reason: str | None = None
 
 
-def stamp(document: Document) -> str:
-    return f"{document.sha256[:16]}-{cad.FORMAT}"
+def stamp(d: cad.Drawing) -> str:
+    """Which reading of a drawing the object numbers on the screen belong to: its file, the drawings placed in it
+    for its xrefs, and the reader's format."""
+    name = d.folder.name
+    return f"{name[:16]}{name[64:]}-{cad.FORMAT}"
 
 
 def _drawing(session: Session, home, document_id: str) -> tuple[Document, cad.Drawing]:
@@ -209,7 +212,7 @@ def get_drawing(document_id: str, session: DB, home: Home, page: int = 1) -> Dra
     return DrawingOut(
         document_id=document.id,
         name=document.name,
-        stamp=stamp(document),
+        stamp=stamp(d),
         pages=[
             PageOut(
                 number=s.number,
@@ -250,11 +253,11 @@ def screen_copy(document_id: str, number: int, session: DB, home: Home) -> Respo
         d.space(number)
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    return Response(cad.screen_copy(d, number, stamp(document)), media_type="application/octet-stream")
+    return Response(cad.screen_copy(d, number, stamp(d)), media_type="application/octet-stream")
 
 
 def _chosen(session: Session, home, document: Document, d: cad.Drawing, page: int, choice: Choice) -> np.ndarray:
-    if choice.stamp != stamp(document):
+    if choice.stamp != stamp(d):
         raise HTTPException(status_code=409, detail="The drawing was read again: reload it and choose again.")
     on_screen = cad.objects_on_screen(d, page)
     if choice.rule is not None and not choice.rule.empty():

@@ -11,6 +11,7 @@ from quantix.api.tenders import DB
 from quantix.documents import cad, library, readers
 from quantix.documents.models import Document
 from quantix.review import package
+from quantix.takeoff import drawings
 
 router = APIRouter(tags=["documents"])
 
@@ -124,7 +125,7 @@ def page_image(document_id: str, number: int, session: DB, home: Home) -> Respon
         return FileResponse(path)
     if document.kind == "cad" and document.page_count and 1 <= number <= document.page_count:
         try:
-            image, _ = cad.render(cad.drawing(path), number, width=1400)
+            image, _ = cad.render(drawings.open_drawing(home, document), number, width=1400)
         except (readers.Unreadable, ValueError) as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         return Response(image, media_type="image/png")

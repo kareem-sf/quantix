@@ -148,6 +148,50 @@ def test_a_clipped_block_counts_only_what_shows(tmp_path):
     assert hatch["area"] == pytest.approx(40_000_000)
 
 
+def test_a_drawing_it_refers_to_is_placed_once_the_package_holds_it(client):
+    """A drawing that refers to another (an xref) warns until the package holds that drawing; then its objects are
+    placed where the drawing refers to it, on layers named after it, and measured with the rest."""
+    base = {
+        "insunits": 4,
+        "layers": ["A-WALL"],
+        "entities": [
+            {"type": "line", "layer": "A-WALL", "from": [0, 0], "to": [10000, 0]},
+            {"type": "line", "layer": "A-WALL", "from": [10000, 0], "to": [10000, 8000]},
+        ],
+    }
+    host = {
+        "insunits": 4,
+        "layers": ["X-REF", "A-FURN"],
+        "blocks": [{"name": "BASE-PLAN", "base": [0, 0], "xref": "..\\Base\\Base-Plan.dwg", "entities": []}],
+        "entities": [
+            {"type": "insert", "block": "BASE-PLAN", "layer": "X-REF", "at": [100000, 50000]},
+            {"type": "circle", "layer": "A-FURN", "centre": [102000, 52000], "radius": 500},
+        ],
+    }
+    tender_id = client.post("/tenders", json={"name": "Synthetic xref"}).json()["id"]
+    upload(client, tender_id, {"Plans/Host.dwg": make_drawing(host)})
+    host_id = read_all(client, tender_id)["Plans/Host.dwg"]["id"]
+    checks = client.get(f"/tenders/{tender_id}/checks?document_id={host_id}").json()
+    assert any("refers to another drawing, ..\\Base\\Base-Plan.dwg" in p["message"] for p in checks)
+    before = client.get(f"/documents/{host_id}/drawing").json()
+    assert "BASE-PLAN|A-WALL" not in {layer["name"] for layer in before["layers"]}
+
+    upload(client, tender_id, {"Base/Base-Plan.dwg": make_drawing(base)})
+    read_all(client, tender_id)
+    checks = client.get(f"/tenders/{tender_id}/checks?document_id={host_id}").json()
+    assert not any("refers to another drawing" in p["message"] for p in checks)
+    after = client.get(f"/documents/{host_id}/drawing").json()
+    assert "BASE-PLAN|A-WALL" in {layer["name"] for layer in after["layers"]}
+    assert after["stamp"] != before["stamp"]  # the objects on the screen are numbered again
+    client.post(f"/tenders/{tender_id}/units", json={"document_id": host_id, "units": "millimetres"})
+    walls = client.post(
+        f"/documents/{host_id}/pages/1/choose",
+        json={"stamp": after["stamp"], "rule": {"layers": ["BASE-PLAN|A-WALL"]}},
+    ).json()
+    assert (walls["count"], walls["length_m"]) == (2, 18.0)
+    assert all(key.count("/") == 1 for key in walls["keys"])  # inside the reference to the base plan
+
+
 def test_quantities_come_from_the_objects_once_the_units_are_approved(client, flat):
     tender_id, drawing, _ = flat
     windows = measure(client, tender_id, drawing, {"blocks": ["WIN-1200"]}, kind="count", label="Windows", unit="nr")

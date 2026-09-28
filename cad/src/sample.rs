@@ -2,7 +2,8 @@
 //! drawing is ever committed; tests describe the drawing they need and this writes it with the same library that
 //! reads it.
 //!
-//! The spec: `{"insunits": 4, "layers": ["WALLS", …], "blocks": [{"name", "base": [x, y], "entities": […]}],
+//! The spec: `{"insunits": 4, "layers": ["WALLS", …], "blocks": [{"name", "base": [x, y], "entities": […],
+//! "xref"?: path}],`
 //! "entities": […], "layouts": [{"name", "entities": […]}]}`. An entity is one of
 //! `{"type": "line", "from", "to"}`, `{"type": "polyline", "points", "bulges"?, "closed"?}`,
 //! `{"type": "circle", "centre", "radius"}`, `{"type": "arc", "centre", "radius", "start", "end"}` (degrees),
@@ -52,6 +53,10 @@ pub fn run(spec: &str, out: &str) -> Result<(), Failure> {
         record.block_end_handle = doc.allocate_handle();
         let base = point(&block["base"]);
         record.base_point = Vector3::new(base[0], base[1], 0.0);
+        if let Some(path) = block["xref"].as_str() {
+            record.flags.is_xref = true;
+            record.xref_path = path.to_string();
+        }
         let owner = record.handle;
         doc.block_records.add(record).map_err(Failure::Other)?;
         for item in block["entities"].as_array().into_iter().flatten() {

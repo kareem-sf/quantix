@@ -7,12 +7,12 @@ import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from decimal import Decimal
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 import numpy as np
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from quantix.core.review import APPROVED, LIVE
 from quantix.documents import cad, library
@@ -88,7 +88,46 @@ def drawing_document(session: Session, tender_id: str, document_id: str) -> Docu
 
 
 def open_drawing(home: Path, document: Document) -> cad.Drawing:
-    return cad.drawing(library.stored_file(home, document))
+    """A read drawing, with the drawings it refers to (xrefs) placed in it wherever the tender's package holds them,
+    as CAD shows a loaded xref."""
+    stored = library.stored_file(home, document)
+    d = cad.drawing(stored)
+    session = object_session(document)
+    given: dict[str, Path] = {}
+    while session is not None:
+        found = _xref_files(session, home, document, d, given)
+        if not found:
+            break
+        given |= found
+        d = cad.drawing(stored, given)  # a referred drawing may refer to others in turn
+    return d
+
+
+def _xref_files(
+    session: Session, home: Path, document: Document, d: cad.Drawing, given: dict[str, Path]
+) -> dict[str, Path]:
+    """The package's drawings for the ones this drawing refers to but doesn't hold, by the name it refers to them
+    by: the same file name as the path it gives, or else the same name."""
+    wanted = [x for x in d.info["xrefs"] if not x["loaded"]]
+    if not wanted:
+        return {}
+    package = [
+        other
+        for other in library.documents(session, document.tender_id)
+        if other.kind == "cad" and other.status == "read" and other.id != document.id
+    ]
+    found: dict[str, Path] = {}
+    for xref in wanted:
+        name = xref["name"].rsplit("|", 1)[-1]
+        if name.upper() in {g.upper() for g in given}:
+            continue  # given already, and it couldn't be opened
+        file = PureWindowsPath(xref["path"]).name if xref["path"] else ""
+        match = next((o for o in package if file and PureWindowsPath(o.path).name.lower() == file.lower()), None)
+        stem = PureWindowsPath(file).stem if file else name
+        match = match or next((o for o in package if PureWindowsPath(o.path).stem.lower() == stem.lower()), None)
+        if match:
+            found[name] = library.stored_file(home, match)
+    return found
 
 
 def unit_name(metres: float) -> str:

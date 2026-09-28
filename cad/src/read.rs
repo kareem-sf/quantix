@@ -4,7 +4,9 @@
 //! placed: every object inside a block is written once per placed copy, in the space around it, with the chain of
 //! block references it sits in as part of its key, so a count or a length never takes a block's definition for a
 //! drawn object. Each object gets its layer (layer "0" inside a block takes the reference's layer, as CAD shows
-//! it), its exact length and area in drawing units, its extent, and a chain of points to draw and pick it.
+//! it), its exact length and area in drawing units, its extent, and a chain of points to draw and pick it. A
+//! clipped reference keeps only what shows inside its clip boundary. A drawing it refers to (an xref) that Quantix
+//! gives it is placed like a block, its layers and blocks named after it ("BASE|WALLS").
 //!
 //! The folder gets `drawing.json` (units, spaces, layers, blocks and what couldn't be read), `objects.json` (keys,
 //! names, text, block references, dimensions, tables, hatches and viewports) and three little-endian arrays:
@@ -96,14 +98,45 @@ struct Place {
     depth: u32,
     /// The clip boundaries of the block references it sits in: only what shows through all of them is kept.
     clips: Rc<Vec<Clip>>,
+    /// The drawing its objects come from: the one being read, or a drawing it refers to.
+    source: usize,
+    /// The drawings being placed around it, one bit each, so a drawing that refers back to one of them stops.
+    above: u64,
+}
+
+/// A drawing whose objects the walker places: the one being read (the first), or a drawing it refers to (an
+/// xref) that Quantix was given.
+struct Source<'a> {
+    doc: &'a CadDocument,
+    /// What its layers and blocks are called in the drawing being read: "" for that drawing, "NAME|" for an xref.
+    prefix: String,
+    block_names: HashMap<u64, String>,
+    /// Each clipped block reference's clip boundary, in its block's own coordinates.
+    clips: BTreeMap<u64, Vec<[f64; 2]>>,
+}
+
+impl<'a> Source<'a> {
+    fn new(doc: &'a CadDocument, prefix: String) -> Source<'a> {
+        Source {
+            doc,
+            prefix,
+            block_names: doc
+                .block_records
+                .iter()
+                .map(|b| (b.handle.value(), b.name.clone()))
+                .collect(),
+            clips: clip_boundaries(doc),
+        }
+    }
 }
 
 /// How much the walker had written, to take back a clipped block reference none of whose objects show.
 struct Mark([usize; 8]);
 
 struct Walker<'a> {
-    doc: &'a CadDocument,
-    block_names: HashMap<u64, String>,
+    sources: Vec<Source<'a>>,
+    /// The drawings given for xrefs, by the xref's name in capitals.
+    xref_sources: HashMap<String, usize>,
     layers: Vec<String>,
     layer_index: HashMap<String, u32>,
     blocks: Vec<String>,
@@ -120,14 +153,21 @@ struct Walker<'a> {
     viewports: Vec<Value>,
     not_read: BTreeMap<&'static str, u64>,
     xrefs: BTreeMap<String, Value>,
-    /// Each clipped block reference's clip boundary, in its block's own coordinates.
-    clips: BTreeMap<u64, Vec<[f64; 2]>>,
 }
 
-pub fn run(drawing: &str, folder: &str) -> Result<(), Failure> {
+/// Reads a drawing into a folder. `xrefs` gives drawings it refers to as `NAME=path`: each is placed wherever the
+/// drawing refers to it by that name, as CAD shows a loaded xref. One that can't be opened stays unloaded.
+pub fn run(drawing: &str, folder: &str, xrefs: &[String]) -> Result<(), Failure> {
+    let mut given = vec![];
+    for xref in xrefs.iter().take(62) {
+        let (name, path) = xref.split_once('=').ok_or(Failure::Usage)?;
+        if let Ok(outcome) = open(Path::new(path)) {
+            given.push((name.to_string(), outcome));
+        }
+    }
     let outcome = open(Path::new(drawing))?;
     let doc = &outcome.document;
-    let mut walker = Walker::new(doc);
+    let mut walker = Walker::new(doc, &given);
     let mut spaces = vec![];
     for (number, (name, block, kind)) in spaces_of(doc).into_iter().enumerate() {
         let first = walker.keys.len();
@@ -140,6 +180,8 @@ pub fn run(drawing: &str, folder: &str) -> Result<(), Failure> {
             flags: 0,
             depth: 0,
             clips: Rc::default(),
+            source: 0,
+            above: 1,
         };
         walker.block(&block, &place);
         let objects = walker.keys.len() - first;
@@ -352,14 +394,16 @@ fn text_box(
 }
 
 impl<'a> Walker<'a> {
-    fn new(doc: &'a CadDocument) -> Walker<'a> {
+    fn new(doc: &'a CadDocument, xrefs: &'a [(String, ReadOutcome)]) -> Walker<'a> {
+        let mut sources = vec![Source::new(doc, String::new())];
+        let mut xref_sources = HashMap::new();
+        for (name, outcome) in xrefs {
+            xref_sources.insert(name.to_uppercase(), sources.len());
+            sources.push(Source::new(&outcome.document, format!("{name}|")));
+        }
         let mut walker = Walker {
-            doc,
-            block_names: doc
-                .block_records
-                .iter()
-                .map(|b| (b.handle.value(), b.name.clone()))
-                .collect(),
+            sources,
+            xref_sources,
             layers: vec![],
             layer_index: HashMap::new(),
             blocks: vec![],
@@ -376,7 +420,6 @@ impl<'a> Walker<'a> {
             viewports: vec![],
             not_read: BTreeMap::new(),
             xrefs: BTreeMap::new(),
-            clips: clip_boundaries(doc),
         };
         for layer in doc.layers.iter() {
             walker.layer(&layer.name);
@@ -437,7 +480,7 @@ impl<'a> Walker<'a> {
 
     /// Every object of a block (or a space), placed.
     fn block(&mut self, name: &str, place: &Place) {
-        let doc = self.doc;
+        let doc = self.sources[place.source].doc;
         for entity in doc.entities_in_block(name) {
             self.entity(entity, place);
         }
@@ -577,7 +620,7 @@ impl<'a> Walker<'a> {
         let handle = common.handle.value();
         let layer = match &place.layer {
             Some(inherited) if common.layer == "0" => inherited.clone(),
-            _ => common.layer.clone(),
+            _ => format!("{}{}", self.sources[place.source].prefix, common.layer),
         };
         let layer = layer.as_str();
         match entity {
@@ -803,7 +846,13 @@ impl<'a> Walker<'a> {
                     0,
                 );
                 self.tables.push(json!([i, rows]));
-                if !e.block_name.is_empty() && self.doc.block_records.get(&e.block_name).is_some() {
+                if !e.block_name.is_empty()
+                    && self.sources[place.source]
+                        .doc
+                        .block_records
+                        .get(&e.block_name)
+                        .is_some()
+                {
                     let inner = Place {
                         path: format!("{}{:X}/", place.path, handle),
                         parent: Some(i),
@@ -1061,7 +1110,11 @@ impl<'a> Walker<'a> {
         ]));
         if !base.block_name.is_empty()
             && place.depth < MAX_DEPTH
-            && self.doc.block_records.get(&base.block_name).is_some()
+            && self.sources[place.source]
+                .doc
+                .block_records
+                .get(&base.block_name)
+                .is_some()
         {
             let inner = Place {
                 path: format!("{}{:X}/", place.path, handle),
@@ -1077,7 +1130,8 @@ impl<'a> Walker<'a> {
     }
 
     fn insert(&mut self, e: &Insert, place: &Place, handle: u64, layer: &str) {
-        let doc = self.doc;
+        let source = &self.sources[place.source];
+        let (doc, prefix) = (source.doc, source.prefix.clone());
         let Some(record) = doc.block_records.get(&e.block_name) else {
             self.skipped("references to blocks the drawing doesn't define");
             return;
@@ -1085,18 +1139,30 @@ impl<'a> Walker<'a> {
         // An anonymous copy of a dynamic block is counted under the block it came from.
         let name = doc
             .dynamic_definition_for_insert(e.common.handle)
-            .and_then(|h| self.block_names.get(&h.value()).cloned())
+            .and_then(|h| source.block_names.get(&h.value()).cloned())
             .filter(|n| !n.starts_with('*'))
             .unwrap_or_else(|| e.block_name.clone());
+        let name = format!("{prefix}{name}");
+        let clip_ring = source.clips.get(&handle).cloned();
         let is_xref =
             record.flags.is_xref || record.flags.is_xref_overlay || !record.xref_path.is_empty();
+        // A drawing it refers to that Quantix was given is placed like a block: its model space, its layers named
+        // after it, as CAD shows a loaded xref. One that refers back to a drawing around it stops there.
+        let given = (is_xref && record.entity_handles.is_empty())
+            .then(|| self.xref_sources.get(&e.block_name.to_uppercase()).copied())
+            .flatten()
+            .filter(|&s| place.above & (1 << s) == 0);
         if is_xref {
-            let loaded = !record.entity_handles.is_empty();
+            let loaded = !record.entity_handles.is_empty() || given.is_some();
             self.xrefs.insert(
                 name.clone(),
                 json!({"name": name, "path": record.xref_path, "loaded": loaded}),
             );
         }
+        let (block_source, block_name) = match given {
+            Some(s) => (s, "*Model_Space".to_string()),
+            None => (place.source, e.block_name.clone()),
+        };
         let instances = if e.is_minsert() {
             e.instance_count().max(1)
         } else {
@@ -1118,10 +1184,8 @@ impl<'a> Walker<'a> {
             .then(&base);
         let world = place.xf.apply(at);
         // A clipped reference shows only what lies inside its clip boundary, and inside those around it.
-        let clip = self
-            .clips
-            .get(&handle)
-            .and_then(|ring| Clip::new(ring.iter().map(|&p| own.apply(p)).collect()));
+        let clip =
+            clip_ring.and_then(|ring| Clip::new(ring.iter().map(|&p| own.apply(p)).collect()));
         let clips = match clip {
             Some(clip) => {
                 let mut all = (*place.clips).clone();
@@ -1161,7 +1225,7 @@ impl<'a> Walker<'a> {
             let attribute_layer = if attribute.common.layer == "0" {
                 layer.to_string()
             } else {
-                attribute.common.layer.clone()
+                format!("{prefix}{}", attribute.common.layer)
             };
             let inner = Place {
                 path: format!("{}{:X}/", place.path, handle),
@@ -1199,7 +1263,6 @@ impl<'a> Walker<'a> {
         } else {
             (1, 1)
         };
-        let block_name = e.block_name.clone();
         for row in 0..rows {
             for column in 0..columns {
                 let cell = if instances > 1 {
@@ -1240,13 +1303,19 @@ impl<'a> Walker<'a> {
                     flags: place.flags | IN_BLOCK,
                     depth: place.depth + 1,
                     clips: clips.clone(),
+                    source: block_source,
+                    above: place.above | (1 << block_source),
                 };
                 self.block(&block_name, &inner);
             }
         }
         if !clips.is_empty() && self.keys.len() == i + 1 {
             // none of the reference's objects show through its clips
-            let empty = doc.entities_in_block(&block_name).next().is_none();
+            let empty = self.sources[block_source]
+                .doc
+                .entities_in_block(&block_name)
+                .next()
+                .is_none();
             if !(empty && g::shows(&place.clips, world)) {
                 self.rollback(&mark);
                 return;
@@ -1255,20 +1324,34 @@ impl<'a> Walker<'a> {
         self.close_extent(i);
     }
 
+    /// A layer or block as the drawing being read defines it, or else the drawing it comes from ("NAME|LAYER").
+    fn defined<T: 'a>(
+        &self,
+        name: &str,
+        get: impl Fn(&'a CadDocument, &str) -> Option<&'a T>,
+    ) -> Option<&'a T> {
+        get(self.sources[0].doc, name).or_else(|| {
+            let (xref, own) = name.rsplit_once('|')?;
+            let xref = xref.rsplit('|').next()?;
+            let source = *self.xref_sources.get(&xref.to_uppercase())?;
+            get(self.sources[source].doc, own)
+        })
+    }
+
     fn write(
         self,
         folder: &Path,
         outcome: &ReadOutcome,
         spaces: Vec<Value>,
     ) -> Result<(), Failure> {
-        let doc = &outcome.document;
+        let doc = self.sources[0].doc;
         let staging = folder.with_extension("reading");
         let _ = fs::remove_dir_all(&staging);
         fs::create_dir_all(&staging).map_err(Failure::io)?;
         let layers: Vec<Value> = self
             .layers
             .iter()
-            .map(|name| match doc.layers.get(name) {
+            .map(|name| match self.defined(name, |d, n| d.layers.get(n)) {
                 Some(l) => json!({"name": name, "off": l.flags.off, "frozen": l.flags.frozen, "locked": l.flags.locked, "linetype": l.line_type}),
                 None => json!({"name": name, "off": false, "frozen": false, "locked": false, "linetype": ""}),
             })
@@ -1276,7 +1359,7 @@ impl<'a> Walker<'a> {
         let blocks: Vec<Value> = self
             .blocks
             .iter()
-            .map(|name| match doc.block_records.get(name) {
+            .map(|name| match self.defined(name, |d, n| d.block_records.get(n)) {
                 Some(b) => json!({"name": name, "anonymous": b.flags.anonymous, "xref": b.flags.is_xref || !b.xref_path.is_empty(), "description": b.description, "units": b.units}),
                 None => json!({"name": name, "anonymous": name.starts_with('*'), "xref": false, "description": "", "units": 0}),
             })
@@ -1306,7 +1389,7 @@ impl<'a> Walker<'a> {
                 "recovered": stats.recovered_errors,
                 "diagnostics": diagnostics,
                 "not_read": self.not_read,
-                "clipped": self.clips.len(),
+                "clipped": self.sources.iter().map(|s| s.clips.len()).sum::<usize>(),
             },
         });
         let objects = json!({

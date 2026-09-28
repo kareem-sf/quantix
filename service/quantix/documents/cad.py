@@ -10,6 +10,7 @@ by keys: the chain of block references they sit in and their own handle, e.g. "1
 block reference 1F3. Nothing here decides what an object is for: that is the office's to propose and the engineer's
 to approve."""
 
+import hashlib
 import json
 import math
 import os
@@ -60,9 +61,14 @@ def reader() -> Path:
     )
 
 
-def folder(stored: Path) -> Path:
-    """Where the reader keeps a stored drawing's objects: named by the file's content, like the file itself."""
-    return stored.parent.parent / "drawings" / stored.stem
+def folder(stored: Path, xrefs: dict[str, Path] | None = None) -> Path:
+    """Where the reader keeps a stored drawing's objects: named by the file's content, like the file itself, and by
+    the drawings placed in it for the ones it refers to (xrefs)."""
+    name = stored.stem
+    if xrefs:
+        given = ";".join(f"{xref.upper()}={path.stem}" for xref, path in sorted(xrefs.items()))
+        name += "+" + hashlib.sha256(given.encode()).hexdigest()[:16]
+    return stored.parent.parent / "drawings" / name
 
 
 def _lock(key: str) -> threading.Lock:
@@ -77,16 +83,18 @@ def _current(out: Path) -> bool:
         return False
 
 
-def prepare(stored: Path) -> Path:
-    """Read the drawing into its folder, once; later calls find it there."""
-    out = folder(stored)
+def prepare(stored: Path, xrefs: dict[str, Path] | None = None) -> Path:
+    """Read the drawing into its folder, once; later calls find it there. `xrefs` gives the stored drawings to place
+    wherever it refers to another drawing by that name."""
+    out = folder(stored, xrefs)
     with _lock(str(out)):
         if _current(out):
             return out
         out.parent.mkdir(parents=True, exist_ok=True)
         try:
             done = subprocess.run(
-                [str(reader()), "read", str(stored), str(out)],
+                [str(reader()), "read", str(stored), str(out)]
+                + [f"{xref}={path}" for xref, path in sorted((xrefs or {}).items())],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -448,8 +456,8 @@ def load(out: Path) -> Drawing:
     return drawing
 
 
-def drawing(stored: Path) -> Drawing:
-    return load(prepare(stored))
+def drawing(stored: Path, xrefs: dict[str, Path] | None = None) -> Drawing:
+    return load(prepare(stored, xrefs))
 
 
 def faces(segments: list[tuple[float, float, float, float]], tolerance: float) -> list[np.ndarray]:
