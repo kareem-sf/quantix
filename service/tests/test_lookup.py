@@ -4,6 +4,7 @@ the work still to do as its own tasks, never with a promise to look."""
 import io
 import re
 import threading
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -222,6 +223,19 @@ def test_find_records_and_the_priced_boq(client, tender):
         assert line.startswith("boq ") and f"rate {rate_id[:8]}: 3488.00 per t, approved" in line
         assert lookup.search(session, tender_id, "", "fact")[0].startswith("fact ")
         assert lookup.search(session, tender_id, "nothing like this") == []
+
+        # the real tender: Salem searched for "markup" and "site support allowance" four times and found nothing
+        assert lookup.search(session, tender_id, "markup") == []
+        site = estimate.PreliminaryIn(
+            item="Site support allowance", quantity=Decimal(4), unit="month", rate=Decimal(9000)
+        )
+        zero, six = Decimal(0), Decimal("0.06")
+        estimate.propose_markups(session, tender_id, priya_id, [site], six, zero, zero, "Four months of site staff.")
+        [markups] = lookup.search(session, tender_id, "site support allowance")
+        assert markups.startswith("markups · preliminaries priced item by item (1 items: Site support allowance)")
+        assert "overheads 6.0% and profit 0.0% of cost, adjustment 0.00 as a lump sum" in markups
+        assert lookup.search(session, tender_id, "markup") == [markups]
+        assert lookup.search(session, tender_id, "", "markups") == [markups]
 
         text = lookup.priced(session, tender_id)
         head, *rows, foot = text.splitlines()

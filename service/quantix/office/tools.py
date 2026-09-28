@@ -661,9 +661,9 @@ def open_record(ctx: RunContext[Turn], references: list[str]) -> str:
 
 def find_records(ctx: RunContext[Turn], words: str = "", kind: str | None = None) -> str:
     """Find the office's own records by words: BOQ lines (with their rates), facts, checklist items and their drafts,
-    measurements, packages and quotes. kind narrows it to one of boq, fact, checklist, draft, measurement, package or
-    quote; with a kind and no words it lists them all. Each line starts with the reference to open it with
-    open_record."""
+    measurements, packages, quotes and the markups. kind narrows it to one of boq, fact, checklist, draft,
+    measurement, package, quote or markups; with a kind and no words it lists them all. Each line starts with the
+    reference to open it with open_record."""
     with _working(ctx, f"Looking through the office's records for “{words}”") as (session, _):
         found = lookup.search(session, ctx.deps.tender_id, words, kind)
     if not found:

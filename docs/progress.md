@@ -911,3 +911,9 @@ was already marked as read, so it would not have come back as new.
   rules now ask each person to write a line or two before their tool calls: what they are about to do and why.
 - **Checks:** 3 new service tests and 2 new interface tests; 205 service tests, 81 interface tests, typecheck and ruff
   pass. Migration 0024 was rehearsed on a copy of the real database: every table kept its rows.
+- **Markups can be found.** Checked live in the browser: Salem answered the markup question again, and his turn log
+  showed four searches for "markup" and "site support allowance" that found nothing. The record search covered every
+  record except the markups, and he never opened them directly. `find_records` now finds the markups by their
+  preliminaries' names, their note and the words markup, preliminaries, overheads, profit and adjustment. The line it
+  returns says how each part is priced: preliminaries item by item, overheads and profit as percentages of cost, and
+  the adjustment as a lump sum.

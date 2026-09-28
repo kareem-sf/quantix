@@ -342,7 +342,7 @@ def _boq_line(session: Session, item: BoqItem) -> str:
     return line
 
 
-FINDABLE = ("boq", "fact", "checklist", "draft", "measurement", "query", "package", "quote")
+FINDABLE = ("boq", "fact", "checklist", "draft", "measurement", "query", "package", "quote", "markups")
 
 
 def search(session: Session, tender_id: str, words: str, kind: str | None = None) -> list[str]:
@@ -395,6 +395,15 @@ def search(session: Session, tender_id: str, words: str, kind: str | None = None
                 f"{q.title} {q.detail} {queries.KINDS[q.kind]}",
                 f"query {q.id[:8]} · {queries.KINDS[q.kind]}: {q.title} · {SHORT.get(q.status, q.status)}",
             )
+    markups = estimate.current_markups(session, tender_id) if kind in (None, "markups") else None
+    if markups is not None:  # one record, found by what it holds: its preliminaries by name, and its note
+        heads = ", ".join(i["item"] for i in markups.preliminary_items)
+        add(
+            f"markups markup preliminaries overheads profit adjustment {heads} {markups.note}",
+            f"markups · preliminaries priced item by item ({len(markups.preliminary_items)} items: {heads or 'none'}), "
+            f"overheads {markups.overheads:.1%} and profit {markups.profit:.1%} of cost, adjustment "
+            f"{markups.adjustment} as a lump sum · {STATES.get(markups.status, markups.status)}",
+        )
     if kind in (None, "package", "quote"):
         for p in subcontract.packages(session, tender_id):
             if kind in (None, "package"):
