@@ -1,4 +1,4 @@
-import { IconArrowUp, IconChevronRight, IconInfoCircle } from "@tabler/icons-react";
+import { IconChevronRight, IconInfoCircle } from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { AddDocuments } from "../documents/AddDocuments";
@@ -6,7 +6,8 @@ import { useDocuments } from "../documents/queries";
 import { money, useEstimate, useGates } from "../estimate/queries";
 import { Face } from "../office/Face";
 import { Prose, tidy } from "../office/Prose";
-import { TEAM, firstName, useMessages, useOffice, useSend } from "../office/queries";
+import { firstName, useMessages, useOffice } from "../office/queries";
+import { useShell } from "../app/context";
 import { Opening } from "../app/Opening";
 import { useAudit, useDecideLesson, useLessons } from "../review/queries";
 import { dueSentence, dueSource, type DueSource as DueSourceOut } from "./due";
@@ -63,7 +64,7 @@ export function Overview() {
           so the team can start work.
         </p>
       )}
-      {manager && <ManagerNote tenderId={tenderId} managerId={manager.id} />}
+      {manager ? <ManagerNote tenderId={tenderId} managerId={manager.id} /> : office.data.ai_ready && <StartOffice />}
 
       {waiting.length > 0 && (
         <>
@@ -122,9 +123,6 @@ export function Overview() {
       {current.length > 0 && <Audit tenderId={tenderId} />}
       <Lessons tenderId={tenderId} />
       <DeleteTender tenderId={tenderId} name={tender.data.name} />
-
-      <div className="grow" />
-      <AskOffice tenderId={tenderId} to={manager?.id ?? TEAM} name={manager ? firstName(manager) : undefined} />
     </div>
   );
 }
@@ -433,6 +431,7 @@ function ManagerNote({ tenderId, managerId }: { tenderId: string; managerId: str
   const chat = useMessages(tenderId, managerId);
   const manager = office.data?.staff.find((m) => m.id === managerId);
   const latest = [...(chat.data ?? [])].reverse().find((m) => m.sender === managerId);
+  const { showTeam } = useShell();
   if (!manager) return null;
   return (
     <div className="mt-7 flex gap-3">
@@ -445,41 +444,26 @@ function ManagerNote({ tenderId, managerId }: { tenderId: string; managerId: str
           text={tidy(latest?.text ?? manager.now ?? "Getting to know the tender.", firstName(manager)).split(/\n\s*\n/)[0]}
           className="text-[15px] text-[#27272A] [&>*]:line-clamp-4"
         />
-        <Link to={`/tenders/${tenderId}/office?with=${manager.id}`} className="text-ink-3 hover:text-ink">
+        <button onClick={() => showTeam(manager.id)} className="self-start text-ink-3 hover:text-ink">
           Open your chat with {firstName(manager)}
-        </Link>
+        </button>
       </div>
     </div>
   );
 }
 
-function AskOffice({ tenderId, to, name }: { tenderId: string; to: string; name?: string }) {
-  const send = useSend(tenderId);
-  const [draft, setDraft] = useState("");
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    if (draft.trim()) send.mutate({ channel: to, text: draft }, { onSuccess: () => setDraft("") });
-  }
+/** Before the Tender Manager joins: the office starts when the engineer first writes to it, in the team panel. */
+function StartOffice() {
+  const { showTeam } = useShell();
   return (
-    <form onSubmit={submit} className="pt-4 pb-6">
-      <div className="flex items-center gap-2 rounded-xl border border-line-strong py-1.5 pr-1.5 pl-3.5 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-        <input
-          aria-label="Message the office"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder={name ? `Ask ${name} anything` : "Tell the office what you need, for example: review the package"}
-          className="grow bg-transparent text-sm outline-none"
-        />
-        <button
-          aria-label="Send"
-          disabled={!draft.trim() || send.isPending}
-          className="flex size-8 items-center justify-center rounded-lg bg-ink text-white disabled:bg-line-strong"
-        >
-          <IconArrowUp className="size-4" stroke={1.75} />
-        </button>
-      </div>
-      {send.isSuccess && !draft && <p className="pt-2 text-ink-3">Sent. Replies appear in the Office.</p>}
-      {send.isError && <p className="pt-2 text-attention">{send.error.message}</p>}
-    </form>
+    <div className="mt-7 flex items-center gap-4 rounded-xl border border-line-strong px-4 py-3.5">
+      <span className="grow text-ink-2">
+        Tell the office what you need, for example “review the package”. The Tender Manager joins and hires the team
+        the tender needs.
+      </span>
+      <button onClick={() => showTeam()} className="h-8 shrink-0 rounded-lg bg-ink px-3.5 text-white">
+        Write to the office
+      </button>
+    </div>
   );
 }

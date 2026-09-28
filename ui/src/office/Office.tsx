@@ -1,6 +1,7 @@
-import { IconArrowRight, IconArrowUp, IconChevronRight } from "@tabler/icons-react";
+import { IconArrowRight, IconArrowUp, IconChevronRight, IconHash, IconPlayerStopFilled, IconX } from "@tabler/icons-react";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { Link, useParams, useSearchParams } from "react-router";
+import { Link } from "react-router";
+import { useShell } from "../app/context";
 import { useNeedsYou } from "../tenders/needsYou";
 import { Face } from "./Face";
 import { Prose } from "./Prose";
@@ -24,73 +25,108 @@ import {
 import { Sources } from "./Sources";
 import { TurnLog } from "./TurnLog";
 
-export function Office() {
-  const { tenderId = "" } = useParams();
-  const [params, setParams] = useSearchParams();
+/** The team beside whatever the engineer is doing: the Tender Manager's chat first, then each person's, then the
+ * team room. Ctrl+J opens and closes it. */
+export function TeamPanel({ tenderId }: { tenderId: string }) {
+  const { team, showTeam, hideTeam, showPerson } = useShell();
   const office = useOffice(tenderId);
+  const decisions = useDecisions(tenderId);
+  const stop = useStop(tenderId);
   const staff = office.data?.staff ?? [];
-  const channel = params.get("with") ?? TEAM;
-  const person = staff.find((m) => m.id === params.get("person")); // a profile the engineer opened, until closed
-  const active = staff.filter((m) => m.status === "active");
+  const active = staff.filter((m) => m.status === "active").sort((a, b) => Number(b.is_manager) - Number(a.is_manager));
+  const manager = active.find((m) => m.is_manager);
+  const chosen = team.channel === TEAM || active.some((m) => m.id === team.channel) ? team.channel : null;
+  const channel = chosen ?? manager?.id ?? TEAM;
+  const person = staff.find((m) => m.id === team.person);
+  const asking = new Set((decisions.data ?? []).filter((d) => d.status === "waiting").map((d) => d.raised_by));
+  const working = office.data?.state === "working";
 
   return (
-    <div className="relative flex h-full w-full">
-      <section
-        aria-label="Conversations"
-        className="flex w-60 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-line px-3 py-7 max-xl:w-52"
-      >
-        <h1 className="mx-2 mb-3.5 text-[22px] font-semibold tracking-tight">Office</h1>
-        <Thread label="Team room" on={channel === TEAM} onClick={() => setParams({})} />
-        {active.map((m) => (
-          <Thread key={m.id} label={m.name} member={m} on={channel === m.id} onClick={() => setParams({ with: m.id })} />
-        ))}
-        {office.data && active.length === 0 && (
-          <p className="px-2 pt-3 leading-normal text-ink-3">
-            The Tender Manager joins when you first write to the office, and hires the team the tender needs.
-          </p>
+    <aside
+      aria-label="Team"
+      className="relative flex w-[400px] shrink-0 flex-col border-l border-line bg-white max-[1279px]:absolute max-[1279px]:inset-y-0 max-[1279px]:right-0 max-[1279px]:z-20 max-[1279px]:shadow-[-10px_0_28px_rgba(0,0,0,0.10)]"
+    >
+      <div className="flex items-center gap-2 px-4 pt-3">
+        <span className="grow font-semibold">Team</span>
+        {working && (
+          <button onClick={() => stop.mutate()} className="flex h-7 items-center gap-1.5 rounded-md px-2 text-ink-2 hover:bg-selected hover:text-ink">
+            <IconPlayerStopFilled className="size-3" />
+            Stop the office
+          </button>
         )}
-      </section>
-      <section aria-label="Conversation" className="flex min-w-0 grow flex-col">
+        <button
+          aria-label="Close the team panel"
+          title="Close (Ctrl+J)"
+          onClick={hideTeam}
+          className="flex size-7 items-center justify-center rounded-md text-ink-3 hover:bg-selected hover:text-ink"
+        >
+          <IconX className="size-4" stroke={1.75} />
+        </button>
+      </div>
+      <div role="tablist" aria-label="Conversations" className="flex shrink-0 gap-0.5 overflow-x-auto border-b border-line px-2 pt-2">
+        {active.map((m) => (
+          <Tab key={m.id} on={channel === m.id} label={m.name} onClick={() => showTeam(m.id)}>
+            <span className="relative">
+              <Face id={m.id} size={28} />
+              {asking.has(m.id) ? (
+                <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-attention ring-2 ring-white" />
+              ) : m.now ? (
+                <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-approved ring-2 ring-white" />
+              ) : null}
+            </span>
+            {firstName(m)}
+          </Tab>
+        ))}
+        <Tab on={channel === TEAM} label="Team room" onClick={() => showTeam(TEAM)}>
+          <span className="flex size-7 items-center justify-center rounded-full bg-selected text-ink-2">
+            <IconHash className="size-4" stroke={1.75} />
+          </span>
+          Team room
+        </Tab>
+      </div>
+      {office.data && active.length === 0 && (
+        <p className="px-5 pt-4 leading-normal text-ink-3">
+          The Tender Manager joins when you first write to the office, and hires the team the tender needs.
+        </p>
+      )}
+      <section aria-label="Conversation" className="flex min-h-0 grow flex-col">
         <Conversation
+          key={channel}
           tenderId={tenderId}
           channel={channel}
           staff={staff}
           title={channel === TEAM ? "Team room" : (staff.find((m) => m.id === channel)?.name ?? "")}
-          working={office.data?.state === "working"}
           notice={
             office.data?.state === "paused"
               ? (office.data.notice ?? "The office is stopped. Send a message to carry on.")
               : null
           }
-          onPerson={(id) => setParams({ ...(channel === TEAM ? {} : { with: channel }), person: id })}
+          onPerson={showPerson}
         />
       </section>
       {person && (
         <Profile
           tenderId={tenderId}
           member={person}
-          onMessage={channel === person.id ? undefined : () => setParams({ with: person.id })}
-          onClose={() => setParams(channel === TEAM ? {} : { with: channel })}
+          onMessage={channel === person.id ? undefined : () => showTeam(person.id)}
+          onClose={() => showPerson(null)}
         />
       )}
-    </div>
+    </aside>
   );
 }
 
-function Thread(props: { label: string; member?: Staff; on: boolean; onClick: () => void }) {
+function Tab(props: { on: boolean; label: string; onClick: () => void; children: ReactNode }) {
   return (
     <button
+      role="tab"
+      aria-selected={props.on}
+      aria-label={props.label}
+      title={props.label}
       onClick={props.onClick}
-      className={`flex items-center gap-2.5 rounded-md px-2 py-[7px] text-left ${props.on ? "bg-selected font-semibold" : "hover:bg-rail"}`}
+      className={`flex min-w-[62px] shrink-0 flex-col items-center gap-1 rounded-t-md px-1.5 pt-1 pb-2 text-xs whitespace-nowrap ${props.on ? "font-semibold text-ink shadow-[inset_0_-2px_0_var(--color-ink)]" : "text-ink-3 hover:bg-rail hover:text-ink"}`}
     >
-      {props.member ? (
-        <Face id={props.member.id} size={22} />
-      ) : (
-        <span className="flex size-[22px] items-center justify-center rounded-md bg-selected text-xs font-semibold text-ink-2">
-          #
-        </span>
-      )}
-      <span className="grow truncate">{props.label}</span>
+      {props.children}
     </button>
   );
 }
@@ -100,7 +136,6 @@ export function Conversation(props: {
   channel: string;
   staff: Staff[];
   title: string;
-  working: boolean;
   notice?: string | null; // why the office is stopped, shown above the message box
   onPerson: (id: string) => void;
 }) {
@@ -110,7 +145,6 @@ export function Conversation(props: {
   const turns = useTurns(props.tenderId, direct);
   const decisions = useDecisions(props.tenderId);
   const send = useSend(props.tenderId);
-  const stop = useStop(props.tenderId);
   const [draft, setDraft] = useState("");
   const [technical, setTechnical] = useState(false);
   const end = useRef<HTMLDivElement>(null);
@@ -141,29 +175,18 @@ export function Conversation(props: {
 
   return (
     <>
-      <div className="flex items-end justify-between border-b border-line px-8 pt-7 pb-3.5">
-        <div className="flex flex-col gap-1">
-          <h2 className="text-[17px] font-semibold">{props.title}</h2>
-          <span className="text-ink-3">
-            {props.channel === TEAM ? (
-              "Everything the team says to each other. Only real messages appear here."
-            ) : (
-              <>
-                Your direct conversation ·{" "}
-                <button onClick={() => props.onPerson(props.channel)} className="text-ink-2 hover:text-ink">
-                  About {props.title.split(" ")[0]}
-                </button>
-              </>
-            )}
-          </span>
-        </div>
-        {props.working && (
-          <button onClick={() => stop.mutate()} className="text-ink-2 hover:text-ink">
-            Stop the office
+      <div className="flex items-baseline gap-2 border-b border-line px-5 py-2.5">
+        <h2 className="truncate font-semibold">{props.title}</h2>
+        <span className="grow truncate text-ink-3">
+          {props.channel === TEAM ? "What the team says to each other" : people.get(props.channel)?.role}
+        </span>
+        {props.channel !== TEAM && (
+          <button onClick={() => props.onPerson(props.channel)} className="shrink-0 text-ink-2 hover:text-ink">
+            About {props.title.split(" ")[0]}
           </button>
         )}
       </div>
-      <div className="flex min-h-0 grow flex-col gap-[18px] overflow-y-auto px-8 py-5">
+      <div className="flex min-h-0 grow flex-col gap-[18px] overflow-y-auto px-5 py-4">
         {count === 0 && messages.data && turns.data && <p className="text-ink-3">No messages yet.</p>}
         {groups.map((group) =>
           group.author === null ? (
@@ -191,7 +214,7 @@ export function Conversation(props: {
         {props.staff.some((m) => m.is_manager && m.id === props.channel) && <WaitingForYou tenderId={props.tenderId} />}
         <div ref={end} />
       </div>
-      <form onSubmit={submit} className="px-8 pt-3.5 pb-6">
+      <form onSubmit={submit} className="px-4 pt-3 pb-4">
         {props.notice && <p className="pb-2.5 text-[13px] text-attention">{props.notice}</p>}
         <div className="flex items-center gap-2 rounded-xl border border-line-strong py-1.5 pr-1.5 pl-3.5 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
           <input
@@ -239,7 +262,7 @@ function clock(at: string): string {
 
 function Aside({ message }: { message: Message }) {
   return (
-    <div className="flex items-center gap-2 pl-10 text-ink-3">
+    <div className="flex items-center gap-2 pl-9 text-ink-3">
       <IconArrowRight className="size-3.5 shrink-0" stroke={1.75} />
       <span className="grow">{message.text}</span>
       <span className="text-xs">{clock(message.created_at)}</span>
@@ -252,7 +275,7 @@ function Block(props: { author: string; person?: Staff; at: string; onPerson: (i
   const { person } = props;
   const mine = props.author === ENGINEER;
   return (
-    <div className="flex gap-3">
+    <div className="flex gap-2.5">
       {person ? (
         <button onClick={() => props.onPerson(person.id)} aria-label={`About ${person.name}`} className="self-start">
           <Face id={person.id} size={28} />
@@ -262,7 +285,7 @@ function Block(props: { author: string; person?: Staff; at: string; onPerson: (i
           {mine ? "You" : "?"}
         </span>
       )}
-      <div className="flex max-w-[640px] min-w-0 grow flex-col gap-2">
+      <div className="flex min-w-0 grow flex-col gap-2">
         <span>
           <span className="font-semibold">{mine ? "You" : person ? firstName(person) : "Office"}</span>{" "}
           <span className="text-ink-3">
@@ -361,7 +384,7 @@ function WaitingForYou({ tenderId }: { tenderId: string }) {
     <div
       role="group"
       aria-label="Waiting for your approval"
-      className="ml-10 flex max-w-[640px] flex-col gap-1 rounded-xl border border-line-strong px-4 py-3"
+      className="ml-9 flex flex-col gap-1 rounded-xl border border-line-strong px-4 py-3"
     >
       <span className="pb-1 text-xs font-semibold text-ink-2">Waiting for your approval</span>
       {approvals.map((a) => (
@@ -373,6 +396,11 @@ function WaitingForYou({ tenderId }: { tenderId: string }) {
       ))}
     </div>
   );
+}
+
+/** A generated profile field worth showing: words, not a placeholder such as "Character_Overview". */
+function written(text: string | number | undefined): boolean {
+  return typeof text === "string" && /\s/.test(text.trim());
 }
 
 /** Who someone is, over the chat until the engineer closes it (Close or Esc) or messages them. */
@@ -394,17 +422,25 @@ function Profile(props: {
   return (
     <aside
       aria-label={member.name}
-      className="absolute inset-y-0 right-0 z-10 flex w-[340px] flex-col gap-5 overflow-y-auto border-l border-line bg-white px-6 pt-7 pb-6 shadow-[-8px_0_24px_rgba(0,0,0,0.08)]"
+      className="absolute inset-0 z-10 flex flex-col gap-5 overflow-y-auto bg-white px-6 pt-6 pb-6"
     >
       <div className="flex items-center gap-3.5">
         <Face id={member.id} size={56} />
-        <div className="flex flex-col gap-0.5">
+        <div className="flex grow flex-col gap-0.5">
           <span className="text-[17px] font-semibold">{member.name}</span>
           <span className="text-ink-2">
             {member.role}
             {p.experience_years ? ` · ${p.experience_years} years` : ""}
           </span>
         </div>
+        <button
+          aria-label="Close the profile"
+          title="Close (Esc)"
+          onClick={onClose}
+          className="flex size-7 shrink-0 items-center justify-center self-start rounded-md text-ink-3 hover:bg-selected hover:text-ink"
+        >
+          <IconX className="size-4" stroke={1.75} />
+        </button>
       </div>
       {[
         ["Background", p.background],
@@ -412,7 +448,7 @@ function Profile(props: {
         ["What they believe", p.opinions],
         ["Now", member.status === "released" ? "Released from this tender" : (member.now ?? "Idle")],
       ].map(([label, text]) =>
-        text ? (
+        (label === "Now" ? text : written(text)) ? (
           <div key={label as string} className="flex flex-col gap-1.5">
             <span className="text-xs font-semibold text-ink-2">{label}</span>
             <span className="leading-normal text-[#27272A]">{text}</span>

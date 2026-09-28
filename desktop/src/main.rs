@@ -4,6 +4,7 @@
 use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, Manager, Url, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_window_state::StateFlags;
 
 fn main() {
     tauri::Builder::default()
@@ -14,7 +15,12 @@ fn main() {
                 let _ = window.set_focus();
             }
         }))
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // size, place and maximised; never the frame, which Quantix draws itself
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED)
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let config = app.config().app.windows[0].clone();
@@ -42,7 +48,10 @@ fn main() {
 /// A web page or an email address, which belongs in the engineer's own browser or mail program, not in Quantix.
 fn outside(url: &Url) -> bool {
     match url.scheme() {
-        "http" | "https" => !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "tauri.localhost")),
+        "http" | "https" => !matches!(
+            url.host_str(),
+            Some("localhost" | "127.0.0.1" | "tauri.localhost")
+        ),
         "mailto" => true,
         _ => false,
     }
@@ -62,7 +71,11 @@ fn quiet(window: &WebviewWindow) {
     use windows_core::Interface;
 
     let _ = window.with_webview(|webview| unsafe {
-        let Ok(settings) = webview.controller().CoreWebView2().and_then(|core| core.Settings()) else {
+        let Ok(settings) = webview
+            .controller()
+            .CoreWebView2()
+            .and_then(|core| core.Settings())
+        else {
             return;
         };
         if let Ok(settings) = settings.cast::<ICoreWebView2Settings3>() {

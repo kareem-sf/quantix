@@ -18,6 +18,7 @@ export function useOffice(tenderId: string) {
     queryKey: ["office", tenderId],
     queryFn: async () => must(await api.GET("/tenders/{tender_id}/office", { params: { path: { tender_id: tenderId } } })),
     refetchInterval: LIVE,
+    enabled: Boolean(tenderId),
   });
 }
 

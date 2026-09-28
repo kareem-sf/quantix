@@ -1,4 +1,4 @@
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { BoqItem } from "../estimate/queries";
@@ -106,8 +106,8 @@ describe("Overview and decisions", () => {
       "/tenders/t1/estimate?show=waiting",
     );
     expect(within(screen.getByRole("navigation", { name: "Quantix" })).getByLabelText("1 decision needs you")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /Team room/ }));
-    await screen.findByText(/Everything the team says to each other/);
+    await userEvent.click(screen.getByRole("tab", { name: "Team room" }));
+    await screen.findByText("What the team says to each other");
     expect(screen.queryByRole("group", { name: "Waiting for your approval" })).not.toBeInTheDocument();
   });
 
@@ -157,11 +157,13 @@ describe("Overview and decisions", () => {
     );
   });
 
-  it("sends the engineer's request to the Manager", async () => {
+  it("sends the engineer's request to the Manager from the team panel", async () => {
     const service = fakeService({ tenders: [tender], settings: ready, staff: [rania] });
     openApp("/tenders/t1");
 
-    await userEvent.type(await screen.findByLabelText("Message the office"), "Review the package{Enter}");
+    await userEvent.click(await screen.findByRole("button", { name: "Open your chat with Rania" }));
+    const panel = screen.getByRole("complementary", { name: "Team" });
+    await userEvent.type(within(panel).getByLabelText("Message"), "Review the package{Enter}");
     await waitFor(() => expect(service.state.messages.at(-1)).toMatchObject({ channel: "s1", text: "Review the package" }));
   });
 });
@@ -185,7 +187,7 @@ describe("Office", () => {
     expect(await within(room).findByText("Check the tender security, please.")).toBeInTheDocument();
     expect(within(room).getByText("Rania asked Omar to find the tender security clause")).toBeInTheDocument();
     expect(within(room).getByText("Raised a concern")).toBeInTheDocument();
-    expect(within(screen.getByRole("navigation", { name: "Quantix" })).getByText("Reviewing Omar's result")).toBeInTheDocument();
+    expect(screen.getByTitle("What the team is doing")).toHaveTextContent("Rania: Reviewing Omar's result");
 
     await userEvent.click(within(room).getByRole("button", { name: "About Omar Haddad" }));
     const profile = await screen.findByRole("complementary", { name: "Omar Haddad" });
@@ -383,7 +385,7 @@ describe("Office", () => {
     const service = fakeService({ tenders: [tender], settings: ready, staff: [rania, omar], officeState: "working" });
     openApp("/tenders/t1/office");
 
-    await userEvent.click(await screen.findByRole("button", { name: "Omar Haddad" }));
+    await userEvent.click(await screen.findByRole("tab", { name: "Omar Haddad" }));
     await userEvent.type(screen.getByLabelText("Message"), "Use the BOQ units{Enter}");
     await waitFor(() => expect(service.state.messages.at(-1)).toMatchObject({ channel: "s2", text: "Use the BOQ units" }));
 
@@ -392,8 +394,13 @@ describe("Office", () => {
   });
 
   it("opens a profile only when asked, and closes it or goes to that person's chat", async () => {
-    fakeService({ tenders: [tender], settings: ready, staff: [rania, omar] });
-    const router = openApp("/tenders/t1/office?with=s1");
+    fakeService({
+      tenders: [tender],
+      settings: ready,
+      staff: [rania, omar],
+      messages: [said(1, "s2", "team", "The bond wording is unusual.")],
+    });
+    openApp("/tenders/t1/office?with=s1");
 
     await screen.findByRole("heading", { name: "Rania Farouk" });
     expect(screen.queryByRole("complementary", { name: "Rania Farouk" })).not.toBeInTheDocument();
@@ -408,7 +415,8 @@ describe("Office", () => {
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("complementary", { name: "Rania Farouk" })).not.toBeInTheDocument();
 
-    await act(() => router.navigate("/tenders/t1/office?with=s1&person=s2"));
+    await userEvent.click(screen.getByRole("tab", { name: "Team room" }));
+    await userEvent.click(await screen.findByRole("button", { name: "About Omar Haddad" }));
     const omarCard = await screen.findByRole("complementary", { name: "Omar Haddad" });
     await userEvent.click(within(omarCard).getByRole("button", { name: "Message Omar" }));
     expect(await screen.findByRole("heading", { name: "Omar Haddad" })).toBeInTheDocument();

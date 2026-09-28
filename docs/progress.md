@@ -1044,3 +1044,26 @@ from CAD, and keep their lines.
   interface tests (snapping, crossings, choosing by a box, likeness, words) and 3 screen tests (points on a CAD
   drawing, Enclosed, a PDF drawn in lines).
 
+
+## 29 September 2026: one window, one tender, the team beside it
+
+The engineer called the interface unstructured: every tender and every staff member in the sidebar, two sidebars
+in the Office, lessons and a delete button on the Overview, and a window that behaved like a web page. The audit
+(44 findings) and the agreed structure are in the UI audit artifact; this is its first part, the shell.
+
+- **Title bar.** The window has no Windows frame; Quantix draws its own bar: sidebar, back and forward, where the
+  engineer is, Search (Ctrl+K), what the team is doing, what needs them, the Team button and its own minimise,
+  maximise and close. Drag it to move the window, double-click it to maximise (`desktop/capabilities`).
+- **Sidebar.** One tender at a time: a switcher lists the others, soonest due first, with what waits in each, and
+  switching goes back to the screen last open in that tender. Each screen counts what waits there. The firm's
+  library, directory, rules and details sit under Company; Settings is only settings. Ctrl+B folds it to icons,
+  and Takeoff folds it, and closes the team, to give the drawing room.
+- **Team panel.** The Office screen became a panel beside any screen (Team or Ctrl+J): faces across the top for
+  the Tender Manager, each person and the team room, the conversation, and a profile that opens over it and closes
+  with its X, Close or Esc. The Overview's own message box is gone; before the Manager joins, it offers "Write to
+  the office". Old links to `/office` open the panel.
+- **Keyboard.** Ctrl+K searches tenders, screens, people and actions; Ctrl+1 to Ctrl+7 open the tender's screens;
+  Alt+Left and Alt+Right go back and forward.
+- **Where the engineer was.** Quantix reopens on the last tender and screen.
+- **Checks:** 5 new shell tests and the Office tests moved to the panel; walked through in the desktop window
+  (switching tenders, the panel and profile, Ctrl+K, maximise, double-click and drag, Takeoff folding, Alt+Left).
