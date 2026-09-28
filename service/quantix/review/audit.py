@@ -61,9 +61,31 @@ def findings(session: Session, home: Path, tender_id: str) -> list[Finding]:
 
 
 def open_findings(session: Session, home: Path, tender_id: str) -> list[Finding]:
-    """The blockers, and the warnings the Manager hasn't accepted."""
+    """The blockers, and the warnings nobody has settled: the Manager's reason settles a warning on the office's own
+    work; one on work the engineer approved only the engineer's answer settles."""
     settled = reviews.accepted(session, tender_id)
-    return [f for f in findings(session, home, tender_id) if f.severity == BLOCKER or f.key not in settled]
+    theirs = _engineers(session, home, tender_id)
+    return [
+        f
+        for f in findings(session, home, tender_id)
+        if f.severity == BLOCKER
+        or (f.key in theirs and not theirs[f.key])
+        or (f.key not in theirs and f.key not in settled)
+    ]
+
+
+def _engineers(session: Session, home: Path, tender_id: str) -> dict[str, bool]:
+    """The warnings on work the engineer approved, each with whether the engineer has answered it."""
+    answered = set(
+        session.scalars(
+            select(Decision.subject_id).where(Decision.tender_id == tender_id, Decision.status == "answered")
+        )
+    )
+    return {
+        f.key: record.id in answered
+        for _, record, f in _checked(session, home, tender_id)
+        if record.status == "approved" and f.severity == WARNING
+    }
 
 
 def _plural(n: int, one: str, many: str) -> str:
@@ -270,13 +292,13 @@ def _checked(session: Session, home: Path, tender_id: str) -> list[tuple[str, An
 
 def approved_problems(session: Session, home: Path, tender_id: str) -> list[tuple[str, Finding]]:
     """Problems in work the engineer approved that nobody has brought to them yet, each with the reference to
-    escalate it by. Only the engineer can reopen approved work, so the Tender Manager puts each to them."""
-    settled = reviews.accepted(session, tender_id)
+    escalate it by. Only the engineer can reopen approved work, so the Tender Manager puts each to them; his own
+    acceptance doesn't settle it."""
     asked = set(session.scalars(select(Decision.subject_id).where(Decision.tender_id == tender_id)))
     return [
         (f"{kind} {record.id[:8]}", f)
         for kind, record, f in _checked(session, home, tender_id)
-        if record.status == "approved" and record.id not in asked and f.key not in settled
+        if record.status == "approved" and record.id not in asked
     ]
 
 
@@ -301,11 +323,17 @@ def accept(session: Session, home: Path, tender_id: str, manager: Staff, accepte
     """Keep the Manager's reasons for the warnings he accepts. Returns what couldn't be accepted."""
     warnings = {short(f.key): f for f in open_findings(session, home, tender_id) if f.severity == WARNING}
     listed = "; ".join(f"{name} ({f.message[:70]})" for name, f in warnings.items()) or "none"
+    theirs = {f.key: ref for ref, f in approved_problems(session, home, tender_id)}
     problems = []
     for a in accepted:
         finding = _named(a.finding, warnings)
         if finding is None:
             problems.append(f"{a.finding}: no open warning has that name. The open warnings are: {listed}")
+        elif finding.key in theirs or finding.key in _engineers(session, home, tender_id):
+            problems.append(
+                f"{a.finding}: it is in work the engineer approved, so it is theirs to decide, not yours to accept. "
+                f"Escalate it ({theirs.get(finding.key, 'the approved work')}) with your recommended correction first."
+            )
         elif len(a.reason.split()) < 3:
             problems.append(f"{a.finding}: say why it needs no correction")
         else:

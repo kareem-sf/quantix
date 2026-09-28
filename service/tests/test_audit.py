@@ -241,8 +241,16 @@ def test_the_manager_puts_a_problem_in_approved_work_to_the_engineer_who_decides
     tender_id, rania_id, docs = tender
     markups_id = markups_before_programme(client, tender_id, docs)
     ref = f"markups {markups_id[:8]}"
+    home = client.app.state.home
     with client.app.state.sessions() as session:
-        assert ref in [r for r, _ in audit.approved_problems(session, client.app.state.home, tender_id)]
+        [(_, problem_found)] = [(r, f) for r, f in audit.approved_problems(session, home, tender_id) if r == ref]
+        # on the real tender he accepted it himself, calling the site staff a fixed allowance: it isn't his to settle
+        fixed = audit.Accepted(finding=audit.short(problem_found.key), reason="It is a fixed site support allowance.")
+        [refused] = audit.accept(session, home, tender_id, session.get(Staff, rania_id), [fixed])
+        assert (
+            f"it is in work the engineer approved, so it is theirs to decide, not yours to accept. Escalate it ({ref})"
+            in refused
+        )
         correction = "Price the site engineer and foreman for 2 months, the programme's 40 working days."
         where = [reviews.Source(boq_item="3.1", what="the excavation that sets the programme")]
         problem = "Site staff are priced for 4 months, but the approved programme is 40 working days."
