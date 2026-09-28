@@ -280,6 +280,27 @@ def test_the_drawing_checks_find_what_to_look_at(client, flat):
     assert not any("Windows and glazing" in m for m in unmeasured)  # measured
 
 
+def test_a_symbol_drawn_as_loose_lines_is_found(client):
+    """A door drawn as loose lines instead of the door block (exploded), turned a quarter, is found; a lone line of
+    the same length as the door's leaf is not."""
+    exploded = [
+        {"type": "line", "layer": "A-DOOR", "from": [1000, 5000], "to": [1000, 5900]},
+        {"type": "arc", "layer": "A-DOOR", "centre": [1000, 5000], "radius": 900, "start": 90, "end": 180},
+        {"type": "line", "layer": "A-DOOR", "from": [7000, 6000], "to": [7900, 6000]},
+    ]
+    tender_id = client.post("/tenders", json={"name": "Synthetic flat"}).json()["id"]
+    upload(client, tender_id, {"A-101.dwg": make_drawing(plan(exploded))})
+    drawing = read_all(client, tender_id)["A-101.dwg"]["id"]
+    approve_map(client, tender_id, drawing)
+    problems = client.get(f"/tenders/{tender_id}/checks?document_id={drawing}").json()
+    loose = [p for p in problems if "drawn as loose lines" in p["message"]]
+    assert [p["message"] for p in loose] == [
+        "1 copy of DOOR-900 (doors) in A-101.dwg is drawn as loose lines, not as the block, so a count of DOOR-900 "
+        "misses it."
+    ]
+    assert len(loose[0]["objects"]) == 2
+
+
 def test_the_boq_checks(client, flat):
     tender_id, drawing, _ = flat
     client.post(f"/tenders/{tender_id}/units", json={"document_id": drawing, "units": "millimetres"})

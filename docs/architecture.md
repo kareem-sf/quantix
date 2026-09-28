@@ -235,7 +235,9 @@ count from the geometry and scale. Measurements link to BOQ items, and Quantix c
   couldn't be read (3D solids, images, proxies, undecoded records, unloaded xrefs), layers that
   don't print but hold objects, lines drawn twice, written dimensions that disagree with the drawn length, drawn
   work the map calls work that no measurement takes, room names in no closed room, services crossing fire-rated
-  walls, grids that differ between drawings, and the BOQ's own lines billed twice, provisional and prime cost sums,
+  walls, copies of counted blocks (doors, windows, columns, sanitary fittings, fixtures) drawn as loose lines
+  instead of the block, matched by the types and lengths of the block's parts and its size at any position or
+  turn, grids that differ between drawings, and the BOQ's own lines billed twice, provisional and prime cost sums,
   measured lines without a quantity, odd units and lines not on the drawings. Drawing measurements get their own
   record checks: objects no longer in the drawing (blocker), the same object measured twice for a BOQ line
   (blocker), the same sheet measured in another format, and objects on layers that don't print. The audit warns on

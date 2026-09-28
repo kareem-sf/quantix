@@ -67,6 +67,11 @@ PRICED = {
     "landscape",
 }
 WORDS = {"Text", "MText", "Attribute", "Dimension", "Table", "MultiLeader", "Leader"}
+# Work counted by its copies: a copy drawn as loose lines instead of the block is missed by the count
+COUNTED = {"doors", "windows", "columns", "sanitary", "fixtures"}
+SYMBOL_TYPES = {"Line", "Arc", "Circle", "Ellipse", "Polyline", "Spline", "Hatch", "Solid"}
+MAX_SYMBOL_PARTS = 60  # a block with more parts than this is a drawing in itself, not a symbol to look for
+LENGTH_SLACK = 0.005  # a loose part within 0.5% of a block part's length matches it
 MIN_ROOM_M2 = 1.0  # a closed region smaller than this is not a room
 MIN_ROOM_WIDTH_M = 0.5  # nor one thinner than this: the space inside a wall between its faces
 WALL_SPACING_M = (0.05, 0.6)  # plausible distances between the two faces of a wall
@@ -580,6 +585,7 @@ def drawing_problems(session: Session, home: Path, document: Document) -> list[P
         found += _written_dimensions(d, space, document, tag)
     found += _unmeasured(session, home, document, d, tag)
     found += _room_names(session, home, document, d, tag)
+    found += _loose_symbols(session, document, d, tag)
     found += _crossings(session, document, d, tag)
     for problem in found:
         problem.document_id = document.id
@@ -722,6 +728,124 @@ def _in_mapped_block(d: cad.Drawing, i: int, known: Meanings) -> bool:
             return True
         parent = d.parent(parent)
     return False
+
+
+def _loose_symbols(session: Session, document: Document, d: cad.Drawing, tag: str) -> list[Problem]:
+    """Copies of a counted block drawn as loose lines instead of the block (an exploded door, say): a count of the
+    block misses them. A block's shape is taken from a copy of it, as the types and lengths of its parts and its
+    size; loose objects match it at any position or turn, at the scales the block is placed at."""
+    known = meanings(session, document.tender_id)
+    if not known.layers and not known.blocks:
+        return []
+    found = []
+    for space in d.spaces:
+        if space.kind != "model":
+            continue
+        loose = _loose_objects(d, space.number)
+        used: set[int] = set()
+        for block, meaning, copy, scales in _counted_blocks(d, space.number, known):
+            copies = _loose_copies(d, copy, scales, loose, used)
+            if not copies:
+                continue
+            n = len(copies)
+            found.append(
+                Problem(
+                    f"drawing-loose:{tag}:{block}",
+                    "warning",
+                    f"{n} {'copy' if n == 1 else 'copies'} of {block} ({MEANINGS[meaning].lower()}) in "
+                    f"{document.name} {'is' if n == 1 else 'are'} drawn as loose lines, not as the block, so a count "
+                    f"of {block} misses {'it' if n == 1 else 'them'}.",
+                    space.number,
+                    [d.keys[i] for group in copies for i in group][:50],
+                )
+            )
+    return found
+
+
+def _loose_objects(d: cad.Drawing, page: int) -> np.ndarray:
+    """The drawn objects of a page that sit in no symbol: lines, arcs, outlines and the like drawn in the space, or
+    in a block the size of a drawing (a plan bound into this one)."""
+    shapes = np.array([t not in WORDS and t not in ("Insert", "Viewport") for t in d.types])
+    parents = d.index[:, 7].astype(np.int64) - 1
+    children = np.bincount(parents[parents >= 0], minlength=len(d.index))
+    in_drawing = (parents < 0) | (children[np.maximum(parents, 0)] > MAX_SYMBOL_PARTS)
+    mask = (d.index[:, 0] == page) & ((d.index[:, 6] & (cad.ANNOTATION | cad.DERIVED)) == 0) & in_drawing
+    return np.flatnonzero(mask & shapes[d.index[:, 1]] & (d.num[:, 4] > 0))
+
+
+def _counted_blocks(d: cad.Drawing, page: int, known: Meanings) -> list[tuple[str, str, int, list[float]]]:
+    """Each block counted by its copies on a page: its name, meaning, one single copy of it, and the scales its
+    copies are placed at."""
+    found: dict[str, tuple[str, int]] = {}
+    scales: dict[str, set[float]] = defaultdict(set)
+    for i, placed in d.placed.items():
+        if d.index[i, 0] != page or placed.copies != 1:
+            continue
+        meaning = meaning_of(known.blocks, placed.block) or meaning_of(known.layers, d.layer_of(i))
+        if meaning not in COUNTED:
+            continue
+        found.setdefault(placed.block, (meaning, i))
+        scales[placed.block].add(round(abs(placed.scale[0]), 4))
+    return [(block, meaning, i, sorted(scales[block])) for block, (meaning, i) in found.items()]
+
+
+def _loose_copies(d: cad.Drawing, copy: int, scales: list[float], loose: np.ndarray, used: set[int]) -> list[list[int]]:
+    """Groups of loose objects shaped like the block `copy` shows: the same types and lengths, as far apart."""
+    parts = [
+        int(i)
+        for i in np.flatnonzero(d.index[:, 7] == copy + 1)
+        if d.type_of(int(i)) in SYMBOL_TYPES and not d.flags(int(i)) & cad.ANNOTATION and d.length(int(i)) > 0
+    ]
+    if not 2 <= len(parts) <= MAX_SYMBOL_PARTS or (len(parts) < 3 and all(d.type_of(i) == "Line" for i in parts)):
+        return []  # a line or two is no shape to find
+    own_scale = abs(d.placed[copy].scale[0]) or 1.0
+    shape = [(int(d.index[i, 1]), d.length(i) / own_scale) for i in parts]
+    size = _span(d, parts) / own_scale
+    types, lengths = d.index[loose, 1], d.num[loose, 4]
+    centres = (d.num[loose, :2] + d.num[loose, 2:4]) / 2
+
+    def like(kind: int, length: float) -> np.ndarray:
+        return (types == kind) & (np.abs(lengths - length) <= LENGTH_SLACK * length)
+
+    groups: list[list[int]] = []
+    for scale in scales:
+        # start from the part fewest loose objects look like
+        anchor = min(range(len(shape)), key=lambda k: int(like(shape[k][0], shape[k][1] * scale).sum()))
+        for a in np.flatnonzero(like(shape[anchor][0], shape[anchor][1] * scale)):
+            if int(loose[a]) in used:
+                continue
+            near = np.flatnonzero(np.hypot(*(centres - centres[a]).T) <= size * scale * 1.05)
+            group = [int(loose[a])]
+            for k, (kind, length) in enumerate(shape):
+                if k == anchor:
+                    continue
+                match = next(
+                    (
+                        int(loose[j])
+                        for j in near
+                        if int(loose[j]) not in used
+                        and int(loose[j]) not in group
+                        and types[j] == kind
+                        and abs(lengths[j] - length * scale) <= LENGTH_SLACK * length * scale
+                    ),
+                    None,
+                )
+                if match is None:
+                    break
+                group.append(match)
+            else:
+                if abs(_span(d, group) - size * scale) <= 0.02 * size * scale:
+                    groups.append(group)
+                    used.update(group)
+    return groups
+
+
+def _span(d: cad.Drawing, objects: list[int]) -> float:
+    """The greatest distance between two points of the objects: their size, whichever way they turn."""
+    points = np.vstack([part for i in objects for part in d.parts(i)])
+    if len(points) > 400:
+        points = points[np.linspace(0, len(points) - 1, 400).astype(int)]
+    return float(np.max(np.hypot(*(points[:, None, :] - points[None, :, :]).transpose(2, 0, 1))))
 
 
 def _room_names(session: Session, home: Path, document: Document, d: cad.Drawing, tag: str) -> list[Problem]:
