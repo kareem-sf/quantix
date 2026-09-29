@@ -90,7 +90,8 @@ describe("Pricing", () => {
     expect(within(panel).getByText("3,488.00")).toBeInTheDocument();
     expect(within(panel).getByText("From a quote")).toBeInTheDocument();
     expect(within(panel).getByRole("link", { name: "Quote.pdf, page 1" })).toBeInTheDocument();
-    expect(screen.getByText("SAR 98,012.80")).toBeInTheDocument();
+    expect(screen.getAllByText("SAR 118,927.17")).toHaveLength(2); // the tender total, atop the BOQ and on its totals bar
+    expect(screen.getByRole("button", { name: /^Net 98,012.80/ })).toHaveTextContent("Preliminaries 7,841.02");
 
     await userEvent.click(within(panel).getByLabelText("Save to the company library"));
     await userEvent.click(within(panel).getByRole("button", { name: "Approve rate" }));

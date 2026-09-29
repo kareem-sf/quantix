@@ -452,7 +452,13 @@ def test_the_engineer_keeps_a_lesson_as_a_company_rule_or_drops_it(client, offic
     unit, method = client.get(f"/tenders/{tender_id}/lessons").json()
     assert (unit["text"], unit["topic"], unit["source"], unit["status"]) == (UNIT, "BOQ", "BOQ item 4.2", "tender")
     assert (method["topic"], method["source"]) == ("Tender facts", "the method of measurement")
+    suggested = client.get("/lessons").json()  # every tender's, for Company rules, newest first
+    assert [(lesson["text"], lesson["tender_name"]) for lesson in suggested] == [
+        (METHOD, "Synthetic school"),
+        (UNIT, "Synthetic school"),
+    ]
     assert client.patch(f"/lessons/{unit['id']}", json={"status": "kept"}).json()["status"] == "kept"
+    assert [lesson["text"] for lesson in client.get("/lessons").json()] == [METHOD]  # kept: a rule now
     assert [(r["topic"], r["text"]) for r in client.get("/rules").json()] == [("BOQ", UNIT)]
     assert client.patch(f"/lessons/{method['id']}", json={"status": "dropped"}).status_code == 200
     assert [lesson["status"] for lesson in client.get(f"/tenders/{tender_id}/lessons").json()] == ["kept"]

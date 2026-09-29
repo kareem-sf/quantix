@@ -5225,6 +5225,54 @@
         }
       }
     },
+    "/lessons": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "summary": "Suggested Lessons",
+        "description": "What the office learned on every tender and the engineer hasn't kept or dropped: suggested company rules.",
+        "operationId": "suggested_lessons_lessons_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LessonOut"
+                  },
+                  "title": "Response Suggested Lessons Lessons Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/lessons/{lesson_id}": {
       "patch": {
         "tags": [
@@ -7192,6 +7240,17 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "tender_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tender Name"
           }
         },
         "type": "object",

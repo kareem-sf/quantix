@@ -9,7 +9,7 @@ import { Prose, tidy } from "../office/Prose";
 import { firstName, useMessages, useOffice } from "../office/queries";
 import { useShell } from "../app/context";
 import { Opening } from "../app/Opening";
-import { useAudit, useDecideLesson, useLessons } from "../review/queries";
+import { useAudit, type Finding } from "../review/queries";
 import { dueSentence, dueSource, type DueSource as DueSourceOut } from "./due";
 import { useNeedsYou } from "./needsYou";
 import { usePackages } from "../subcontract/queries";
@@ -135,7 +135,6 @@ export function Overview() {
         </div>
       )}
       {current.length > 0 && <Audit tenderId={tenderId} />}
-      <Lessons tenderId={tenderId} />
     </div>
   );
 }
@@ -170,81 +169,53 @@ function Audit({ tenderId }: { tenderId: string }) {
         </p>
       )}
       <ul className="flex flex-col">
-        {[...blockers, ...warnings, ...accepted].map((f, n) => (
-          <li key={n} className="flex gap-3 border-t border-line px-1 py-2.5 leading-normal">
-            <span
-              className={`mt-[7px] size-[7px] shrink-0 rounded-full ${f.severity === "blocker" ? "bg-attention" : f.reason ? "bg-approved" : "bg-ink-4"}`}
-            />
-            <span className="flex min-w-0 flex-col gap-0.5">
-              <span className={f.reason ? "text-ink-2" : ""}>{f.message}</span>
-              {f.refs.map((r) =>
-                r.document_id ? (
-                  <Link
-                    key={r.label}
-                    to={`/tenders/${tenderId}/documents?doc=${r.document_id}&page=${r.page}`}
-                    className="self-start text-ink-3 underline underline-offset-4"
-                  >
-                    {r.label}
-                  </Link>
-                ) : null,
-              )}
-              {f.reason && (
-                <span className="text-ink-3">
-                  Accepted by {f.accepted_by ?? "the Manager"}: {f.reason}
-                </span>
-              )}
-            </span>
-          </li>
+        {[...blockers, ...warnings].map((f, n) => (
+          <AuditLine key={n} tenderId={tenderId} finding={f} />
         ))}
       </ul>
+      {accepted.length > 0 && (
+        <details className="group border-t border-line">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 px-1 py-2.5 text-ink-3 hover:text-ink">
+            <IconChevronRight className="size-4 transition-transform group-open:rotate-90" stroke={1.75} />
+            {accepted.length} {accepted.length === 1 ? "warning" : "warnings"} accepted by the office, with the reason
+          </summary>
+          <ul className="flex flex-col">
+            {accepted.map((f, n) => (
+              <AuditLine key={n} tenderId={tenderId} finding={f} />
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   );
 }
 
-/** What the Manager learned from work that needed correcting. The office follows it on this tender; the engineer can
- * keep it as a company rule for later tenders, or drop it. */
-function Lessons({ tenderId }: { tenderId: string }) {
-  const lessons = useLessons(tenderId);
-  const decide = useDecideLesson(tenderId);
-  if (!lessons.data?.length) return null;
+function AuditLine({ tenderId, finding: f }: { tenderId: string; finding: Finding }) {
   return (
-    <div className="mt-9 flex flex-col">
-      <h2 className="pb-2 font-semibold text-ink-2">What the office learned</h2>
-      <p className="px-1 pb-2 text-ink-2">From work that needed correcting. Everyone on this tender follows them.</p>
-      <ul className="flex flex-col">
-        {lessons.data.map((lesson) => (
-          <li key={lesson.id} className="flex items-start gap-4 border-t border-line px-1 py-2.5 leading-normal">
-            <span className="flex min-w-0 grow flex-col gap-0.5">
-              <span dir="auto">{lesson.text}</span>
-              <span className="text-ink-3">From {lesson.source}</span>
-            </span>
-            {lesson.status === "kept" ? (
-              <Link to="/rules" className="shrink-0 text-ink-3 hover:text-ink">
-                Kept as a company rule
-              </Link>
-            ) : (
-              <span className="flex shrink-0 gap-3">
-                <button
-                  onClick={() => decide.mutate({ id: lesson.id, status: "kept" })}
-                  disabled={decide.isPending}
-                  className="font-medium text-ink hover:underline"
-                >
-                  Keep for later tenders
-                </button>
-                <button
-                  onClick={() => decide.mutate({ id: lesson.id, status: "dropped" })}
-                  disabled={decide.isPending}
-                  className="text-ink-3 hover:text-ink"
-                >
-                  Drop
-                </button>
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
-      {decide.isError && <p className="px-1 pt-2 text-attention">{decide.error.message}</p>}
-    </div>
+    <li className="flex gap-3 border-t border-line px-1 py-2.5 leading-normal">
+      <span
+        className={`mt-[7px] size-[7px] shrink-0 rounded-full ${f.severity === "blocker" ? "bg-attention" : f.reason ? "bg-approved" : "bg-ink-4"}`}
+      />
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <span className={f.reason ? "text-ink-2" : ""}>{f.message}</span>
+        {f.refs.map((r) =>
+          r.document_id ? (
+            <Link
+              key={r.label}
+              to={`/tenders/${tenderId}/documents?doc=${r.document_id}&page=${r.page}`}
+              className="self-start text-ink-3 underline underline-offset-4"
+            >
+              {r.label}
+            </Link>
+          ) : null,
+        )}
+        {f.reason && (
+          <span className="text-ink-3">
+            Accepted by {f.accepted_by ?? "the Manager"}: {f.reason}
+          </span>
+        )}
+      </span>
+    </li>
   );
 }
 
@@ -288,7 +259,7 @@ function Progress({ tenderId }: { tenderId: string }) {
         <Standing
           to={`/tenders/${tenderId}/estimate`}
           label="Estimate"
-          text={`${summary.priced} of ${summary.items} priced${summary.priced ? ` · ${summary.currency} ${money(summary.total)}` : ""}`}
+          text={`${summary.priced} of ${summary.items} priced${summary.priced ? ` · ${summary.currency} ${money(summary.total)} before VAT` : ""}`}
           done={summary.priced / summary.items}
         />
       )}

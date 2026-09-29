@@ -38,7 +38,7 @@ describe("Overview", () => {
     openApp("/tenders/t1");
 
     expect(await screen.findByText("2 items · 1 approved")).toBeInTheDocument();
-    expect(screen.getByText("1 of 2 priced · SAR 100.00")).toBeInTheDocument();
+    expect(screen.getByText("1 of 2 priced · SAR 100.00 before VAT")).toBeInTheDocument();
   });
 
   it("shows what keeps the tender from release, with the Manager's reason for what he accepted", async () => {
@@ -173,7 +173,7 @@ describe("Overview", () => {
   });
 });
 
-describe("What the office learned", () => {
+describe("What the office learned, as suggested company rules", () => {
   const lesson = (id: string, text: string, source: string) =>
     ({ id, text, topic: "Rates", source, status: "tender", created_at: "2026-09-27T10:00:00Z" }) as const;
   const cubic = "A rate per m3 doesn't fall with a thinner layer: price the cubic metre.";
@@ -187,16 +187,16 @@ describe("What the office learned", () => {
         lesson("l2", "Road lines are laid by machine, several hundred metres an hour.", "the rate for BOQ item C.9.1"),
       ],
     });
-    openApp("/tenders/t1");
+    openApp("/rules");
 
-    expect(await screen.findByRole("heading", { name: "What the office learned" })).toBeInTheDocument();
-    expect(screen.getByText("From the rate for BOQ item C.2.7.3")).toBeInTheDocument();
-    await userEvent.click(screen.getAllByRole("button", { name: "Keep for later tenders" })[0]);
-    expect(await screen.findByRole("link", { name: "Kept as a company rule" })).toHaveAttribute("href", "/rules");
-    expect(service.state.rules.map((r) => [r.topic, r.text])).toEqual([["Rates", cubic]]);
+    const suggested = (await screen.findByText("Suggested by the office")).parentElement!;
+    expect(within(suggested).getByText("Rates · from the rate for BOQ item C.2.7.3 on Synthetic school")).toBeInTheDocument();
+    expect(within(screen.getByRole("navigation", { name: "Quantix" })).getByLabelText("2 suggested rules")).toBeInTheDocument();
+    await userEvent.click(within(suggested).getAllByRole("button", { name: "Keep as a rule" })[0]);
+    await waitFor(() => expect(service.state.rules.map((r) => [r.topic, r.text])).toEqual([["Rates", cubic]]));
+    expect(await screen.findByText(cubic, { selector: "span.grow" })).toBeInTheDocument(); // among the company's rules
 
-    await userEvent.click(screen.getByRole("button", { name: "Drop" }));
-    await waitFor(() => expect(screen.queryByText(/Road lines/)).not.toBeInTheDocument());
-    expect(screen.getByText(cubic)).toBeInTheDocument();
+    await userEvent.click(within(suggested).getByRole("button", { name: "Drop" }));
+    await waitFor(() => expect(screen.queryByText("Suggested by the office")).not.toBeInTheDocument());
   });
 });

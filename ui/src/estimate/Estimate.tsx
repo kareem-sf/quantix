@@ -96,9 +96,9 @@ export function Estimate() {
           <div className="flex items-center gap-3">
             {summary && (
               <span className="flex flex-col items-end gap-0.5">
-                <span className="text-xs whitespace-nowrap text-ink-3">Net, before markups</span>
+                <span className="text-xs whitespace-nowrap text-ink-3">Tender total excl. VAT</span>
                 <span className="text-lg font-semibold">
-                  {summary.currency} {money(summary.net)}
+                  {summary.currency} {money(summary.total)}
                 </span>
               </span>
             )}
@@ -204,9 +204,30 @@ export function Estimate() {
             })}
           </div>
         )}
-        <div className="flex gap-[18px] border-t border-line px-2 py-3 text-xs text-ink-3">
-          Quantix calculates every rate, amount and total from the approved quantities and build-ups.
-        </div>
+        {summary && (
+          <button
+            onClick={() => keep({ view: "summary" })}
+            title="Quantix calculates every rate, amount and total from the approved quantities and build-ups."
+            className="-mx-8 mt-auto flex items-center gap-5 border-t border-line-strong bg-rail px-8 py-3 text-left whitespace-nowrap hover:bg-selected"
+          >
+            {(
+              [
+                ["Net", summary.net],
+                ["Preliminaries", summary.preliminaries],
+                ["Overheads", summary.overheads],
+                ["Profit", summary.profit],
+              ] as const
+            ).map(([label, value]) => (
+              <span key={label} className="text-ink-3 max-lg:hidden">
+                {label} <span className="text-ink-2">{money(value)}</span>
+              </span>
+            ))}
+            <span className="ml-auto font-semibold">
+              <span className="mr-1.5 text-xs font-normal text-ink-3">Tender total excl. VAT</span>
+              {summary.currency} {money(summary.total)}
+            </span>
+          </button>
+        )}
       </section>
       {params.get("view") === "summary" && summary ? (
         <SummaryPanel tenderId={tenderId} summary={summary} markups={estimate.data?.markups ?? null} people={people} />

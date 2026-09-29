@@ -120,6 +120,7 @@ class LessonOut(BaseModel):
     source: str  # the work it came from, e.g. "the rate for BOQ item 3.1"
     status: str  # tender: the office follows it on this tender | kept: a company rule too | dropped
     created_at: datetime
+    tender_name: str | None = None  # in the company's suggested rules, the tender it was learned on
 
 
 class LessonDecision(BaseModel):
@@ -133,6 +134,16 @@ def tender_lessons(tender_id: str, session: DB) -> list[LessonOut]:
         raise HTTPException(status_code=404, detail="Tender not found.")
     found = lessons.lessons(session, tender_id, (lessons.TENDER, lessons.KEPT))
     return [LessonOut.model_validate(lesson) for lesson in found]
+
+
+@router.get("/lessons")
+def suggested_lessons(session: DB) -> list[LessonOut]:
+    """What the office learned on every tender and the engineer hasn't kept or dropped: suggested company rules."""
+    out = []
+    for lesson in lessons.suggested(session):
+        tender = tenders.get_tender(session, lesson.tender_id)
+        out.append(LessonOut.model_validate(lesson).model_copy(update={"tender_name": tender.name if tender else None}))
+    return out
 
 
 @router.patch("/lessons/{lesson_id}")

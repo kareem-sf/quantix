@@ -1,4 +1,4 @@
-import type { DrawingInfo } from "../takeoff/cad";
+import type { DrawingInfo, LayerMap } from "../takeoff/cad";
 
 /** A packed screen copy as the service sends it: a wall line (object 0) along the x axis through the centre, a
  * door's leaf (object 1) above it in red, and the word KITCHEN (object 2). */
@@ -54,4 +54,18 @@ export const drawingInfo: DrawingInfo = {
   ],
   blocks: [],
   meanings: { walls: "Walls" },
+};
+
+/** The office's layer map of A-101.dwg, reviewed by the Tender Manager and waiting for the engineer. */
+export const layerMap: LayerMap = {
+  id: "lm1",
+  document_id: "d3",
+  document_name: "A-101.dwg",
+  layers: { "A-WALL": "walls", "A-FLOR": "floor_finish" },
+  blocks: { "DOOR-900": "doors" },
+  note: "From what each layer holds.",
+  status: "reviewed",
+  proposed_by: "s2",
+  reviewed_by: "s1",
+  review_note: "Checked each layer on the plan.",
 };

@@ -386,6 +386,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     if (path.match(/^\/tenders\/\w+\/review$/)) return json([]);
     if (path.match(/^\/tenders\/\w+\/audit$/)) return json(state.audit);
     if (path.match(/^\/tenders\/\w+\/lessons$/)) return json(state.lessons.filter((l) => l.status !== "dropped"));
+    if (path === "/lessons") return json(state.lessons.filter((l) => l.status === "tender").map((l) => ({ tender_name: state.tenders[0]?.name ?? null, ...l })));
     const lesson = state.lessons.find((l) => path === `/lessons/${l.id}`);
     if (lesson && method === "PATCH") {
       lesson.status = body.status;

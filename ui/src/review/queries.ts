@@ -53,18 +53,13 @@ export function useReopen() {
 
 export type Lesson = components["schemas"]["LessonOut"];
 
-/** What the office learned on the tender from work that needed correcting; the Manager adds them as he reviews. */
-export function useLessons(tenderId: string) {
-  return useQuery({
-    queryKey: ["lessons", tenderId],
-    queryFn: async () =>
-      must(await api.GET("/tenders/{tender_id}/lessons", { params: { path: { tender_id: tenderId } } })),
-    refetchInterval: 2000,
-  });
+/** What the office learned on every tender, not yet kept or dropped: suggested company rules. */
+export function useSuggestedLessons() {
+  return useQuery({ queryKey: ["lessons"], queryFn: async () => must(await api.GET("/lessons")), refetchInterval: 5000 });
 }
 
 /** Keep a lesson as a company rule for later tenders, or drop it. */
-export function useDecideLesson(tenderId: string) {
+export function useDecideLesson() {
   const client = useQueryClient();
   return useMutation({
     mutationFn: async (body: { id: string; status: "kept" | "dropped" }) =>
@@ -76,7 +71,7 @@ export function useDecideLesson(tenderId: string) {
       ),
     onSuccess: () =>
       Promise.all([
-        client.invalidateQueries({ queryKey: ["lessons", tenderId] }),
+        client.invalidateQueries({ queryKey: ["lessons"] }), // this tender's and every tender's
         client.invalidateQueries({ queryKey: ["rules"] }),
       ]),
   });

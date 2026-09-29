@@ -193,8 +193,20 @@ export function Conversation(props: {
             <Aside key={keyOf(group.items[0])} message={(group.items[0] as { message: Message }).message} />
           ) : (
             <Block key={keyOf(group.items[0])} author={group.author} person={people.get(group.author)} at={group.items[0].at} onPerson={props.onPerson}>
-              {group.items.map((item) =>
-                "turn" in item ? (
+              {runs(group.items).map((item) =>
+                Array.isArray(item) ? (
+                  <FoldedTurns key={keyOf(item[0])} count={item.length - 1}>
+                    {item.map((turn) => (
+                      <TurnLog
+                        key={keyOf(turn)}
+                        turn={turn.turn}
+                        name={people.get(turn.turn.staff_id)?.name.split(" ")[0] ?? "Someone"}
+                        technical={technical}
+                        onTechnical={setTechnical}
+                      />
+                    ))}
+                  </FoldedTurns>
+                ) : "turn" in item ? (
                   <TurnLog
                     key={keyOf(item)}
                     turn={item.turn}
@@ -250,6 +262,46 @@ function authorOf(item: Item): string | null {
 /** Where an item sits: when it happened, but a question still waiting stays at the end, where the engineer is. */
 function order(item: Item): number {
   return "decision" in item && item.decision.status === "waiting" ? Infinity : Date.parse(item.at);
+}
+
+type TurnItem = { at: string; turn: Turn };
+
+/** Three or more turns in a row with nothing said between them fold together, keeping the latest in view. */
+function runs(items: Item[]): (Item | TurnItem[])[] {
+  const out: (Item | TurnItem[])[] = [];
+  let run: TurnItem[] = [];
+  const flush = () => {
+    if (run.length >= 3) out.push(run);
+    else out.push(...run);
+    run = [];
+  };
+  for (const item of items) {
+    if ("turn" in item) run.push(item);
+    else {
+      flush();
+      out.push(item);
+    }
+  }
+  flush();
+  return out;
+}
+
+/** Earlier turns folded to one line; the latest shows below it. */
+function FoldedTurns({ count, children }: { count: number; children: ReactNode[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="flex items-center gap-1.5 self-start text-[13px] text-ink-3 hover:text-ink"
+      >
+        {open ? "Fold" : `${count} earlier turns at work`}
+        <IconChevronRight className={`size-3.5 transition-transform ${open ? "rotate-90" : ""}`} stroke={1.75} />
+      </button>
+      {open ? children : children.at(-1)}
+    </>
+  );
 }
 
 function keyOf(item: Item): string {

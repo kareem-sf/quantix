@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { useDecideLesson, useSuggestedLessons } from "../review/queries";
 import { useAddRule, useRemoveRule, useRules } from "./queries";
 
 export function Rules() {
@@ -13,6 +14,7 @@ export function Rules() {
       <span className="text-ink-2">
         How your firm tenders: standard markups, exclusions, qualifications and house style. Every team follows them.
       </span>
+      <Suggested />
       {rows.length === 0 && rules.data && <p className="pt-6 text-ink-2">No rules yet. Add the first one below.</p>}
       {topics.map((topic) => (
         <div key={topic} className="flex flex-col">
@@ -32,6 +34,53 @@ export function Rules() {
         </div>
       ))}
       <AddRule topics={topics} />
+    </div>
+  );
+}
+
+/** What the office learned from work that needed correcting, on any tender: the team on that tender follows it
+ * already; kept, it becomes a company rule every later team follows. */
+function Suggested() {
+  const lessons = useSuggestedLessons();
+  const decide = useDecideLesson();
+  if (!lessons.data?.length) return null;
+  return (
+    <div className="mt-6 flex flex-col rounded-xl border border-line-strong px-4 pt-3 pb-1">
+      <span className="font-semibold">Suggested by the office</span>
+      <span className="pb-2 text-ink-3">
+        {lessons.data.length} {lessons.data.length === 1 ? "lesson" : "lessons"} from work that needed correcting. Keep
+        one and every later tender follows it.
+      </span>
+      {lessons.data.map((lesson) => (
+        <div key={lesson.id} className="flex items-start gap-4 border-t border-subtle py-2.5">
+          <span className="flex min-w-0 grow flex-col gap-0.5">
+            <span className="leading-relaxed" dir="auto">
+              {lesson.text}
+            </span>
+            <span className="text-xs text-ink-3">
+              {lesson.topic} · from {lesson.source}
+              {lesson.tender_name && ` on ${lesson.tender_name}`}
+            </span>
+          </span>
+          <span className="flex shrink-0 gap-1.5">
+            <button
+              onClick={() => decide.mutate({ id: lesson.id, status: "kept" })}
+              disabled={decide.isPending}
+              className="h-7 rounded-md border border-line-strong bg-white px-2.5 hover:bg-rail"
+            >
+              Keep as a rule
+            </button>
+            <button
+              onClick={() => decide.mutate({ id: lesson.id, status: "dropped" })}
+              disabled={decide.isPending}
+              className="h-7 rounded-md px-2.5 text-ink-3 hover:bg-selected hover:text-ink"
+            >
+              Drop
+            </button>
+          </span>
+        </div>
+      ))}
+      {decide.isError && <p className="pb-2 text-attention">{decide.error.message}</p>}
     </div>
   );
 }

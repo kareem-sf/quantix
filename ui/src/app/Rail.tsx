@@ -4,6 +4,7 @@ import { Link, NavLink, useNavigate } from "react-router";
 import type { Tender } from "../api/client";
 import { dueShort, dueSource } from "../tenders/due";
 import { useNeedsYou } from "../tenders/needsYou";
+import { useSuggestedLessons } from "../review/queries";
 import { useDesk, useTenders } from "../tenders/queries";
 import { placeIn } from "./place";
 import { COMPANY_SCREENS, TENDER_SCREENS } from "./screens";
@@ -27,9 +28,7 @@ export function Rail({ tender }: { tender?: Tender }) {
         {tender ? <Screens tenderId={tender.id} /> : tenders.data && <Item to="/new" label="Start a tender" icon={IconPlus} />}
         {!folded && <span className="px-2 pt-5 pb-1 text-xs text-ink-3">Company</span>}
         {folded && <span className="my-2 border-t border-line" />}
-        {COMPANY_SCREENS.map(([label, path, icon]) => (
-          <Item key={path} to={path} label={label} icon={icon} />
-        ))}
+        <Company />
         <span className="grow" />
         <Item to="/settings" label="Settings" icon={IconSettings} />
       </div>
@@ -37,7 +36,15 @@ export function Rail({ tender }: { tender?: Tender }) {
   );
 }
 
-function Item(props: { to: string; label: string; icon: Icon; end?: boolean; count?: number; countLabel?: string }) {
+function Item(props: {
+  to: string;
+  label: string;
+  icon: Icon;
+  end?: boolean;
+  count?: number;
+  countLabel?: string;
+  quiet?: boolean; // a count to look at some time, not one that waits for the engineer
+}) {
   const { folded } = useShell();
   const { icon: Glyph, count = 0 } = props;
   return (
@@ -55,11 +62,14 @@ function Item(props: { to: string; label: string; icon: Icon; end?: boolean; cou
       {!folded && <span className="grow truncate">{props.label}</span>}
       {count > 0 &&
         (folded ? (
-          <span aria-label={props.countLabel} className="absolute top-1 right-1.5 size-[7px] rounded-full bg-attention" />
+          <span
+            aria-label={props.countLabel}
+            className={`absolute top-1 right-1.5 size-[7px] rounded-full ${props.quiet ? "bg-ink-4" : "bg-attention"}`}
+          />
         ) : (
           <span
             aria-label={props.countLabel}
-            className="min-w-[18px] rounded-full bg-attention px-1.5 text-center text-[11px] leading-[18px] font-medium text-white"
+            className={`min-w-[18px] rounded-full px-1.5 text-center text-[11px] leading-[18px] font-medium ${props.quiet ? "bg-selected text-ink-2" : "bg-attention text-white"}`}
           >
             {count}
           </span>
@@ -84,6 +94,22 @@ function Office() {
       <Item to="/tenders" label="Tenders" icon={IconListDetails} end />
     </div>
   );
+}
+
+/** What the firm keeps across tenders; Company rules counts the rules the office suggests. */
+function Company() {
+  const suggested = useSuggestedLessons().data?.length ?? 0;
+  return COMPANY_SCREENS.map(([label, path, icon]) => (
+    <Item
+      key={path}
+      to={path}
+      label={label}
+      icon={icon}
+      quiet
+      count={path === "/rules" ? suggested : 0}
+      countLabel={`${suggested} suggested ${suggested === 1 ? "rule" : "rules"}`}
+    />
+  ));
 }
 
 /** The open tender's screens, each counting what waits for the engineer there. The Overview counts everything. */

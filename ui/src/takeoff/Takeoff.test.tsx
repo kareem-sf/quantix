@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { TenderDocument } from "../documents/queries";
 import type { BoqItem } from "../estimate/queries";
 import { fakeService, openApp } from "../test/app";
-import { drawingInfo, screenCopy } from "../test/drawing";
+import { drawingInfo, layerMap as map, screenCopy } from "../test/drawing";
 import type { Measurement, Sheet } from "./queries";
 
 const tender = { id: "t1", name: "Synthetic school", due_date: null, created_at: "2026-09-23T10:00:00Z" };
@@ -184,6 +184,29 @@ const cadDocument: TenderDocument = { ...drawing, id: "d3", path: "Drawings/A-20
 const cadSheet: Sheet = { document_id: "d3", name: "A-201.dwg", page: 1, width: 20, height: 20, scale: null, kind: "cad", units: null, lines: false };
 
 describe("Takeoff from a CAD drawing", () => {
+  it("opens the package's drawing by itself, with its layer map and checks beside it", async () => {
+    const service = fakeService({
+      tenders: [tender],
+      documents: [cadDocument],
+      sheets: [cadSheet],
+      drawing: drawingInfo,
+      screen: screenCopy(),
+      layerMaps: [{ ...map, document_id: "d3", document_name: "A-201.dwg" }],
+      checks: [{ severity: "warning", message: "12 lines are drawn twice.", document_id: "d3", page: 1, objects: ["4"], screen_objects: [0] }],
+    });
+    const router = openApp("/tenders/t1/takeoff");
+
+    await waitFor(() => expect(router.state.location.search).toBe("?doc=d3&page=1"));
+    expect(await screen.findByText("Worked out on A-201.dwg")).toBeInTheDocument();
+    expect(await screen.findByText("12 lines are drawn twice.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Show on the drawing" })).toHaveAttribute(
+      "href",
+      "/tenders/t1/takeoff?doc=d3&page=1&show=0",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Approve the map" }));
+    await waitFor(() => expect(service.state.decided).toContainEqual({ id: "lm1", approve: true, reason: null }));
+  });
+
   it("sets the drawing's units from what it says", async () => {
     const service = fakeService({
       tenders: [tender],

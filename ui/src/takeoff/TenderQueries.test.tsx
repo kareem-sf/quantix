@@ -2,7 +2,8 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { fakeService, openApp } from "../test/app";
-import type { LayerMap, TenderQuery } from "./cad";
+import { layerMap as map } from "../test/drawing";
+import type { TenderQuery } from "./cad";
 
 const tender = { id: "t1", name: "Synthetic flat", due_date: null, created_at: "2026-09-23T10:00:00Z" };
 const skirting: TenderQuery = {
@@ -21,18 +22,6 @@ const skirting: TenderQuery = {
   reviewed_by: "s1",
   review_note: "Checked the preambles: skirting isn't deemed included.",
 };
-const map: LayerMap = {
-  id: "lm1",
-  document_id: "d3",
-  document_name: "A-101.dwg",
-  layers: { "A-WALL": "walls", "A-FLOR": "floor_finish" },
-  blocks: { "DOOR-900": "doors" },
-  note: "From what each layer holds.",
-  status: "reviewed",
-  proposed_by: "s2",
-  reviewed_by: "s1",
-  review_note: "Checked each layer on the plan.",
-};
 
 describe("Queries", () => {
   it("shows a query with where it shows and Quantix's figures, for the engineer to approve", async () => {
@@ -50,18 +39,15 @@ describe("Queries", () => {
     await waitFor(() => expect(service.state.decided).toContainEqual({ id: "q1", approve: true, reason: null }));
   });
 
-  it("shows the layer map for approval and what Quantix's checks find", async () => {
-    const service = fakeService({
+  it("shows what Quantix's checks find in the BOQ and across the drawings", async () => {
+    fakeService({
       tenders: [tender],
       layerMaps: [map],
       checks: [{ severity: "warning", message: "BOQ line 8.3 (Skirting) is billed but the office found nothing of it on the drawings: raise a query.", document_id: null, page: 1, objects: [], screen_objects: [] }],
     });
     openApp("/tenders/t1/queries");
 
-    expect(await screen.findByText("Worked out on A-101.dwg")).toBeInTheDocument();
-    expect(screen.getByText("floor finish")).toBeInTheDocument();
     expect(await screen.findByText(/BOQ line 8.3 \(Skirting\) is billed/)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Approve the map" }));
-    await waitFor(() => expect(service.state.decided).toContainEqual({ id: "lm1", approve: true, reason: null }));
+    expect(screen.queryByText("Worked out on A-101.dwg")).not.toBeInTheDocument(); // beside its drawing, on Takeoff
   });
 });

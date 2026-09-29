@@ -5,6 +5,7 @@ import { pageImage, useDocuments } from "../documents/queries";
 import { useBoq, quantity as formatQuantity } from "../estimate/queries";
 import { firstName, useOffice } from "../office/queries";
 import { Findings, Reopen, ReviewNote, SendBack, WITH_MANAGER } from "../review/Review";
+import { DrawingWork } from "./TenderQueries";
 import { CadDrawing, LayerList, type Box, type Shape } from "./CadDrawing";
 import {
   CLOSED,
@@ -110,6 +111,20 @@ export function Takeoff() {
 
   const onSheet = (takeoff.data?.measurements ?? []).filter((m) => m.document_id === documentId && m.page === page);
   const open = (doc: string, number: number) => setParams({ doc, page: String(number) });
+  // no sheet chosen: open the one waiting for the engineer, else the last measured, else the package's first drawing
+  const documents = useDocuments(tenderId);
+  useEffect(() => {
+    if (documentId || !takeoff.data || !documents.data) return;
+    const waiting = [
+      ...takeoff.data.sheets.filter((s) => s.scale?.status === "reviewed"),
+      ...takeoff.data.measurements.filter((m) => m.status === "reviewed"),
+    ][0];
+    const measured = takeoff.data.sheets.at(-1);
+    const drawing = documents.data.find((d) => d.kind === "cad" && d.status === "read") ??
+      documents.data.find((d) => d.kind === "pdf" && d.status === "read");
+    const first = waiting ?? measured ?? (drawing && { document_id: drawing.id, page: 1 });
+    if (first) setParams({ doc: first.document_id, page: String(first.page) }, { replace: true });
+  }, [documentId, takeoff.data, documents.data, setParams]);
   const pickObject = (object: number | null, add: boolean) => {
     if (object === null) return setChosen(add ? chosen : []);
     if (!add) return setChosen([object]);
@@ -421,6 +436,7 @@ export function Takeoff() {
               }}
               onChoose={(layer) => setChosen(onLayer(copy.data!, layer))}
             />
+            {documentId && <DrawingWork tenderId={tenderId} documentId={documentId} />}
           </>
         ) : (
           <SheetPanel

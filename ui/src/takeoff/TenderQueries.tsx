@@ -1,6 +1,4 @@
-import { useState } from "react";
 import { Link, useParams } from "react-router";
-import { useDocuments } from "../documents/queries";
 import { firstName, useOffice, type Staff } from "../office/queries";
 import { Findings, Reopen, ReviewNote, SendBack, WITH_MANAGER } from "../review/Review";
 import {
@@ -21,7 +19,6 @@ const DECIDED = ["approved", "office_approved"];
 export function TenderQueries() {
   const { tenderId = "" } = useParams();
   const queries = useQueries(tenderId);
-  const maps = useLayerMaps(tenderId);
   const office = useOffice(tenderId);
   const people = new Map((office.data?.staff ?? []).map((m) => [m.id, m]));
   const list = queries.data ?? [];
@@ -41,18 +38,12 @@ export function TenderQueries() {
           <QueryCard key={q.id} tenderId={tenderId} query={q} people={people} />
         ))}
       </div>
-      {(maps.data ?? []).length > 0 && (
-        <>
-          <h2 className="mt-8 font-semibold text-ink-2">Layer maps</h2>
-          <p className="text-ink-3">What the drawings’ layers and blocks are: rooms and the drawing checks rest on them.</p>
-          <div className="flex flex-col border-t border-line">
-            {(maps.data ?? []).map((m) => (
-              <MapCard key={m.id} tenderId={tenderId} layerMap={m} people={people} />
-            ))}
-          </div>
-        </>
-      )}
-      <Checks tenderId={tenderId} />
+      <h2 className="mt-8 font-semibold text-ink-2">What Quantix’s checks find</h2>
+      <p className="text-ink-3">
+        In the BOQ and across the drawings: leads for the office to look into, raised as a query only when they matter
+        to the price. Each drawing’s own checks and its layer map are beside it on the Takeoff screen.
+      </p>
+      <Checks tenderId={tenderId} documentId={null} />
     </div>
   );
 }
@@ -109,6 +100,31 @@ function QueryCard(props: { tenderId: string; query: TenderQuery; people: Map<st
   );
 }
 
+/** Beside a drawing on the Takeoff screen: what its layers and blocks are, and what Quantix's checks find on it. */
+export function DrawingWork({ tenderId, documentId }: { tenderId: string; documentId: string }) {
+  const maps = useLayerMaps(tenderId);
+  const office = useOffice(tenderId);
+  const people = new Map((office.data?.staff ?? []).map((m) => [m.id, m]));
+  const mine = (maps.data ?? []).filter((m) => m.document_id === documentId);
+  return (
+    <>
+      {mine.length > 0 && (
+        <div className="flex flex-col pt-2">
+          <h2 className="text-[15px] font-semibold">Layer map</h2>
+          <p className="text-ink-3">What the layers and blocks are: rooms and the checks rest on it.</p>
+          {mine.map((m) => (
+            <MapCard key={m.id} tenderId={tenderId} layerMap={m} people={people} />
+          ))}
+        </div>
+      )}
+      <div className="flex flex-col pt-2">
+        <h2 className="text-[15px] font-semibold">Checks on this drawing</h2>
+        <Checks tenderId={tenderId} documentId={documentId} />
+      </div>
+    </>
+  );
+}
+
 function MapCard(props: { tenderId: string; layerMap: LayerMap; people: Map<string, Staff> }) {
   const decide = useDecideLayerMap(props.tenderId);
   const m = props.layerMap;
@@ -141,51 +157,31 @@ function MapCard(props: { tenderId: string; layerMap: LayerMap; people: Map<stri
   );
 }
 
-function Checks({ tenderId }: { tenderId: string }) {
-  const documents = useDocuments(tenderId);
-  const drawings = (documents.data ?? []).filter((d) => d.kind === "cad" && d.status === "read");
-  const [documentId, setDocumentId] = useState<string | null>(null);
+function Checks({ tenderId, documentId }: { tenderId: string; documentId: string | null }) {
   const checks = useChecks(tenderId, documentId);
   const found = checks.data ?? [];
   return (
-    <>
-      <h2 className="mt-8 font-semibold text-ink-2">What Quantix’s checks find</h2>
-      <p className="text-ink-3">Leads for the office to look into: a query is raised only for what matters to the price.</p>
-      <select
-        aria-label="Checks of"
-        value={documentId ?? ""}
-        onChange={(e) => setDocumentId(e.target.value || null)}
-        className="mt-1 h-8 max-w-[380px] rounded-md border border-line-strong bg-white px-2 text-[13px]"
-      >
-        <option value="">The BOQ, and across the drawings</option>
-        {drawings.map((d) => (
-          <option key={d.id} value={d.id}>
-            {d.name}
-          </option>
-        ))}
-      </select>
-      <div className="flex flex-col border-t border-line">
-        {checks.isLoading && <p className="py-3 text-ink-3">Checking…</p>}
-        {checks.isError && <p className="py-3 text-attention">{checks.error.message}</p>}
-        {!checks.isLoading && found.length === 0 && <p className="py-3 text-ink-3">Nothing found.</p>}
-        {found.map((p, i) => (
-          <div key={i} className="flex flex-col gap-0.5 border-b border-line py-3 leading-normal">
-            <span>{p.message}</span>
-            {p.document_id && (
-              <Link
-                to={
-                  p.objects.length
-                    ? `/tenders/${tenderId}/takeoff?doc=${p.document_id}&page=${p.page}&show=${p.screen_objects.join(",")}`
-                    : `/tenders/${tenderId}/documents?doc=${p.document_id}&page=${p.page}`
-                }
-                className="text-ink-2 underline underline-offset-4"
-              >
-                {p.objects.length ? "Open the drawing" : "Open the page"}
-              </Link>
-            )}
-          </div>
-        ))}
-      </div>
-    </>
+    <div className="flex flex-col border-t border-line">
+      {checks.isLoading && <p className="py-3 text-ink-3">Checking…</p>}
+      {checks.isError && <p className="py-3 text-attention">{checks.error.message}</p>}
+      {!checks.isLoading && found.length === 0 && <p className="py-3 text-ink-3">Nothing found.</p>}
+      {found.map((p, i) => (
+        <div key={i} className="flex flex-col gap-0.5 border-b border-line py-3 leading-normal">
+          <span>{p.message}</span>
+          {p.document_id && (
+            <Link
+              to={
+                p.objects.length
+                  ? `/tenders/${tenderId}/takeoff?doc=${p.document_id}&page=${p.page}&show=${p.screen_objects.join(",")}`
+                  : `/tenders/${tenderId}/documents?doc=${p.document_id}&page=${p.page}`
+              }
+              className="text-ink-2 underline underline-offset-4"
+            >
+              {p.objects.length ? (documentId ? "Show on the drawing" : "Open the drawing") : "Open the page"}
+            </Link>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
