@@ -75,16 +75,19 @@ export function About() {
       </Part>
 
       <footer className="flex flex-col gap-1.5 border-t border-line pt-5 text-ink-2">
-        <span>
-          Founded &amp; developed by{" "}
-          <a
-            href="https://kareemsafwat.com"
-            target="_blank"
-            rel="noreferrer"
-            className="font-medium text-ink underline underline-offset-4 hover:text-ink-2"
-          >
-            Kareem Safwat
-          </a>
+        <span className="flex items-center gap-2.5">
+          <FounderMark />
+          <span>
+            Founded &amp; developed by{" "}
+            <a
+              href="https://kareemsafwat.com"
+              target="_blank"
+              rel="noreferrer"
+              className="font-medium text-ink underline underline-offset-4 hover:text-ink-2"
+            >
+              Kareem Safwat
+            </a>
+          </span>
         </span>
         <span className="text-xs leading-relaxed text-ink-3">
           © {new Date().getFullYear()} QS Mind. All rights reserved. Quantix and the Weave mark belong to QS Mind. The
@@ -101,5 +104,39 @@ function Part({ title, children }: { title: string; children: ReactNode }) {
       <h2 className="text-[15px] font-semibold">{title}</h2>
       {children}
     </section>
+  );
+}
+
+/** Kareem Safwat's K: the lines and gold of brand/founder/k-mark.svg, framed close so it reads at text size. */
+function FounderMark() {
+  return (
+    <svg viewBox="70 60 160 180" fill="none" className="h-6 w-auto shrink-0" aria-hidden="true" focusable="false">
+      <defs>
+        <linearGradient id="quantix-founder-k" x1="80" y1="70" x2="220" y2="230" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor="#FEF08A" />
+          <stop offset="50%" stopColor="#D97706" />
+          <stop offset="100%" stopColor="#78350F" />
+        </linearGradient>
+      </defs>
+      <line x1="80" y1="70" x2="80" y2="230" stroke="url(#quantix-founder-k)" strokeWidth="12" strokeLinecap="square" />
+      <line
+        x1="80"
+        y1="150"
+        x2="220"
+        y2="70"
+        stroke="url(#quantix-founder-k)"
+        strokeWidth="12"
+        strokeLinecap="square"
+      />
+      <line
+        x1="80"
+        y1="150"
+        x2="220"
+        y2="230"
+        stroke="url(#quantix-founder-k)"
+        strokeWidth="12"
+        strokeLinecap="square"
+      />
+    </svg>
   );
 }
