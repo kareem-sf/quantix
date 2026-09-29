@@ -105,15 +105,13 @@ describe("Settings", () => {
     await waitFor(() => expect(service.state.settings.notifications).toBe("decisions"));
   });
 
-  it("credits the founder, linking to his site", async () => {
+  it("links to About Quantix, which has its own screen", async () => {
     fakeService();
-    openApp("/settings");
+    const router = openApp("/settings");
 
-    expect(await screen.findByText("Your tendering office, on your desktop. Part of QS Mind.")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Founded & developed by Kareem Safwat" })).toHaveAttribute(
-      "href",
-      "https://kareemsafwat.com",
-    );
+    await screen.findByRole("heading", { name: "Settings" });
+    await userEvent.click(within(screen.getByRole("main")).getByRole("link", { name: "About Quantix" }));
+    expect(router.state.location.pathname).toBe("/about");
   });
 });
 

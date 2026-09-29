@@ -1,4 +1,12 @@
-import { IconHome, IconListDetails, IconPlus, IconSelector, IconSettings, type Icon } from "@tabler/icons-react";
+import {
+  IconHome,
+  IconInfoCircle,
+  IconListDetails,
+  IconPlus,
+  IconSelector,
+  IconSettings,
+  type Icon,
+} from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router";
 import type { Tender } from "../api/client";
@@ -46,6 +54,7 @@ export function Rail({ tender }: { tender?: Tender }) {
         {folded && <span className="my-2 border-t border-line" />}
         <Company />
         <span className="grow" />
+        <Item to="/about" label="About Quantix" icon={IconInfoCircle} />
         <Item to="/settings" label="Settings" icon={IconSettings} />
       </div>
     </nav>

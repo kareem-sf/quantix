@@ -1,4 +1,5 @@
 import {
+  IconInfoCircle,
   IconKeyboard,
   IconMessageCircle,
   IconPlayerStopFilled,
@@ -64,6 +65,7 @@ export function Palette({ tender, onClose }: { tender?: Tender; onClose: () => v
       : []),
     { group: "Actions", label: "Settings", icon: IconSettings, run: go("/settings") },
     { group: "Actions", label: "Keyboard shortcuts", hint: "Ctrl /", icon: IconKeyboard, run: shell.openShortcuts },
+    { group: "Actions", label: "About Quantix", icon: IconInfoCircle, run: go("/about") },
   ];
   const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const shown = entries.filter((e) => words.every((w) => `${e.label} ${e.hint ?? ""} ${e.group}`.toLowerCase().includes(w)));

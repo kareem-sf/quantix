@@ -32,6 +32,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init()) // the Windows folder and file pickers
         .invoke_handler(tauri::generate_handler![notify])
         .setup(|app| {
+            register(app.handle()); // before the window, so the taskbar never meets its entry half made
             let config = app.config().app.windows[0].clone();
             let (navigating, opening) = (app.handle().clone(), app.handle().clone());
             let window = WebviewWindowBuilder::from_config(app.handle(), &config)?
@@ -49,7 +50,6 @@ fn main() {
                 .build()?;
             quiet(&window);
             taskbar_icon(&window);
-            register(app.handle());
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -166,7 +166,7 @@ fn register(app: &AppHandle) {
             .arg(entry)
             .arg(&app.config().identifier)
             .arg(icon)
-            .spawn();
+            .status(); // waits: only when the icon changed, and it takes a moment
     }
 }
 

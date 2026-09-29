@@ -1,7 +1,6 @@
 import { IconEye, IconEyeOff } from "@tabler/icons-react";
 import { useState, type FormEvent, type ReactNode } from "react";
-import { useSearchParams } from "react-router";
-import { Logo } from "../app/Logo";
+import { Link, useSearchParams } from "react-router";
 import { ProviderLogo } from "./ProviderLogo";
 import {
   PROVIDERS,
@@ -86,9 +85,9 @@ export function Settings() {
       <div className="flex flex-col gap-9">
         <Body />
       </div>
-      <div className="mt-12">
-        <About />
-      </div>
+      <Link to="/about" className="mt-12 self-start text-ink-3 hover:text-ink">
+        About Quantix
+      </Link>
     </div>
   );
 }
@@ -542,48 +541,3 @@ function Allowance() {
 }
 
 /** Who makes Quantix: its mark, the QS Mind house it belongs to, and its founder's credit. */
-function About() {
-  return (
-    <Section title="About Quantix">
-      <div className="flex items-center gap-3">
-        <Logo tone="brand" className="h-5" />
-        <span className="flex flex-col gap-0.5">
-          <span className="font-medium">Quantix</span>
-          <span className="text-ink-3">Your tendering office, on your desktop. Part of QS Mind.</span>
-        </span>
-      </div>
-      <p className="border-t border-subtle pt-3">
-        <a
-          href="https://kareemsafwat.com"
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-2.5 text-ink-2 hover:text-ink"
-        >
-          <FounderMark />
-          <span>
-            Founded &amp; developed by{" "}
-            <span className="font-medium text-ink underline underline-offset-4">Kareem Safwat</span>
-          </span>
-        </a>
-      </p>
-    </Section>
-  );
-}
-
-/** Kareem Safwat's K, as brand/founder/k-mark.svg draws it. */
-function FounderMark() {
-  return (
-    <svg viewBox="0 0 300 300" fill="none" className="size-7 shrink-0" aria-hidden="true" focusable="false">
-      <defs>
-        <linearGradient id="quantix-founder-k" x1="80" y1="70" x2="220" y2="230" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="#FEF08A" />
-          <stop offset="50%" stopColor="#D97706" />
-          <stop offset="100%" stopColor="#78350F" />
-        </linearGradient>
-      </defs>
-      <line x1="80" y1="70" x2="80" y2="230" stroke="url(#quantix-founder-k)" strokeWidth="8" strokeLinecap="square" />
-      <line x1="80" y1="150" x2="220" y2="70" stroke="url(#quantix-founder-k)" strokeWidth="8" strokeLinecap="square" />
-      <line x1="80" y1="150" x2="220" y2="230" stroke="url(#quantix-founder-k)" strokeWidth="8" strokeLinecap="square" />
-    </svg>
-  );
-}
