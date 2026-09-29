@@ -245,7 +245,7 @@ export function Takeoff() {
     <div className="flex h-full w-full">
       <section aria-label="Drawing" className="flex min-w-0 grow flex-col bg-subtle px-6 py-5">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pb-3">
-          <h1 className="text-[22px] font-semibold tracking-tight">Takeoff</h1>
+          <h1 className="text-[24px] font-semibold tracking-tight">Takeoff</h1>
           <SheetPicker
             tenderId={tenderId}
             sheets={takeoff.data?.sheets ?? []}

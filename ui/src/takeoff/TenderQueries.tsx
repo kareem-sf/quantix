@@ -26,7 +26,7 @@ export function TenderQueries() {
 
   return (
     <div className="flex min-h-full w-full max-w-[784px] flex-col gap-2 px-8 pt-14 pb-10">
-      <h1 className="text-[28px] font-semibold tracking-tight">Queries</h1>
+      <h1 className="text-[24px] font-semibold tracking-tight">Queries</h1>
       <p className="text-ink-2">
         {list.length === 0
           ? "The office hasn’t raised any queries yet."

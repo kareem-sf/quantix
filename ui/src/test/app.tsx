@@ -31,6 +31,8 @@ export interface FakeState {
   /** A workbook's sheets as the Documents screen shows them, by sheet number; and the files opened in their apps. */
   workbook: Record<number, WorkbookSheet>;
   opened: string[];
+  /** What the desktop app asked Quantix to import from this computer. */
+  imported: { folder: string | null; files: string[] }[];
   hits: SearchHit[];
   staff: Staff[];
   messages: Message[];
@@ -95,6 +97,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     pages: {},
     workbook: {},
     opened: [],
+    imported: [],
     hits: [],
     staff: [],
     messages: [],
@@ -175,6 +178,10 @@ export function fakeService(initial: Partial<FakeState> = {}) {
         });
       }
       return json({ added: files.length, unchanged: 0 }, 201);
+    }
+    if (path.match(/^\/tenders\/\w+\/documents\/import$/) && method === "POST") {
+      state.imported.push(body); // the folder or files the desktop pickers chose, read from where they are
+      return json({ added: 1, unchanged: 0 });
     }
     if (documents) return json(state.documents);
     if (path.match(/^\/tenders\/\w+\/search$/)) return json(state.hits);

@@ -1003,6 +1003,69 @@
         }
       }
     },
+    "/tenders/{tender_id}/documents/import": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Import Documents",
+        "description": "Copy the chosen files into the tender from where they are, as the desktop app's own pickers give them. The\nengineer's files are only read, never changed.",
+        "operationId": "import_documents_tenders__tender_id__documents_import_post",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Added"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/tenders/{tender_id}/search": {
       "get": {
         "tags": [
@@ -7022,6 +7085,32 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "ImportIn": {
+        "properties": {
+          "folder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder"
+          },
+          "files": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Files",
+            "default": []
+          }
+        },
+        "type": "object",
+        "title": "ImportIn",
+        "description": "What the engineer chose on this computer: a whole folder, kept with its folders, or single files."
       },
       "ItemOut": {
         "properties": {

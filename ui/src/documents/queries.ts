@@ -44,10 +44,20 @@ export function useSearch(tenderId: string, query: string) {
 }
 
 /** Sends the chosen files, keeping each file's folder path inside the package. */
+/** Files sent from the browser, or a folder and files the desktop app's pickers chose, read from where they are. */
+export type Adding = File[] | { folder?: string; files?: string[] };
+
 export function useAddDocuments(tenderId: string) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: async (files: File[]) => {
+    mutationFn: async (files: Adding) => {
+      if (!Array.isArray(files))
+        return must(
+          await api.POST("/tenders/{tender_id}/documents/import", {
+            params: { path: { tender_id: tenderId } },
+            body: { folder: files.folder ?? null, files: files.files ?? [] },
+          }),
+        );
       const form = new FormData();
       for (const file of files) form.append("files", file, file.webkitRelativePath || file.name);
       const url = `${window.location.origin}/api/tenders/${tenderId}/documents`;

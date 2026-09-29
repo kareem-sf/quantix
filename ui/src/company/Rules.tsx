@@ -10,7 +10,7 @@ export function Rules() {
 
   return (
     <div className="flex w-full max-w-[860px] flex-col px-8 pt-7">
-      <h1 className="text-[22px] font-semibold tracking-tight">Company rules</h1>
+      <h1 className="text-[24px] font-semibold tracking-tight">Company rules</h1>
       <span className="text-ink-2">
         How your firm tenders: standard markups, exclusions, qualifications and house style. Every team follows them.
       </span>

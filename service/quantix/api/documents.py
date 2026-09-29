@@ -93,6 +93,49 @@ def add_documents(tender_id: str, files: list[UploadFile], session: DB, home: Ho
     return Added(added=added, unchanged=unchanged)
 
 
+class ImportIn(BaseModel):
+    """What the engineer chose on this computer: a whole folder, kept with its folders, or single files."""
+
+    folder: str | None = None
+    files: list[str] = []
+
+
+SKIPPED = {"desktop.ini", "thumbs.db"}  # Windows' own files, never part of a package
+
+
+@router.post("/tenders/{tender_id}/documents/import")
+def import_documents(tender_id: str, body: ImportIn, session: DB, home: Home, request: Request) -> Added:
+    """Copy the chosen files into the tender from where they are, as the desktop app's own pickers give them. The
+    engineer's files are only read, never changed."""
+    _tender(session, tender_id)
+    chosen: list[tuple[str, Path]] = []
+    if body.folder:
+        root = Path(body.folder)
+        if not root.is_dir():
+            raise HTTPException(status_code=400, detail=f"The folder {root.name or body.folder} can't be found.")
+        for path in sorted(root.rglob("*")):
+            inside = path.relative_to(root).parts
+            if path.is_file() and not any(p.startswith(".") for p in inside) and path.name.lower() not in SKIPPED:
+                chosen.append((f"{root.name}/{'/'.join(inside)}", path))
+    for name in body.files:
+        path = Path(name)
+        if not path.is_file():
+            raise HTTPException(status_code=400, detail=f"{path.name} can't be found.")
+        chosen.append((path.name, path))
+    added = unchanged = 0
+    for name, path in chosen:
+        try:
+            with path.open("rb") as content:
+                stored = library.store(session, home, tender_id, name, content)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except OSError as error:
+            raise HTTPException(status_code=400, detail=f"{path.name} can't be read: {error.strerror}.") from error
+        added, unchanged = (added + 1, unchanged) if stored else (added, unchanged + 1)
+    request.app.state.reader.wake()
+    return Added(added=added, unchanged=unchanged)
+
+
 @router.get("/tenders/{tender_id}/documents")
 def list_documents(tender_id: str, session: DB) -> list[DocumentOut]:
     _tender(session, tender_id)

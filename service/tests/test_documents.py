@@ -328,3 +328,26 @@ def test_a_file_opens_in_its_app_as_a_read_only_copy(client, tender, tmp_path, m
 
     assert client.delete(f"/tenders/{tender}").status_code == 204
     assert not (tmp_path / "tenders" / tender).exists()  # read-only copies go with the tender
+
+
+def test_the_desktop_app_imports_a_folder_or_files_from_where_they_are(client, tmp_path):
+    tender_id = client.post("/tenders", json={"name": "Synthetic school"}).json()["id"]
+    package = tmp_path / "Package"
+    (package / "Drawings").mkdir(parents=True)
+    (package / "Drawings" / "A-101.pdf").write_bytes(make_pdf([["Ground floor plan"]]))
+    (package / "Conditions.pdf").write_bytes(make_pdf([["Conditions of contract"]]))
+    (package / ".hidden.pdf").write_bytes(b"not part of the package")
+    (package / "Thumbs.db").write_bytes(b"windows")
+    loose = tmp_path / "Addendum 1.pdf"
+    loose.write_bytes(make_pdf([["Addendum"]]))
+
+    added = client.post(f"/tenders/{tender_id}/documents/import", json={"folder": str(package), "files": [str(loose)]})
+    assert added.json() == {"added": 3, "unchanged": 0}
+    paths = set(read_all(client, tender_id))
+    assert paths == {"Package/Conditions.pdf", "Package/Drawings/A-101.pdf", "Addendum 1.pdf"}
+    again = client.post(f"/tenders/{tender_id}/documents/import", json={"folder": str(package)})
+    assert again.json() == {"added": 0, "unchanged": 2}
+    assert (package / "Conditions.pdf").read_bytes().startswith(b"%PDF")  # the engineer's file is left as it was
+
+    missing = client.post(f"/tenders/{tender_id}/documents/import", json={"folder": str(tmp_path / "Nowhere")})
+    assert (missing.status_code, missing.json()["detail"]) == (400, "The folder Nowhere can't be found.")

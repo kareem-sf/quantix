@@ -52,7 +52,7 @@ export function Documents() {
     <div className="flex h-full w-full">
       <section aria-label="Documents" className="flex w-[280px] shrink-0 xl:w-[320px] flex-col border-r border-line pt-6">
         <div className="px-4">
-          <h1 className="text-[22px] font-semibold tracking-tight">Documents</h1>
+          <h1 className="text-[24px] font-semibold tracking-tight">Documents</h1>
           <p className="pt-1 pb-3.5 text-ink-3">
             {current.length} {current.length === 1 ? "file" : "files"}
             {reading > 0 && ` · reading ${reading}`}

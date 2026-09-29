@@ -55,20 +55,22 @@ export function Settings() {
   const [params, setParams] = useSearchParams();
   const [key, , Body] = SECTIONS.find(([k]) => k === params.get("section")) ?? SECTIONS[0];
   return (
-    <div className="flex w-full max-w-[704px] flex-col px-8 py-8">
-      <h1 className="text-[24px] font-semibold tracking-tight">Settings</h1>
-      <div role="tablist" aria-label="Settings" className="mt-4 mb-7 flex gap-5 border-b border-line">
-        {SECTIONS.map(([k, label]) => (
-          <button
-            key={k}
-            role="tab"
-            aria-selected={k === key}
-            onClick={() => setParams(k === "office" ? {} : { section: k })}
-            className={`h-8 ${k === key ? "font-semibold shadow-[inset_0_-2px_0_var(--color-ink)]" : "text-ink-2 hover:text-ink"}`}
-          >
-            {label}
-          </button>
-        ))}
+    <div className="flex w-full max-w-[704px] flex-col px-8 pb-8">
+      <div className="sticky top-0 z-10 -mx-8 mb-7 bg-white px-8 pt-8">
+        <h1 className="text-[24px] font-semibold tracking-tight">Settings</h1>
+        <div role="tablist" aria-label="Settings" className="mt-4 flex gap-5 border-b border-line">
+          {SECTIONS.map(([k, label]) => (
+            <button
+              key={k}
+              role="tab"
+              aria-selected={k === key}
+              onClick={() => setParams(k === "office" ? {} : { section: k })}
+              className={`h-8 ${k === key ? "font-semibold shadow-[inset_0_-2px_0_var(--color-ink)]" : "text-ink-2 hover:text-ink"}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="flex flex-col gap-9">
         <Body />

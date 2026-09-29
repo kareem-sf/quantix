@@ -19,6 +19,7 @@ import { TenderMenu } from "./TenderMenu";
 
 export function Overview() {
   const { tenderId = "" } = useParams();
+  const { showTeam } = useShell();
   const tender = useTender(tenderId);
   const documents = useDocuments(tenderId);
   const office = useOffice(tenderId);
@@ -37,31 +38,34 @@ export function Overview() {
   const state = { working: " The office is working.", paused: " The office is paused.", idle: "" }[office.data.state];
 
   return (
-    <div className="flex min-h-full w-full max-w-[784px] flex-col px-8 pt-14">
-      <span className="flex items-center justify-between gap-4 text-ink-3">
-        <span className="truncate">
-          {tender.data.name}
-          {tender.data.archived && " · archived"}
+    <div className="flex min-h-full w-full max-w-[784px] flex-col px-8">
+      {/* the tender, what needs you and when it closes stay in view while the page scrolls */}
+      <div className="sticky top-0 z-10 -mx-8 flex flex-col bg-white px-8 pt-10 pb-3">
+        <span className="flex items-center justify-between gap-4 text-ink-3">
+          <span className="truncate">
+            {tender.data.name}
+            {tender.data.archived && " · archived"}
+          </span>
+          <TenderMenu
+            tenderId={tenderId}
+            name={tender.data.name}
+            outcome={tender.data.outcome}
+            archived={tender.data.archived}
+          />
         </span>
-        <TenderMenu
-          tenderId={tenderId}
-          name={tender.data.name}
-          outcome={tender.data.outcome}
-          archived={tender.data.archived}
-        />
-      </span>
-      <h1 className="mt-1.5 mb-1 text-[28px] font-semibold tracking-tight">
-        {waiting.length === 0
-          ? "Nothing needs you right now"
-          : `${waiting.length} ${waiting.length === 1 ? "decision needs" : "decisions need"} you`}
-      </h1>
-      <p className="flex flex-wrap items-center gap-x-2 text-sm text-ink-2">
-        <DueDate tenderId={tenderId} due={tender.data.due_date} source={tender.data.due_date_source} />
-        {state && <span>{state.trim()}</span>}
-        {tender.data.outcome !== "open" && (
-          <span>{{ submitted: "Submitted.", won: "Won.", lost: "Lost." }[tender.data.outcome]}</span>
-        )}
-      </p>
+        <h1 className="mt-1.5 mb-1 text-[24px] font-semibold tracking-tight">
+          {waiting.length === 0
+            ? "Nothing needs you right now"
+            : `${waiting.length} ${waiting.length === 1 ? "decision needs" : "decisions need"} you`}
+        </h1>
+        <p className="flex flex-wrap items-center gap-x-2 text-sm text-ink-2">
+          <DueDate tenderId={tenderId} due={tender.data.due_date} source={tender.data.due_date_source} />
+          {state && <span>{state.trim()}</span>}
+          {tender.data.outcome !== "open" && (
+            <span>{{ submitted: "Submitted.", won: "Won.", lost: "Lost." }[tender.data.outcome]}</span>
+          )}
+        </p>
+      </div>
       {manager && gates.data?.manager ? (
         <p className="mt-1 text-sm text-ink-2">
           {gates.data.manager} {gates.data.manager === 1 ? "piece" : "pieces"} of work with {firstName(manager)} for
@@ -97,10 +101,10 @@ export function Overview() {
             {questions.map((d) => {
               const asker = office.data!.staff.find((m) => m.id === d.raised_by);
               return (
-                <Link
+                <button
                   key={d.id}
-                  to={`/tenders/${tenderId}/decisions/${d.id}`}
-                  className="flex items-center gap-3.5 border-b border-line px-1 py-3.5"
+                  onClick={() => showTeam(d.raised_by)}
+                  className="flex w-full items-center gap-3.5 border-b border-line px-1 py-3.5 text-left hover:bg-rail"
                 >
                   <span className="size-[7px] shrink-0 rounded-full bg-attention" />
                   <span className="flex min-w-0 grow flex-col gap-0.5">
@@ -109,7 +113,7 @@ export function Overview() {
                   </span>
                   {asker && <span className="text-ink-3">{firstName(asker)}</span>}
                   <IconChevronRight className="size-4 shrink-0 text-ink-4" stroke={1.75} />
-                </Link>
+                </button>
               );
             })}
           </div>
@@ -221,7 +225,10 @@ function AuditLine({ tenderId, finding: f }: { tenderId: string; finding: Findin
 
 function Standing(props: { to: string; label: string; text: string; done: number }) {
   return (
-    <Link to={props.to} className="grid grid-cols-[140px_minmax(0,1fr)_160px] items-center gap-4 px-1 py-2 hover:bg-rail">
+    <Link
+      to={props.to}
+      className="grid grid-cols-[140px_minmax(0,1fr)_160px] items-center gap-4 px-1 py-2 hover:bg-rail"
+    >
       <span className="font-medium">{props.label}</span>
       <span className="min-w-0 text-ink-2">{props.text}</span>
       <span className="relative h-1 overflow-hidden rounded-sm bg-selected">
@@ -372,7 +379,9 @@ function ManagerNote({ tenderId, managerId }: { tenderId: string; managerId: str
           {manager.name} <span className="font-normal text-ink-3">Tender Manager</span>
         </span>
         <Prose
-          text={tidy(latest?.text ?? manager.now ?? "Getting to know the tender.", firstName(manager)).split(/\n\s*\n/)[0]}
+          text={
+            tidy(latest?.text ?? manager.now ?? "Getting to know the tender.", firstName(manager)).split(/\n\s*\n/)[0]
+          }
           className="text-[15px] text-[#27272A] [&>*]:line-clamp-4"
         />
         <button onClick={() => showTeam(manager.id)} className="self-start text-ink-3 hover:text-ink">
@@ -389,8 +398,8 @@ function StartOffice() {
   return (
     <div className="mt-7 flex items-center gap-4 rounded-xl border border-line-strong px-4 py-3.5">
       <span className="grow text-ink-2">
-        Tell the office what you need, for example “review the package”. The Tender Manager joins and hires the team
-        the tender needs.
+        Tell the office what you need, for example “review the package”. The Tender Manager joins and hires the team the
+        tender needs.
       </span>
       <button onClick={() => showTeam()} className="h-8 shrink-0 rounded-lg bg-ink px-3.5 text-white">
         Write to the office

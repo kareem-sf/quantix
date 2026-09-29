@@ -1123,3 +1123,18 @@ change. Company rules shows each as Example, with Edit (`PATCH /rules/{id}`, whi
 Remove. Removed or edited, they never come back. Service tests start from a firm with no rules; one test checks a
 new firm's examples, that none names a market, editing, and that a restart doesn't add them again. Rehearsed on a
 copy of the real database (23 rules added, nothing else changed).
+
+## 29 September 2026: the rest of the audit
+
+- **Windows folder picker:** in the desktop app, Choose folder and Add files open the Windows pickers and the
+  service copies the files from where they are (`POST /tenders/{id}/documents/import`, folder structure kept,
+  hidden and Windows system files skipped). The browser keeps its upload. No more "Upload N files to this site?".
+- **Windows notifications:** when Quantix isn't in front, a notification says which tender has new decisions for
+  the engineer, or that a team finished (tauri-plugin-notification; `app/notify.ts` compares each Desk refresh).
+- **One place to answer:** the question card in the chat shows where an escalation shows, what Quantix found and
+  the Manager's recommended option, and takes an answer in the engineer's own words; the separate decision page is
+  gone, and an old link to it opens the asker's chat.
+- **Polish:** every screen title one size; the Overview's, Settings' and Tenders' headers stay in view while the
+  page scrolls; screens show quiet placeholder rows while they open.
+- **Not done:** Windows 11 snap layouts on Quantix's own maximise button. The one plugin for it replaces the title
+  bar's window buttons with its own, and the native way needs low-level window handling; Win+Z still offers them.

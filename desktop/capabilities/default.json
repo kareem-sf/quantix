@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Quantix draws its own title bar: moving, maximising, minimising and closing the window.",
+  "description": "Quantix draws its own title bar, picks folders and files with the Windows pickers, and notifies the engineer.",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -10,6 +10,8 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-minimize",
     "core:window:allow-close",
-    "core:window:allow-is-maximized"
+    "core:window:allow-is-maximized",
+    "dialog:allow-open",
+    "notification:default"
   ]
 }

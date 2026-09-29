@@ -64,16 +64,16 @@ describe("Overview and decisions", () => {
       decisions: [question],
       messages: [said(1, "s1", "s1", "Omar found the tender security clause.")],
     });
-    const router = openApp("/tenders/t1");
+    openApp("/tenders/t1");
 
     expect(await screen.findByRole("heading", { name: "1 decision needs you" })).toBeInTheDocument();
     expect(await screen.findByText("Omar found the tender security clause.")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("link", { name: /Tender security wording/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Tender security wording/ })); // opens Rania's chat
 
-    await userEvent.click(await screen.findByRole("radio", { name: /Yes, 1%/ }));
-    await userEvent.click(screen.getByRole("button", { name: "Confirm" }));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/tenders/t1"));
-    expect(service.state.decisions[0]).toMatchObject({ status: "answered", answer: "Yes, 1%" });
+    const card = await screen.findByRole("group", { name: "Tender security wording" });
+    await userEvent.click(within(card).getByRole("button", { name: "Yes, 1%" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Send answer" }));
+    await waitFor(() => expect(service.state.decisions[0]).toMatchObject({ status: "answered", answer: "Yes, 1%" }));
   });
 
   it("keeps what waits for the engineer's approval at the end of the Manager's chat, counted on the rail", async () => {
@@ -135,23 +135,24 @@ describe("Overview and decisions", () => {
       decisions: [escalation],
       findings: { r9: [{ ...warning, accepted_by: null, reason: null }] },
     });
-    openApp("/tenders/t1/decisions/q2");
+    const router = openApp("/tenders/t1/decisions/q2"); // an old link opens the question in its asker's chat
 
-    expect(await screen.findByRole("heading", { name: "The rate for BOQ item 3.1" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "BOQ line 3.1" })).toHaveAttribute("href", "/tenders/t1/estimate?item=i31");
-    expect(screen.getByRole("link", { name: "Soils.pdf, page 4: Rock at 1.2 m" })).toHaveAttribute(
+    await waitFor(() => expect(router.state.location.pathname).toBe("/tenders/t1"));
+    const card = await screen.findByRole("group", { name: "The rate for BOQ item 3.1" });
+    expect(within(card).getByRole("link", { name: "BOQ line 3.1" })).toHaveAttribute("href", "/tenders/t1/estimate?item=i31");
+    expect(within(card).getByRole("link", { name: "Soils.pdf, page 4: Rock at 1.2 m" })).toHaveAttribute(
       "href",
       "/tenders/t1/documents?doc=d7&page=4",
     );
-    expect(await screen.findByText("18.00 is -40% from the firm's own rates.")).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /Price excavation in rock with a breaker/ })).toBeInTheDocument();
+    expect(await within(card).findByText("18.00 is -40% from the firm's own rates.")).toBeInTheDocument();
     // the Manager's recommended correction comes first, and says so
-    const [first, second] = screen.getAllByRole("radio").map((r) => r.closest("label")!);
-    expect(first).toHaveTextContent("Recommended");
+    const [first, second] = within(card).getAllByRole("button", { pressed: false });
+    expect(first).toHaveTextContent("Price excavation in rock with a breakerRecommended");
     expect(second).not.toHaveTextContent("Recommended");
 
-    await userEvent.type(screen.getByLabelText("Or answer in your own words"), "Use the rock rate from the depot job.");
-    await userEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Answer in your own words" }));
+    await userEvent.type(within(card).getByLabelText("Your answer"), "Use the rock rate from the depot job.");
+    await userEvent.click(within(card).getByRole("button", { name: "Send answer" }));
     await waitFor(() =>
       expect(service.state.decisions[0]).toMatchObject({ answer: "Use the rock rate from the depot job." }),
     );

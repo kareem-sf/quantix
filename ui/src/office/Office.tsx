@@ -2,6 +2,8 @@ import { IconArrowRight, IconArrowUp, IconChevronRight, IconHash, IconPlayerStop
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router";
 import { useShell } from "../app/context";
+import { Findings } from "../review/Review";
+import { isChecked, type Checked } from "../review/queries";
 import { useNeedsYou } from "../tenders/needsYou";
 import { Face } from "./Face";
 import { Prose } from "./Prose";
@@ -383,40 +385,70 @@ function Said({ message, person }: { message: Message; person?: Staff }) {
 }
 
 /** A question put to the engineer, answered where it was asked: pick an option and send it, or open it in full. */
+/** A question put to the engineer, answered where it was asked: pick an option, or answer in your own words. An
+ * escalation shows where the problem shows, what Quantix found, and the Manager's recommended correction first. */
 function Question({ tenderId, decision }: { tenderId: string; decision: Decision }) {
   const answer = useAnswer(tenderId);
   const [choice, setChoice] = useState("");
+  const [own, setOwn] = useState<string | null>(null); // the engineer's own words, once they chose to write them
   const waiting = decision.status === "waiting";
+  const escalated = isChecked(decision.subject_kind) && Boolean(decision.subject_id);
+  const reply = own?.trim() || choice;
   return (
     <div className="flex flex-col gap-2.5 rounded-xl border border-line-strong px-4 py-3.5" role="group" aria-label={decision.title}>
       <span className="text-xs font-semibold text-ink-2">{waiting ? "Needs your decision" : "You decided"}</span>
       <span className="font-semibold">{decision.title}</span>
       <Prose text={decision.text} className="text-sm text-[#27272A]" />
+      {waiting && decision.sources && decision.sources.length > 0 && (
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-ink-3">
+          <span>Where it shows</span>
+          <Sources sources={decision.sources} />
+        </div>
+      )}
+      {waiting && escalated && <Findings kind={decision.subject_kind as Checked} id={decision.subject_id!} tenderId={tenderId} />}
       {waiting ? (
         <>
           <div className="flex flex-col gap-1.5">
-            {decision.options.map((option) => (
+            {decision.options.map((option, n) => (
               <button
                 key={option}
-                onClick={() => setChoice(option)}
-                aria-pressed={choice === option}
-                className={`rounded-lg border px-3 py-2 text-left text-sm ${choice === option ? "border-ink bg-rail" : "border-line hover:bg-rail"}`}
+                onClick={() => {
+                  setChoice(option);
+                  setOwn(null);
+                }}
+                aria-pressed={choice === option && own === null}
+                className={`flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-left text-sm ${choice === option && own === null ? "border-ink bg-rail" : "border-line hover:bg-rail"}`}
               >
                 {option}
+                {n === 0 && escalated && <span className="shrink-0 text-xs font-medium text-approved">Recommended</span>}
               </button>
             ))}
+            {own !== null && (
+              <textarea
+                aria-label="Your answer"
+                autoFocus
+                rows={3}
+                value={own}
+                onChange={(e) => setOwn(e.target.value)}
+                placeholder="What the office should do"
+                className="rounded-lg border border-line-strong px-3 py-2 text-sm outline-none focus:border-ink"
+                dir="auto"
+              />
+            )}
           </div>
           <div className="flex items-center gap-4">
             <button
-              disabled={!choice || answer.isPending}
-              onClick={() => answer.mutate({ id: decision.id, answer: choice })}
+              disabled={!reply || answer.isPending}
+              onClick={() => answer.mutate({ id: decision.id, answer: reply })}
               className="h-8 rounded-lg bg-ink px-3.5 text-sm text-white disabled:bg-line-strong"
             >
               Send answer
             </button>
-            <Link to={`/tenders/${tenderId}/decisions/${decision.id}`} className="text-sm text-ink-2 hover:text-ink">
-              Answer in your own words
-            </Link>
+            {own === null && (
+              <button onClick={() => setOwn("")} className="text-sm text-ink-2 hover:text-ink">
+                Answer in your own words
+              </button>
+            )}
           </div>
           {answer.isError && <p className="text-attention">{answer.error.message}</p>}
         </>

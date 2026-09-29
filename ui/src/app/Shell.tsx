@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { TeamPanel } from "../office/Office";
 import { useTenders } from "../tenders/queries";
+import { useNotifications } from "./notify";
 import { lastTender, remember, store, stored } from "./place";
 import { Palette } from "./Palette";
 import { Rail } from "./Rail";
@@ -23,6 +24,7 @@ export function Shell() {
   const [unfolded, setUnfolded] = useState(false); // on Takeoff the sidebar folds for the drawing, unless opened there
   const [palette, setPalette] = useState(false);
   const onTakeoff = location.pathname.endsWith("/takeoff");
+  useNotifications();
 
   useEffect(() => remember(location.pathname + location.search), [location]);
   useEffect(() => {

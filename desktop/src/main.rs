@@ -22,6 +22,8 @@ fn main() {
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init()) // the Windows folder and file pickers
+        .plugin(tauri_plugin_notification::init()) // a Windows notification when something needs the engineer
         .setup(|app| {
             let config = app.config().app.windows[0].clone();
             let (navigating, opening) = (app.handle().clone(), app.handle().clone());
