@@ -3,8 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { fakeService, openApp } from "../test/app";
 
-// the desktop app: Tauri is there, its window answers and the Windows folder picker returns a folder
-vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => true }));
+// the desktop app: Tauri is there, its window answers, it can be listened to and the Windows folder picker returns a
+// folder
+vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => true, invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ isMaximized: async () => false, onResized: async () => () => {} }),
 }));
