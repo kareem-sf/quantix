@@ -166,7 +166,7 @@ describe("Pricing", () => {
     expect(within(panel).getByText(/Accepted by Rania/)).toHaveTextContent(
       "Accepted by Rania: 4.2 is mesh, not bar: a different item.",
     );
-    expect(within(panel).getByText("Must be fixed:")).toBeInTheDocument();
+    expect(within(panel).getByText("Must be fixed")).toBeInTheDocument();
     expect(within(panel).getAllByRole("link", { name: "Quote.pdf, page 1" })[1]).toHaveAttribute(
       "href",
       "/tenders/t1/documents?doc=d2&page=1",

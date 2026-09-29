@@ -12,10 +12,10 @@ describe("news", () => {
 
   it("tells of new decisions and of a team that finished", () => {
     expect(news([glance({ waiting: 1 })], [glance({ waiting: 3 })])).toEqual([
-      { tender: "t1", name: "Al Noor School", text: "2 new decisions need you" },
+      { tender: "t1", name: "Al Noor School", text: "2 new decisions need you", kind: "decisions" },
     ]);
     expect(news([glance({ team: "working" })], [glance({ team: "idle" })])).toEqual([
-      { tender: "t1", name: "Al Noor School", text: "The team finished its work" },
+      { tender: "t1", name: "Al Noor School", text: "The team finished its work", kind: "finished" },
     ]);
   });
 
@@ -27,13 +27,20 @@ describe("news", () => {
 
 describe("notice", () => {
   it("opens the tender when the news is from one, and the Desk when it is from several", () => {
-    const school = { tender: "t1", name: "Al Noor School", text: "1 new decision needs you" };
+    const school = {
+      tender: "t1",
+      name: "Al Noor School",
+      text: "1 new decision needs you",
+      kind: "decisions" as const,
+    };
     expect(notice([school])).toEqual({
       title: "Al Noor School",
       body: "1 new decision needs you",
       open: "/tenders/t1",
     });
-    expect(notice([school, { tender: "t2", name: "Ring Road", text: "The team finished its work" }])).toEqual({
+    expect(
+      notice([school, { tender: "t2", name: "Ring Road", text: "The team finished its work", kind: "finished" }]),
+    ).toEqual({
       title: "Several tenders",
       body: "Al Noor School: 1 new decision needs you\nRing Road: The team finished its work",
       open: "/desk",

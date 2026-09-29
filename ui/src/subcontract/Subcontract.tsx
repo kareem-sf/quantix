@@ -28,7 +28,7 @@ export function Subcontract() {
   const people = new Map((office.data?.staff ?? []).map((m) => [m.id, m]));
 
   return (
-    <div className="flex h-full w-full max-xl:flex-col max-xl:overflow-y-auto">
+    <div className="flex h-full w-full @max-5xl:flex-col @max-5xl:overflow-y-auto">
       <div className="flex min-w-0 grow flex-col px-8 pt-7">
         <h1 className="text-[24px] font-semibold tracking-tight">Subcontract</h1>
         <span className="text-ink-2">Trade and material packages</span>
@@ -195,7 +195,7 @@ function Choice({ tenderId, pkg, people }: { tenderId: string; pkg: Package; peo
   return (
     <aside
       aria-label="Choice"
-      className="flex w-[340px] shrink-0 flex-col gap-5 overflow-y-auto border-l border-line bg-white px-6 pt-7 pb-5 max-xl:w-full max-xl:overflow-visible max-xl:border-t max-xl:border-l-0 max-xl:px-8"
+      className="flex w-[340px] shrink-0 flex-col gap-5 overflow-y-auto border-l border-line bg-white px-6 pt-7 pb-5 @max-5xl:w-full @max-5xl:overflow-visible @max-5xl:border-t @max-5xl:border-l-0 @max-5xl:px-8"
     >
       {recommended && pkg.recommendation && (
         <div className="flex gap-2.5 rounded-[10px] bg-rail p-3 leading-normal">
@@ -285,7 +285,7 @@ function Choice({ tenderId, pkg, people }: { tenderId: string; pkg: Package; peo
                   <button
                     onClick={() => choose.mutate({ packageId: pkg.id, quoteId: recommended.id })}
                     disabled={choose.isPending}
-                    className="h-[38px] grow rounded-lg bg-ink text-sm text-white disabled:bg-line-strong"
+                    className="h-[38px] grow rounded-lg bg-ink text-sm text-white hover:bg-ink/85 active:scale-[0.98] disabled:cursor-default disabled:bg-subtle disabled:text-ink-4 disabled:active:scale-100"
                   >
                     Choose {recommended.company}
                   </button>

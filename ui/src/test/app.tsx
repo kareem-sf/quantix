@@ -91,7 +91,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     rules: [],
     company: { name: "", address: "", cr_number: "", vat_number: "", has_logo: false },
     connections: [],
-    settings: { office_mode: "engineer", office_ai: null, tender_allowance: null },
+    settings: { office_mode: "engineer", office_ai: null, tender_allowance: null, notifications: "all" },
     models: ["model-b", "model-a"],
     documents: [],
     pages: {},

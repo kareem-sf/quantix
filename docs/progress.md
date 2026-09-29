@@ -1145,3 +1145,65 @@ copy of the real database (23 rules added, nothing else changed).
   page scrolls; screens show quiet placeholder rows while they open.
 - **Not done:** Windows 11 snap layouts on Quantix's own maximise button. It worked (a hover sending Win+Z), but
   the engineer didn't want it; Win+Z still offers them.
+
+## 29 September 2026: motion, sliding edges and every window width
+
+- **Motion:** one set of short eased timings (`styles.css`): controls ease their hover and press, screens rise in
+  as they open, popovers and the profile fade in, the sidebar folds smoothly, and the team panel slides in and
+  out (`usePresence` in `app/layout.ts` keeps it on screen while it closes). Windows' "reduce animations" turns
+  it all off. Thin scrollbars and a keyboard focus ring everywhere.
+- **Sliding edges:** drag the sidebar's and the team panel's edges (`app/Resizer.tsx`); the widths are
+  remembered, a double-click brings back the usual width, and dragging the sidebar well past its narrowest folds it.
+- **Every width:** the window now goes down to 480 × 560, so it snaps to half a screen. Wide: sidebar and team beside
+  the screen. Below 1280: the team floats over it. Below 1024: the sidebar shows its icons and opens over the screen
+  as a drawer that closes once it has taken the engineer somewhere. Below 640: the sidebar is a drawer and the team
+  takes the whole window. The title bar folds search to an icon and the team's status to its dot. Screens lay
+  themselves out on the room they have, not the window's width (`<main>` is a size container), so the Desk,
+  Estimate, Subcontract and Submission reflow when the team opens or the sidebar widens; the tenders table and the
+  rate library drop minor columns, Documents shows the list or the document, and Takeoff puts its measurements under
+  the drawing.
+- **Decisions and buttons:** the question card's answers are radio choices with "Recommended" above the Manager's,
+  "Answer in your own words" is one of them, and Send never wraps; Quantix's checks show as a list with a mark per
+  check. Every primary button has one readable disabled look, a hover and a light press.
+
+## 29 September 2026: proving the numbers
+
+Tested against sources Quantix didn't produce (scripts read the real database read-only):
+
+- **DWG geometry:** all 1,240 dimensions in the four GAC drawings measure, from their own points, what AutoCAD
+  stored in the file (within 0.5 mm). Areas of about 1,500 closed outlines, recomputed here from the raw points, match
+  Quantix's to the square millimetre. The per-drawing checks found exactly the five hand-written "270" dimensions
+  that measure 277 on the elevations, and rightly left the "VAR." ones.
+- **BOQ:** all 26 items match the client's two Rev01 spreadsheets cell by cell (code, description, unit, the Rev.01
+  quantity, never Rev.00); zero-quantity lines and the unnumbered wheel stopper are kept; nothing missing or doubled.
+- **Estimate:** every extension, the net SAR 2,668,871.00, each preliminary, overheads, profit, VAT and the total
+  recompute exactly, as do all ten rate build-ups line by line.
+- **The AI's judgement:** the markups' one-month carry on a 72-working-day programme was an AI error that Quantix's
+  check caught. Not caught: the backfill build-ups price a field density test at SAR 8 where the subbase's prices it
+  at 150; on C.1.2 that is about SAR 83,000 short. Profit at 40% was the engineer's own instruction.
+- **Live takeoff (GAC, GPT-5.4 mini):** asked for WC pans, mirrors, soap dispensers, toilet doors and the columns, the
+  Tender Manager first refused ("cannot count from the page text") without giving it to his CAD staff: view_page's
+  refusal pointed him to read_page. Fixed: a CAD drawing's words and its refusal now say its quantities come from its
+  objects, and tell the Manager to give the takeoff to his team; his duties say drawing takeoff is staff work. Asked
+  again, he gave it to Omar, who counted 4, 4, 4, 4 and 14 columns (3.699 m²), all right. One slip passed his
+  review: a second "columns" measurement on the WC drawing (the one column that shows there). 8 turns, 647k input
+  tokens (86% cached).
+- **Still open:** the title block's lines are reported as drawn twice in every paper layout (16 near-identical
+  warnings on the elevations); no check compares one resource's price across build-ups.
+
+Also: a keyboard-shortcut list (Ctrl+/ and the Ctrl+K list), the choice of Windows notifications in Settings
+(decisions and finished work, decisions only, or none), the document viewer's toolbar wraps in a narrow window, the
+Ctrl+K list fits one, and git ignores the local research and teaser folders.
+
+## 28 September 2026: the Quantix brand
+
+Quantix takes its identity from the QS Mind house, whose tender stage it is.
+
+- **Mark.** Weave: an X whose second stroke passes under the first, a copper ribbon with one ink or ivory accent
+  piece. The kit is in `brand/`: SVG masters, icons, colours, the guidelines and the founder's signature.
+- **Desktop and browser.** Every desktop icon is regenerated from `brand/icons/app-icon-1024.png` at its old sizes,
+  and the interface has the favicon.
+- **Interface.** The sidebar draws the mark beside the name in the text colour, so the one warm accent still means
+  "needs you". Settings ends with About Quantix: the mark in its colours, "Part of QS Mind", and "Founded & developed
+  by Kareem Safwat" with his K, linking to kareemsafwat.com.
+- **Checks:** 1 new interface test; 80 interface tests and typecheck pass.

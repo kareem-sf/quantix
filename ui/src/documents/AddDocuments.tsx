@@ -22,7 +22,7 @@ export function AddDocuments({ tenderId, primary = false }: { tenderId: string; 
   }
 
   const main = primary
-    ? "h-9 rounded-lg bg-ink px-4 text-[13px] text-white disabled:bg-line-strong"
+    ? "h-9 rounded-lg bg-ink px-4 text-[13px] text-white hover:bg-ink/85 active:scale-[0.98] disabled:cursor-default disabled:bg-subtle disabled:text-ink-4 disabled:active:scale-100"
     : "h-8 rounded-lg border border-line-strong bg-white px-3 text-[13px] disabled:text-ink-4";
 
   return (

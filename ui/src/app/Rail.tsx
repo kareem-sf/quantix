@@ -1,4 +1,11 @@
-import { IconHome, IconListDetails, IconPlus, IconSelector, IconSettings, type Icon } from "@tabler/icons-react";
+import {
+  IconHome,
+  IconListDetails,
+  IconPlus,
+  IconSelector,
+  IconSettings,
+  type Icon,
+} from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router";
 import type { Tender } from "../api/client";
@@ -8,31 +15,55 @@ import { useSuggestedLessons } from "../review/queries";
 import { useDesk, useTenders } from "../tenders/queries";
 import { placeIn } from "./place";
 import { COMPANY_SCREENS, TENDER_SCREENS } from "./screens";
-import { useShell } from "./context";
+import { SIDEBAR, useShell } from "./context";
+import { Resizer } from "./Resizer";
 
 /** The sidebar: the open tender and its screens, then what the firm keeps across tenders, then Settings. Only one
- * tender at a time; the others are a click away in the switcher. Ctrl+B folds it to icons. */
+ * tender at a time; the others are a click away in the switcher. Ctrl+B folds it to icons; its edge drags. In a
+ * narrow window it shows its icons and opens over the screen; in a small one it is a drawer. */
 export function Rail({ tender }: { tender?: Tender }) {
-  const { folded } = useShell();
+  const shell = useShell();
+  const { folded, fit, drawer } = shell;
   const tenders = useTenders();
+  const floating = (fit === "narrow" || fit === "small") && drawer;
+  if (fit === "small" && !drawer) return null;
+  const width = folded ? SIDEBAR.folded : shell.sidebarWidth;
 
-  return (
+  const nav = (
     <nav
       aria-label="Quantix"
-      className={`relative z-20 flex shrink-0 flex-col border-r border-line bg-rail px-2 py-2.5 select-none ${folded ? "w-[52px]" : "w-56"}`}
+      style={{ width }}
+      className={`z-20 flex shrink-0 flex-col border-r border-line bg-rail px-2 py-2.5 transition-[width] duration-200 ease-(--ease-out) select-none ${floating ? "absolute inset-y-0 left-0 z-40 animate-from-left shadow-[10px_0_28px_rgb(0_0_0/0.12)]" : "relative"}`}
     >
+      {!folded && (
+        <Resizer
+          edge="right"
+          width={width}
+          label="Sidebar width"
+          onWidth={shell.setSidebarWidth}
+          onReset={() => shell.setSidebarWidth(SIDEBAR.usual)}
+        />
+      )}
       {tenders.isError && !folded && <span className="px-2 py-1 text-ink-2">Waiting for the Quantix service…</span>}
       <Office />
       {tender && <Switcher tender={tender} tenders={tenders.data ?? []} />}
       <div className="-mx-2 flex min-h-0 grow flex-col gap-0.5 overflow-x-hidden overflow-y-auto px-2">
         {tender ? <Screens tenderId={tender.id} /> : tenders.data && <Item to="/new" label="Start a tender" icon={IconPlus} />}
-        {!folded && <span className="px-2 pt-5 pb-1 text-xs text-ink-3">Company</span>}
+        {!folded && <span className="px-2 pt-5 pb-1 text-xs whitespace-nowrap text-ink-3">Company</span>}
         {folded && <span className="my-2 border-t border-line" />}
         <Company />
         <span className="grow" />
         <Item to="/settings" label="Settings" icon={IconSettings} />
       </div>
     </nav>
+  );
+  if (!floating) return nav;
+  return (
+    <>
+      {fit === "narrow" && <span className="w-[52px] shrink-0 border-r border-line bg-rail" />}
+      <div aria-hidden onClick={shell.closeDrawer} className="absolute inset-0 z-30 animate-fade bg-black/10" />
+      {nav}
+    </>
   );
 }
 
@@ -182,7 +213,7 @@ function Switcher({ tender, tenders }: { tender: Tender; tenders: Tender[] }) {
         <div
           role="menu"
           aria-label="Tenders"
-          className="absolute top-full left-0 z-30 mt-1 flex w-72 flex-col rounded-lg border border-line-strong bg-white p-1 shadow-[0_12px_32px_rgb(0_0_0/0.12)]"
+          className="absolute top-full left-0 z-30 mt-1 flex w-72 origin-top-left animate-pop flex-col rounded-lg border border-line-strong bg-white p-1 shadow-[0_12px_32px_rgb(0_0_0/0.12)]"
         >
           {sorted.map((t) => (
             <button

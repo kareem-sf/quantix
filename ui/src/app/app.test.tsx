@@ -109,6 +109,19 @@ describe("Quantix shell", () => {
     expect(router.state.location.pathname).toBe("/tenders/t1/estimate");
   });
 
+  it("lists the keyboard shortcuts with Ctrl+/ and closes them with Esc", async () => {
+    fakeService({ tenders: [school] });
+    openApp("/tenders/t1");
+    await screen.findByRole("heading", { name: "Nothing needs you right now" });
+
+    await userEvent.keyboard("{Control>}[Slash]{/Control}");
+    const sheet = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
+    expect(within(sheet).getByText("Open or close the team")).toBeInTheDocument();
+    expect(within(sheet).getByText("Ctrl 4")).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Keyboard shortcuts" })).not.toBeInTheDocument();
+  });
+
   it("jumps with Ctrl+K and the keyboard, and folds the sidebar with Ctrl+B", async () => {
     fakeService({ tenders: [school, warehouse] });
     const router = openApp("/tenders/t1");

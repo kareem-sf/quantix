@@ -17,8 +17,8 @@
         "title": "Quantix",
         "width": 1440,
         "height": 900,
-        "minWidth": 1024,
-        "minHeight": 680,
+        "minWidth": 480,
+        "minHeight": 560,
         "decorations": false
       }
     ],

@@ -65,12 +65,14 @@ class Settings(BaseModel):
     office_mode: Literal["engineer", "autonomous"]
     office_ai: OfficeAI | None
     tender_allowance: int | None  # the most AI tokens one tender's office may use
+    notifications: Literal["all", "decisions", "off"]  # Windows notifications while Quantix isn't in front
 
 
 class SettingsUpdate(BaseModel):
     office_mode: Literal["engineer", "autonomous"] | None = None
     office_ai: OfficeAI | None = None
     tender_allowance: int | None = Field(default=None, ge=1)
+    notifications: Literal["all", "decisions", "off"] | None = None
 
 
 def _out(connection: dict[str, Any]) -> ConnectionOut:

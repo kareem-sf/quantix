@@ -1,0 +1,23 @@
+:root {
+  /* house */
+  --qs-stage: #0E1013;
+  --qs-panel: #15181D;
+  --qs-tile: #111418;
+  --qs-ivory: #F3EFE6;
+  --qs-ink: #1F2328;
+  --qs-mute: #9A9690;
+  --qs-mute-light: #6B6760;
+  --qs-paper: #FFFFFF;
+  --qs-paper-warm: #F7F5F0;
+  /* brands: primary on dark, deep on light (>= 3:1 on white) */
+  --qs-mind-primary: #E3A82B;
+  --qs-mind-deep: #B88518;
+  --quanta-primary: #5B8CFF;
+  --quanta-deep: #588AFF;
+  --quantix-primary: #E0703A;
+  --quantix-deep: #E0703A;
+  --tawreed-primary: #E9AD38;
+  --tawreed-deep: #BD8415;
+  --founder-gold: linear-gradient(135deg, #FEF08A 0%, #D97706 50%, #78350F 100%);
+  --font-brand: 'Urbanist', 'Segoe UI', system-ui, sans-serif;
+}

@@ -20,9 +20,11 @@ import { useDesk } from "../tenders/queries";
 import type { Tender } from "../api/client";
 import { screenOf } from "./screens";
 import { useShell } from "./context";
+import { Logo } from "./Logo";
 
 /** Quantix's own title bar: back and forward, where the engineer is, search, what the team is doing, what needs
- * them and the team panel. Drag it to move the window; double-click it to maximise. */
+ * them and the team panel. Drag it to move the window; double-click it to maximise. In a narrower window search
+ * becomes an icon and the team's status its dot. */
 export function TitleBar({ tender }: { tender?: Tender }) {
   const { pathname } = useLocation();
   const navigate = useNavigate();
@@ -35,6 +37,15 @@ export function TitleBar({ tender }: { tender?: Tender }) {
       data-tauri-drag-region
       className="relative flex h-[38px] shrink-0 items-center gap-0.5 border-b border-line bg-rail pl-2 select-none"
     >
+      <Link
+        to="/desk"
+        draggable={false}
+        aria-label="Quantix: your Desk"
+        title="Quantix"
+        className="mr-1 flex size-7 items-center justify-center rounded-md text-ink hover:bg-selected"
+      >
+        <Logo className="h-3.5" />
+      </Link>
       <Tool label="Sidebar (Ctrl+B)" onClick={shell.toggleSidebar}>
         <IconLayoutSidebar className="size-4" stroke={1.75} />
       </Tool>
@@ -47,10 +58,10 @@ export function TitleBar({ tender }: { tender?: Tender }) {
       <span data-tauri-drag-region className="ml-2 flex min-w-0 max-w-[34%] items-center gap-1.5 text-ink-3">
         {inTender && tender && (
           <>
-            <span data-tauri-drag-region className="truncate font-medium text-ink">
+            <span data-tauri-drag-region className="truncate font-medium text-ink max-sm:hidden">
               {tender.name}
             </span>
-            <IconChevronRight data-tauri-drag-region className="size-3.5 shrink-0" stroke={1.75} />
+            <IconChevronRight data-tauri-drag-region className="size-3.5 shrink-0 max-sm:hidden" stroke={1.75} />
           </>
         )}
         <span data-tauri-drag-region className={`shrink-0 ${inTender && tender ? "" : "font-medium text-ink"}`}>
@@ -59,13 +70,18 @@ export function TitleBar({ tender }: { tender?: Tender }) {
       </span>
       <button
         onClick={shell.openPalette}
-        className="absolute left-1/2 flex h-[26px] w-[min(340px,28vw)] -translate-x-1/2 items-center gap-2 rounded-md border border-line-strong bg-white px-2.5 text-ink-4 hover:border-ink-4"
+        className="absolute left-1/2 flex h-[26px] w-[min(340px,28vw)] -translate-x-1/2 items-center gap-2 rounded-md border border-line-strong bg-white px-2.5 text-ink-4 hover:border-ink-4 max-lg:hidden"
       >
         <IconSearch className="size-3.5 shrink-0" stroke={1.75} />
         <span className="grow truncate text-left">Search or jump to…</span>
         <kbd className="shrink-0 rounded border border-line-strong px-1 font-sans text-[11px] text-ink-3">Ctrl K</kbd>
       </button>
       <span data-tauri-drag-region className="grow" />
+      <span className="lg:hidden">
+        <Tool label="Search or jump to (Ctrl+K)" onClick={shell.openPalette}>
+          <IconSearch className="size-4" stroke={1.75} />
+        </Tool>
+      </span>
       {tender && <Status tenderId={tender.id} />}
       <NeedsYou />
       {tender && <TeamButton tenderId={tender.id} />}
@@ -108,13 +124,13 @@ function Status({ tenderId }: { tenderId: string }) {
   return (
     <button
       onClick={() => shell.showTeam()}
-      title="What the team is doing"
-      className="flex h-7 max-w-[260px] items-center gap-2 rounded-md px-2.5 text-ink-2 hover:bg-selected hover:text-ink"
+      title={text}
+      className="flex h-7 max-w-[260px] min-w-7 items-center justify-center gap-2 rounded-md px-2.5 text-ink-2 hover:bg-selected hover:text-ink max-xl:px-0"
     >
       <span
         className={`size-[7px] shrink-0 rounded-full ${working ? "bg-approved motion-safe:animate-pulse" : office.data.state === "paused" ? "bg-attention" : "bg-ink-4"}`}
       />
-      <span className="truncate">{text}</span>
+      <span className="truncate max-xl:hidden">{text}</span>
     </button>
   );
 }
@@ -149,11 +165,12 @@ function TeamButton({ tenderId }: { tenderId: string }) {
     <button
       onClick={shell.toggleTeam}
       aria-pressed={shell.team.open}
+      aria-label="Team"
       title="Team (Ctrl+J)"
       className={`relative ml-0.5 flex h-7 items-center gap-1.5 rounded-md px-2.5 ${shell.team.open ? "bg-selected text-ink" : "text-ink-2 hover:bg-selected hover:text-ink"}`}
     >
       <IconUsers className="size-4" stroke={1.75} />
-      Team
+      <span className="max-sm:hidden">Team</span>
       {questions.length > 0 && <span aria-label="A question waits for you" className="size-[7px] rounded-full bg-attention" />}
     </button>
   );

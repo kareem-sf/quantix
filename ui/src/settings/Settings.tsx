@@ -1,6 +1,7 @@
 import { IconEye, IconEyeOff } from "@tabler/icons-react";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { useSearchParams } from "react-router";
+import { About } from "../about/About";
 import { ProviderLogo } from "./ProviderLogo";
 import {
   PROVIDERS,
@@ -22,10 +23,20 @@ import {
 
 const input = "h-9 rounded-lg border border-line-strong px-3 text-[13px] outline-none focus:border-ink";
 const secondary = "h-9 rounded-lg border border-line-strong bg-white px-3 text-[13px] disabled:text-ink-4";
-const primary = "h-9 rounded-lg bg-ink px-4 text-[13px] text-white disabled:bg-line-strong disabled:text-ink-3";
+const primary =
+  "h-9 rounded-lg bg-ink px-4 text-[13px] text-white hover:bg-ink/85 active:scale-[0.98] disabled:cursor-default disabled:bg-subtle disabled:text-ink-4 disabled:active:scale-100";
 
 const SECTIONS = [
-  ["office", "Office", () => <OfficeMode />],
+  [
+    "office",
+    "Office",
+    () => (
+      <>
+        <OfficeMode />
+        <Notifications />
+      </>
+    ),
+  ],
   [
     "ai",
     "AI",
@@ -47,6 +58,7 @@ const SECTIONS = [
       </>
     ),
   ],
+  ["about", "About", () => <About />],
 ] as const;
 
 /** Only settings: how the office works, its AI, web research and what the AI has used. The firm's own details,
@@ -118,6 +130,48 @@ function OfficeMode() {
             name="office-mode"
             checked={mode === option.id}
             onChange={() => update.mutate({ office_mode: option.id })}
+            className="mt-0.5 accent-ink"
+          />
+          <span className="flex flex-col gap-0.5">
+            <span className="text-sm font-medium">{option.title}</span>
+            <span className="leading-normal text-ink-3">{option.text}</span>
+          </span>
+        </label>
+      ))}
+    </Section>
+  );
+}
+
+/** Which Windows notifications Quantix sends while it isn't in front. */
+function Notifications() {
+  const settings = useSettings();
+  const update = useUpdateSettings();
+  const chosen = settings.data?.notifications;
+  const options = [
+    {
+      id: "all" as const,
+      title: "Decisions and finished work",
+      text: "A decision that waits for you, and a team that finished its work.",
+    },
+    { id: "decisions" as const, title: "Decisions only", text: "Only when a decision waits for you." },
+    {
+      id: "off" as const,
+      title: "None",
+      text: "Quantix doesn't notify. The bell in the title bar still counts what waits for you.",
+    },
+  ];
+  return (
+    <Section title="Windows notifications">
+      {options.map((option) => (
+        <label
+          key={option.id}
+          className={`flex cursor-pointer gap-3 rounded-[10px] border p-3.5 ${chosen === option.id ? "border-ink bg-rail" : "border-line"}`}
+        >
+          <input
+            type="radio"
+            name="notifications"
+            checked={chosen === option.id}
+            onChange={() => update.mutate({ notifications: option.id })}
             className="mt-0.5 accent-ink"
           />
           <span className="flex flex-col gap-0.5">
@@ -484,3 +538,5 @@ function Allowance() {
     </Section>
   );
 }
+
+/** Who makes Quantix: its mark, the QS Mind house it belongs to, and its founder's credit. */
