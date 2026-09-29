@@ -7,6 +7,13 @@ use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_window_state::StateFlags;
 
 fn main() {
+    #[cfg(all(windows, debug_assertions))]
+    if let [_, flag, entry, id] = &std::env::args().collect::<Vec<_>>()[..]
+        && flag == START_MENU_ENTRY
+    {
+        start_menu_entry(entry, id);
+        return;
+    }
     tauri::Builder::default()
         // a second launch brings the open window forward instead of starting a second Quantix on the same data
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
@@ -23,7 +30,7 @@ fn main() {
         )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init()) // the Windows folder and file pickers
-        .plugin(tauri_plugin_notification::init()) // a Windows notification when something needs the engineer
+        .invoke_handler(tauri::generate_handler![notify])
         .setup(|app| {
             let config = app.config().app.windows[0].clone();
             let (navigating, opening) = (app.handle().clone(), app.handle().clone());
@@ -41,6 +48,7 @@ fn main() {
                 })
                 .build()?;
             quiet(&window);
+            register(app.handle());
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -88,3 +96,87 @@ fn quiet(window: &WebviewWindow) {
 
 #[cfg(not(windows))]
 fn quiet(_: &WebviewWindow) {}
+
+/// Windows shows a notification only for an app in the Start menu under the id the notification carries, and names
+/// the sender from that entry. The installer gives Quantix its entry; a development build adds its own once, from a
+/// second Quantix process: made inside the window's process, the shortcut corrupts its memory.
+#[cfg(all(windows, debug_assertions))]
+fn register(app: &AppHandle) {
+    let (Ok(exe), Ok(roaming)) = (std::env::current_exe(), app.path().data_dir()) else {
+        return;
+    };
+    let entry = roaming.join(r"Microsoft\Windows\Start Menu\Programs\Quantix (development).lnk");
+    if !entry.exists() {
+        let _ = std::process::Command::new(exe)
+            .arg(START_MENU_ENTRY)
+            .arg(entry)
+            .arg(&app.config().identifier)
+            .spawn();
+    }
+}
+
+#[cfg(all(windows, debug_assertions))]
+const START_MENU_ENTRY: &str = "--start-menu-entry";
+
+/// A Start-menu shortcut to this program at `entry`, carrying the app id `id`.
+#[cfg(all(windows, debug_assertions))]
+fn start_menu_entry(entry: &str, id: &str) {
+    use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
+    use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
+    use windows::Win32::System::Com::{
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, IPersistFile,
+    };
+    use windows::Win32::System::Variant::VT_LPWSTR;
+    use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+    use windows_core::{HSTRING, Interface, PWSTR};
+
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let mut id: Vec<u16> = id.encode_utf16().chain([0]).collect();
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let Ok(link) = CoCreateInstance::<_, IShellLinkW>(&ShellLink, None, CLSCTX_INPROC_SERVER) else {
+            return;
+        };
+        let mut value = PROPVARIANT::default();
+        (*value.Anonymous.Anonymous).vt = VT_LPWSTR;
+        (*value.Anonymous.Anonymous).Anonymous.pwszVal = PWSTR(id.as_mut_ptr());
+        let _ = link
+            .SetPath(&HSTRING::from(exe.as_os_str()))
+            .and_then(|()| link.cast::<IPropertyStore>())
+            .and_then(|store| store.SetValue(&PKEY_AppUserModel_ID, &value).and_then(|()| store.Commit()))
+            .and_then(|()| link.cast::<IPersistFile>())
+            .and_then(|file| file.Save(&HSTRING::from(entry), true));
+    }
+}
+
+#[cfg(not(all(windows, debug_assertions)))]
+fn register(_: &AppHandle) {}
+
+/// A Windows notification from Quantix. Clicking it brings Quantix forward and opens `open`, a place in the app.
+#[cfg(windows)]
+#[tauri::command]
+fn notify(app: AppHandle, title: String, body: String, open: String) {
+    use tauri::Emitter;
+    use tauri_winrt_notification::Toast;
+
+    let clicked = app.clone();
+    let _ = Toast::new(&app.config().identifier)
+        .title(&title)
+        .text1(&body)
+        .on_activated(move |_| {
+            if let Some(window) = clicked.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+            let _ = clicked.emit_to("main", "notification-clicked", &open);
+            Ok(())
+        })
+        .show();
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn notify(_: String, _: String, _: String) {}

@@ -10,12 +10,18 @@ tauri-build = { version = "2.5", features = [] }
 [dependencies]
 tauri = { version = "2.9", features = [] }
 tauri-plugin-dialog = "2"
-tauri-plugin-notification = "2"
 tauri-plugin-opener = "2.5"
 tauri-plugin-single-instance = "2.4"
 tauri-plugin-window-state = "2"
 
-# WebView2's own settings, which Tauri doesn't expose: the versions wry already uses
+# WebView2's own settings, which Tauri doesn't expose, and Windows notifications: the versions wry already uses
 [target.'cfg(windows)'.dependencies]
+tauri-winrt-notification = "0.8"
 webview2-com = "0.39"
+windows = { version = "0.62", features = [
+    "Win32_Storage_EnhancedStorage",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_UI_Shell_PropertiesSystem",
+] }
 windows-core = "0.62"

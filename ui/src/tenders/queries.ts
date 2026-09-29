@@ -66,7 +66,13 @@ export type TenderGlance = components["schemas"]["TenderGlance"];
 
 /** Every tender at a glance, for the Desk and the register; followed while the team works. */
 export function useDesk() {
-  return useQuery({ queryKey: ["desk"], queryFn: async () => must(await api.GET("/desk")), refetchInterval: 5000 });
+  // Kept fresh while the window is minimised or covered too: that's when the engineer needs a Windows notification
+  return useQuery({
+    queryKey: ["desk"],
+    queryFn: async () => must(await api.GET("/desk")),
+    refetchInterval: 5000,
+    refetchIntervalInBackground: true,
+  });
 }
 
 export function useSetArchived(id: string) {

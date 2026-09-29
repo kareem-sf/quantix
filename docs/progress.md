@@ -1130,11 +1130,18 @@ copy of the real database (23 rules added, nothing else changed).
   service copies the files from where they are (`POST /tenders/{id}/documents/import`, folder structure kept,
   hidden and Windows system files skipped). The browser keeps its upload. No more "Upload N files to this site?".
 - **Windows notifications:** when Quantix isn't in front, a notification says which tender has new decisions for
-  the engineer, or that a team finished (tauri-plugin-notification; `app/notify.ts` compares each Desk refresh).
+  the engineer, or that a team finished (`app/notify.ts` compares each Desk refresh, which keeps running while the
+  window is minimised or covered). Quantix sends them itself (`notify` in `desktop/src/main.rs`, on
+  tauri-winrt-notification), under its own name and icon; clicking one brings Quantix forward on that tender, or on
+  the Desk when several tenders have news. The notification plugin went: in a development build it sends as
+  Windows PowerShell and it can't report a click. Windows shows a pop-up only for an app with a Start-menu entry
+  carrying its id: the installer makes Quantix's; a development build makes "Quantix (development)" once, from a
+  second short-lived Quantix process, because creating the shortcut inside the window's process corrupts its
+  memory.
 - **One place to answer:** the question card in the chat shows where an escalation shows, what Quantix found and
   the Manager's recommended option, and takes an answer in the engineer's own words; the separate decision page is
   gone, and an old link to it opens the asker's chat.
 - **Polish:** every screen title one size; the Overview's, Settings' and Tenders' headers stay in view while the
   page scrolls; screens show quiet placeholder rows while they open.
-- **Not done:** Windows 11 snap layouts on Quantix's own maximise button. The one plugin for it replaces the title
-  bar's window buttons with its own, and the native way needs low-level window handling; Win+Z still offers them.
+- **Not done:** Windows 11 snap layouts on Quantix's own maximise button. It worked (a hover sending Win+Z), but
+  the engineer didn't want it; Win+Z still offers them.
