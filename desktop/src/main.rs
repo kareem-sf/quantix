@@ -176,8 +176,12 @@ fn start_menu_entry(entry: &str, id: &str) {
         let mut value = PROPVARIANT::default();
         (*value.Anonymous.Anonymous).vt = VT_LPWSTR;
         (*value.Anonymous.Anonymous).Anonymous.pwszVal = PWSTR(id.as_mut_ptr());
+        // the taskbar draws a window matched to this entry with the entry's icon: take it from the icon file, not the
+        // program, whose picture Windows keeps cached by its path however often the icon changes
+        let icon = concat!(env!("CARGO_MANIFEST_DIR"), r"\icons\icon.ico");
         let _ = link
             .SetPath(&HSTRING::from(exe.as_os_str()))
+            .and_then(|()| link.SetIconLocation(&HSTRING::from(icon), 0))
             .and_then(|()| link.cast::<IPropertyStore>())
             .and_then(|store| store.SetValue(&PKEY_AppUserModel_ID, &value).and_then(|()| store.Commit()))
             .and_then(|()| link.cast::<IPersistFile>())
