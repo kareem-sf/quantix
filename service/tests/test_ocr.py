@@ -58,7 +58,7 @@ def test_a_scanned_page_is_read_and_can_be_searched_and_cited(client):
         session.commit()
         omar_id = omar.id
     turn = tools.Turn(client.app.state.home, client.app.state.sessions, tender_id, omar_id, False, threading.Event())
-    text = tools.read_page(SimpleNamespace(deps=turn), document["id"], 1)
+    text = tools.read_page(SimpleNamespace(deps=turn, tool_call_id="call"), document["id"], 1)
     assert text.startswith("Data schedule.pdf, page 1, read from the scan by OCR (")
     assert "Check figures that matter on the image with view_page" in text and "Suitable up to 2500" in text
     with client.app.state.sessions() as session:

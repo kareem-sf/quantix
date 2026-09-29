@@ -9,10 +9,10 @@
 //! gives it is placed like a block, its layers and blocks named after it ("BASE|WALLS").
 //!
 //! The folder gets `drawing.json` (units, spaces, layers, blocks and what couldn't be read), `objects.json` (keys,
-//! names, text, block references, dimensions, tables, hatches and viewports) and three little-endian arrays:
+//! names, text, block references, dimensions, tables, hatches and viewports) and four little-endian arrays:
 //! `index.bin` (u32 × 8 per object: space, type, layer, block + 1, first point, points, flags, parent + 1),
-//! `num.bin` (f64 × 7: extent left, bottom, right, top, length, area, volume) and `coords.bin` (f64 pairs; a NaN pair
-//! separates the parts of one object).
+//! `num.bin` (f64 × 7: extent left, bottom, right, top, length, area, volume), `coords.bin` (f64 pairs; a NaN pair
+//! separates the parts of one object) and `colours.bin` (u32 per object: the colour it shows in, 0xRRGGBB).
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -23,7 +23,7 @@ use std::rc::Rc;
 use opencadcodec::entities::mtext_format::parse_mtext;
 use opencadcodec::entities::{AcisData, AttachmentPoint, BoundaryEdge, EntityType, Hatch, Insert};
 use opencadcodec::objects::ObjectType;
-use opencadcodec::types::{Handle, Matrix4, Vector3};
+use opencadcodec::types::{Color, Handle, Matrix4, Vector3};
 use opencadcodec::{CadDocument, DwgReadOptions, DwgReader, DxfReader, ReadOutcome};
 use serde_json::{json, Value};
 
@@ -32,7 +32,7 @@ use crate::solid;
 use crate::Failure;
 
 /// Bumped whenever what the folder holds changes, so Quantix reads older folders again.
-pub const FORMAT: u32 = 3;
+pub const FORMAT: u32 = 4;
 pub const READER: &str = "opencadcodec a35f43e, opencadkernel ee41029";
 
 pub const TYPES: [&str; 22] = [
@@ -107,7 +107,12 @@ struct Place {
     source: usize,
     /// The drawings being placed around it, one bit each, so a drawing that refers back to one of them stops.
     above: u64,
+    /// The colour of the block reference (or dimension, leader or multiline) it sits in: what "by block" shows in.
+    colour: u32,
 }
+
+/// White, as CAD shows colour 7 on paper: in ink.
+const WHITE: u32 = 0xFF_FFFF;
 
 /// A drawing whose objects the walker places: the one being read (the first), or a drawing it refers to (an
 /// xref) that Quantix was given.
@@ -135,6 +140,10 @@ impl<'a> Source<'a> {
     }
 }
 
+fn packed((r, g, b): (u8, u8, u8)) -> u32 {
+    (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)
+}
+
 /// How much the walker had written, to take back a clipped block reference none of whose objects show.
 struct Mark([usize; 8]);
 
@@ -156,6 +165,9 @@ struct Walker<'a> {
     tables: Vec<Value>,
     hatches: Vec<Value>,
     viewports: Vec<Value>,
+    /// Each object's colour, and the colour of the object being read.
+    colours: Vec<u32>,
+    colour: u32,
     not_read: BTreeMap<&'static str, u64>,
     xrefs: BTreeMap<String, Value>,
 }
@@ -187,6 +199,7 @@ pub fn run(drawing: &str, folder: &str, xrefs: &[String]) -> Result<(), Failure>
             clips: Rc::default(),
             source: 0,
             above: 1,
+            colour: WHITE,
         };
         walker.block(&block, &place);
         let objects = walker.keys.len() - first;
@@ -423,6 +436,8 @@ impl<'a> Walker<'a> {
             tables: vec![],
             hatches: vec![],
             viewports: vec![],
+            colours: vec![],
+            colour: WHITE,
             not_read: BTreeMap::new(),
             xrefs: BTreeMap::new(),
         };
@@ -450,6 +465,7 @@ impl<'a> Walker<'a> {
         self.keys.truncate(objects);
         self.index.truncate(objects);
         self.num.truncate(objects);
+        self.colours.truncate(objects);
         self.coords.truncate(coords);
         self.texts.truncate(texts);
         self.inserts.truncate(inserts);
@@ -477,6 +493,19 @@ impl<'a> Walker<'a> {
         self.blocks.push(name.to_string());
         self.block_index.insert(name.to_string(), i);
         i
+    }
+
+    /// The colour an object shows in: its own, its layer's, or the block reference's it sits in.
+    fn colour_of(&self, colour: &Color, layer: &str, place: &Place) -> u32 {
+        match colour {
+            Color::ByBlock => place.colour,
+            Color::ByLayer => self
+                .defined(layer, |d, n| d.layers.get(n))
+                .and_then(|l| l.color.rgb())
+                .map(packed)
+                .unwrap_or(WHITE),
+            other => other.rgb().map(packed).unwrap_or(WHITE),
+        }
     }
 
     fn skipped(&mut self, what: &'static str) {
@@ -564,6 +593,7 @@ impl<'a> Walker<'a> {
         let e = extent.unwrap_or([f64::NAN; 4]);
         self.num
             .push([e[0], e[1], e[2], e[3], round(length), round(area), 0.0]);
+        self.colours.push(self.colour);
         i
     }
 
@@ -628,6 +658,8 @@ impl<'a> Walker<'a> {
             _ => format!("{}{}", self.sources[place.source].prefix, common.layer),
         };
         let layer = layer.as_str();
+        let own = self.colour_of(&common.color, layer, place);
+        self.colour = own;
         match entity {
             EntityType::Line(e) => {
                 let shape = g::line(v2(e.start), v2(e.end));
@@ -806,6 +838,7 @@ impl<'a> Walker<'a> {
                     path: format!("{}{:X}/", place.path, handle),
                     parent: Some(i),
                     flags: place.flags | ANNOTATION,
+                    colour: own,
                     ..place.clone()
                 };
                 for part in entity.explode() {
@@ -864,6 +897,7 @@ impl<'a> Walker<'a> {
                         layer: Some(layer.to_string()),
                         flags: place.flags | ANNOTATION,
                         depth: place.depth + 1,
+                        colour: own,
                         ..place.clone()
                     };
                     self.block(&e.block_name.clone(), &inner);
@@ -929,6 +963,7 @@ impl<'a> Walker<'a> {
                     path: format!("{}{:X}/", place.path, handle),
                     parent: Some(i),
                     flags: place.flags | DERIVED,
+                    colour: own,
                     ..place.clone()
                 };
                 for part in entity.explode() {
@@ -1145,6 +1180,7 @@ impl<'a> Walker<'a> {
         if !g::shows(&place.clips, at) {
             return;
         }
+        let own = self.colour;
         let i = self.push(
             place,
             handle,
@@ -1180,6 +1216,7 @@ impl<'a> Walker<'a> {
                 layer: Some(layer.to_string()),
                 flags: place.flags | ANNOTATION,
                 depth: place.depth + 1,
+                colour: own,
                 ..place.clone()
             };
             self.block(&base.block_name.clone(), &inner);
@@ -1188,6 +1225,7 @@ impl<'a> Walker<'a> {
     }
 
     fn insert(&mut self, e: &Insert, place: &Place, handle: u64, layer: &str) {
+        let by_block = self.colour; // what its "by block" objects show in
         let source = &self.sources[place.source];
         let (doc, prefix) = (source.doc, source.prefix.clone());
         let Some(record) = doc.block_records.get(&e.block_name) else {
@@ -1290,8 +1328,10 @@ impl<'a> Walker<'a> {
                 parent: Some(i),
                 flags: place.flags | IN_BLOCK,
                 clips: clips.clone(),
+                colour: by_block,
                 ..place.clone()
             };
+            self.colour = self.colour_of(&attribute.common.color, &attribute_layer, &inner);
             self.text(
                 &inner,
                 attribute.common.handle.value(),
@@ -1363,6 +1403,7 @@ impl<'a> Walker<'a> {
                     clips: clips.clone(),
                     source: block_source,
                     above: place.above | (1 << block_source),
+                    colour: by_block,
                 };
                 self.block(&block_name, &inner);
             }
@@ -1486,7 +1527,13 @@ impl<'a> Walker<'a> {
             coords.write_all(&v.to_le_bytes()).map_err(Failure::io)?;
         }
         coords.flush().map_err(Failure::io)?;
-        drop((index, num, coords));
+        let mut colours =
+            BufWriter::new(fs::File::create(staging.join("colours.bin")).map_err(Failure::io)?);
+        for v in &self.colours {
+            colours.write_all(&v.to_le_bytes()).map_err(Failure::io)?;
+        }
+        colours.flush().map_err(Failure::io)?;
+        drop((index, num, coords, colours));
         let _ = fs::remove_dir_all(folder);
         fs::rename(&staging, folder).map_err(Failure::io)?;
         Ok(())

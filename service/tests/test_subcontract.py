@@ -235,8 +235,12 @@ def test_the_directory_and_enquiries(client, tender):
         session.commit()
     [enquiry] = client.get(f"/tenders/{tender_id}/packages").json()[0]["enquiries"]
     assert (enquiry["company"], enquiry["status"]) == ("Najd Contracting", "draft")
+    assert client.get(f"/tenders/{tender_id}/gates").json()["enquiries"] == 0  # the Tender Manager reviews it first
+    manager_accepts(client, tender_id)
+    assert client.get(f"/tenders/{tender_id}/gates").json()["enquiries"] == 1  # the engineer sends it from their mail
     client.post(f"/enquiries/{enquiry['id']}/sent")
     assert client.get(f"/tenders/{tender_id}/packages").json()[0]["enquiries"][0]["status"] == "sent"
+    assert client.get(f"/tenders/{tender_id}/gates").json()["enquiries"] == 0
 
 
 def test_staff_level_quotes_through_their_tools_and_an_autonomous_office_chooses(client, tender, tmp_path):

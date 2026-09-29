@@ -6,5 +6,7 @@ configure({ asyncUtilTimeout: 5000 }); // findBy and waitFor wait longer on a bu
 
 afterEach(() => {
   cleanup();
+  localStorage.clear(); // where the engineer was, the folded sidebar and the team panel belong to one test
+
   vi.unstubAllGlobals();
 });

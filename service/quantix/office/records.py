@@ -78,8 +78,16 @@ def send_back(session: Session, tender_id: str, record: Any, what: str, reason: 
     person = session.get(Staff, record.proposed_by)
     to = f"{person.first_name}, " if person else ""
     post(session, tender_id, by, TEAM, f"{to}I sent back {what}" + (f": {reason}" if reason else "."))
-    if person is not None and person.status == "active" and not person.is_manager:
-        title, brief = f"Redo {what}", reason or "See the team room."
+    title, brief = f"Redo {what}", reason or "See the team room."
+    if person is None or person.status != "active" or person.is_manager:
+        # made by someone who can't redo it: the Manager, who produces nothing, or someone released. Without this
+        # the redo was no one's task, and work the engineer reopened waited unseen (the real tender's markups).
+        lead = manager(session, tender_id)
+        if lead is not None:
+            maker = "you made it, and your staff produce the work" if person is lead else "its maker has left the team"
+            brief = f"{brief}\nGive this redo to someone on the team with assign_task, passing on the reason: {maker}."
+            person, title = lead, f"Give out: {title}"
+    if person is not None and person.status == "active":
         query = select(Task).where(Task.staff_id == person.id, Task.status == "open", Task.title == title)
         earlier = session.scalars(query).first()
         if earlier is not None:  # sent back again: the newest correction is the one to follow, from now
@@ -96,6 +104,31 @@ def messages(session: Session, tender_id: str, channel: str, limit: int = 200) -
         .limit(limit)
     )
     return list(reversed(session.scalars(query).all()))
+
+
+def pause_notice(session: Session, tender_id: str) -> str | None:
+    """Why the office paused, when it paused itself since the engineer last wrote; None when the engineer stopped it."""
+    spoke = select(func.max(Message.id)).where(Message.tender_id == tender_id, Message.sender == ENGINEER)
+    query = (
+        select(Message.text)
+        .where(
+            Message.tender_id == tender_id,
+            Message.sender == OFFICE,
+            Message.text.startswith("The office "),
+            Message.id > func.coalesce(spoke.scalar_subquery(), 0),
+        )
+        .order_by(Message.id.desc())
+        .limit(1)
+    )
+    return session.scalars(query).first()
+
+
+def turns(session: Session, tender_id: str, staff_id: str | None = None, limit: int = 200) -> list[TurnRecord]:
+    """The latest turns, oldest first: everyone's, or one person's."""
+    query = select(TurnRecord).where(TurnRecord.tender_id == tender_id)
+    if staff_id:
+        query = query.where(TurnRecord.staff_id == staff_id)
+    return list(reversed(session.scalars(query.order_by(TurnRecord.id.desc()).limit(limit)).all()))
 
 
 def inbox(session: Session, member: Staff) -> list[Message]:

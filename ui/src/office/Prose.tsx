@@ -27,7 +27,12 @@ const COMPONENTS: Components = {
 
 /** Older messages ran points together as "(1) … (2) …" and signed off "— Salem": lay them out as a list. */
 export function tidy(text: string, signer?: string): string {
-  let out = text.trim();
+  // record references ("markups 99d1acc5", "draft a1b2c3d4") are the office's bookkeeping, not the engineer's words
+  let out = text
+    .trim()
+    .replace(/\b([A-Za-z]+) ([0-9a-f]{8})\b(?![-\w])/g, (whole, word: string, code: string) =>
+      /\d/.test(code) && /[a-f]/.test(code) ? word : whole,
+    );
   if (signer) out = out.replace(new RegExp(`\\s*[—–-]\\s*${signer}\\.?$`), "");
   if (!out.includes("\n") && /\(1\)\s/.test(out) && /\(2\)\s/.test(out)) {
     const [lead, ...points] = out.split(/\s*\((?=\d+\)\s)/);

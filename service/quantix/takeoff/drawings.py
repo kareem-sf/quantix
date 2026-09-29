@@ -3,6 +3,7 @@ holds, the rooms, and the checks that find what is missing and what disagrees. E
 drawing's own objects; what a layer or block *is* comes only from the layer map the office proposes and the engineer
 approves, never from a naming convention Quantix assumes."""
 
+import math
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -15,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, object_session
 
 from quantix.core.review import APPROVED, LIVE
-from quantix.documents import cad, library
+from quantix.documents import cad, library, vectors
 from quantix.documents.models import Document
 from quantix.takeoff.models import LayerMap, Measurement, Scale
 
@@ -92,6 +93,44 @@ def drawing_document(session: Session, tender_id: str, document_id: str) -> Docu
     return document
 
 
+def drawing_page(session: Session, tender_id: str, document_id: str, page: int) -> Document:
+    """A document whose page Quantix measures by its objects: a CAD drawing, or a PDF page drawn in lines."""
+    document = session.get(Document, document_id)
+    if document is None or document.tender_id != tender_id:
+        raise ValueError("No document has that id. Use list_documents to find its id.")
+    if document.kind != "pdf":
+        return drawing_document(session, tender_id, document_id)
+    if document.status in ("waiting", "reading"):
+        raise ValueError(f"{document.name} is still being read.")
+    if document.status not in ("read", "replaced"):
+        raise ValueError(f"{document.name} couldn't be read: {document.note}")
+    if not 1 <= page <= (document.page_count or 0):
+        raise ValueError(f"{document.name} has pages 1 to {document.page_count or 0}.")
+    if not drawn_in_lines(library.home_of(session), document, page):
+        raise ValueError(
+            f"Page {page} of {document.name} isn't drawn in lines Quantix can read (it is a scan, or mostly words): "
+            "measure it with set_scale and measure instead."
+        )
+    return document
+
+
+def drawn_in_lines(home: Path, document: Document, page: int) -> bool:
+    """Whether a PDF page is a drawing printed from CAD, whose own lines Quantix can read as objects."""
+    if document.kind != "pdf" or not 1 <= page <= (document.page_count or 0):
+        return False
+    try:
+        return vectors.line_count(library.stored_file(home, document), page) >= vectors.MIN_LINES
+    except OSError:
+        return False
+
+
+def open_page(home: Path, document: Document, page: int) -> cad.Drawing:
+    """The drawing a page is measured on: the whole CAD drawing, or the lines of one PDF page."""
+    if document.kind == "pdf":
+        return vectors.page_drawing(library.stored_file(home, document), page)
+    return open_drawing(home, document)
+
+
 def open_drawing(home: Path, document: Document) -> cad.Drawing:
     """A read drawing, with the drawings it refers to (xrefs) placed in it wherever the tender's package holds them,
     as CAD shows a loaded xref."""
@@ -142,15 +181,17 @@ def unit_name(metres: float) -> str:
     return f"{metres:g} metres to the unit"
 
 
-def units_record(session: Session, document_id: str) -> Scale | None:
-    """A drawing's units: the newest approved record, or else the newest still being decided."""
-    query = select(Scale).where(Scale.document_id == document_id, Scale.page == 1, Scale.status.in_(LIVE))
+def units_record(session: Session, document_id: str, page: int = 1) -> Scale | None:
+    """A drawing's units (a PDF page's scale): the newest approved record, or else the newest still being decided."""
+    query = select(Scale).where(Scale.document_id == document_id, Scale.page == page, Scale.status.in_(LIVE))
     found = list(session.scalars(query.order_by(Scale.created_at.desc())))
     return next((s for s in found if s.status in APPROVED), found[0] if found else None)
 
 
-def metres_per_unit(session: Session, document_id: str) -> float | None:
-    record = units_record(session, document_id)
+def metres_per_unit(session: Session, document_id: str, page: int = 1) -> float | None:
+    """Metres in one unit of a drawing: a CAD drawing's units, or a PDF page's scale (metres per point)."""
+    document = session.get(Document, document_id)
+    record = units_record(session, document_id, page if document is not None and document.kind == "pdf" else 1)
     return record.metres_per_point if record else None
 
 
@@ -221,15 +262,8 @@ def meaning_of(names: dict[str, str], name: str | None) -> str | None:
 
 def _straight_segments(d: cad.Drawing, found: np.ndarray) -> np.ndarray:
     """The straight pieces of the objects' chains, as rows of x1, y1, x2, y2."""
-    rows = []
-    for i in found:
-        closed = d.flags(int(i)) & cad.CLOSED
-        for part in d.parts(int(i)):
-            if len(part) < 2:
-                continue
-            ring = np.vstack([part, part[:1]]) if closed and len(part) > 2 else part
-            rows.append(np.hstack([ring[:-1], ring[1:]]))
-    return np.vstack(rows) if rows else np.zeros((0, 4))
+    rows, _ = cad.segments_of(d, np.asarray(found, dtype=int))
+    return rows[(rows[:, 0] != rows[:, 2]) | (rows[:, 1] != rows[:, 3])]
 
 
 def wall_spacing(d: cad.Drawing, found: np.ndarray, sample: int = 1500) -> tuple[float, float] | None:
@@ -407,6 +441,78 @@ def _find_rooms(d: cad.Drawing, page: int, known: Meanings, metres: float | None
     return found
 
 
+def enclosure(
+    d: cad.Drawing,
+    page: int,
+    point: tuple[float, float],
+    hidden: set[str],
+    within: tuple[float, float, float, float] | None,
+    tolerance: float,
+) -> np.ndarray:
+    """The smallest region around a point that the page's lines close off, as a ring: the area the engineer clicks
+    inside. Lines on hidden layers are left out, and so are words, annotation and what lies outside `within` (the
+    part of the page on screen). Quantix looks in a small window around the point first and widens it: a region that
+    lies wholly inside a window is closed off by lines that all touch it, so it is found there exactly."""
+    index = d.index
+    mask = (index[:, 0] == page) & ((index[:, 6] & (cad.ANNOTATION | cad.DERIVED)) == 0)
+    not_lines = [n for n, t in enumerate(d.types) if t in WORDS | {"Insert", "Point", "Viewport"}]
+    mask &= ~np.isin(index[:, 1], not_lines)
+    if hidden:
+        mask &= np.array([n not in hidden for n in d.layer_names], dtype=bool)[index[:, 2]]
+    box = d.num[:, :4]
+    limit = (
+        within
+        or d.space(page).extents
+        or (np.nanmin(box[:, 0]), np.nanmin(box[:, 1]), np.nanmax(box[:, 2]), np.nanmax(box[:, 3]))
+    )
+    x, y = point
+    half = max(limit[2] - limit[0], limit[3] - limit[1]) / 32
+    while True:
+        window = (max(x - half, limit[0]), max(y - half, limit[1]), min(x + half, limit[2]), min(y + half, limit[3]))
+        whole = window == tuple(limit)
+        with np.errstate(invalid="ignore"):
+            touching = (box[:, 2] >= window[0]) & (box[:, 0] <= window[2]) & (box[:, 3] >= window[1])
+            touching &= box[:, 1] <= window[3]
+        segments = _straight_segments(d, np.flatnonzero(mask & touching))
+        if len(segments) > MAX_SEGMENTS:
+            raise ValueError(
+                "There are too many lines around that point: zoom in, or hide the layers you don't need, and click "
+                "again."
+            )
+        rings = cad.faces([tuple(map(float, r)) for r in segments], tolerance) if len(segments) else []
+        around = [r for r in rings if cad.inside(r, np.array(point))[0] and (whole or _within(r, window))]
+        if around:
+            return _without_spurs(min(around, key=cad.ring_area), tolerance)
+        if whole:
+            raise ValueError(
+                "No lines close off that point: the outline around it has a gap. Draw the area point by point instead."
+            )
+        half *= 2
+
+
+def _within(ring: np.ndarray, window: tuple[float, float, float, float]) -> bool:
+    """Whether a ring lies strictly inside a window, touching none of its sides."""
+    left, bottom, right, top = window
+    xs, ys = ring[:, 0], ring[:, 1]
+    return bool(xs.min() > left and xs.max() < right and ys.min() > bottom and ys.max() < top)
+
+
+def _without_spurs(ring: np.ndarray, tolerance: float) -> np.ndarray:
+    """A region's outline without the lines that stick into it from its edge: the outline runs out along such a line
+    and back, which adds nothing to the area but twice the line to the perimeter."""
+    points = [tuple(p) for p in ring]
+    trimmed = True
+    while trimmed and len(points) > 3:
+        trimmed = False
+        for i in range(len(points)):
+            if math.dist(points[i - 1], points[(i + 1) % len(points)]) <= tolerance:
+                drop = {i, (i + 1) % len(points)}  # the tip, and one copy of where the outline turned back
+                points = [p for k, p in enumerate(points) if k not in drop]
+                trimmed = True
+                break
+    return np.array(points)
+
+
 def _enclosing_segments(d: cad.Drawing, page: int, known: Meanings) -> list[tuple[float, float, float, float]]:
     """The linework that closes rooms off: walls, columns and windows. A door's own leaf and swing are left out, or
     they would cut the swing out of the room it opens into; instead each swing closes its opening with the radius
@@ -489,12 +595,14 @@ def choose(
     session: Session, home: Path, document: Document, page: int, rule: cad.Rule
 ) -> tuple[np.ndarray, list[Room]]:
     """The objects a rule takes, and the rooms when it takes rooms."""
-    d = open_drawing(home, document)
+    d = open_page(home, document, page)
     d.space(page)
     wanted_rooms = [r.strip().lower() for r in rule.rooms if r.strip()]
     takes_rooms = [t.lower() for t in rule.types] == ["room"]
     if not wanted_rooms and not takes_rooms:
         return d.select(page, rule), []
+    if document.kind != "cad":
+        raise ValueError("Rooms come from a CAD drawing's layer map: on a PDF, take the outlines themselves.")
     found_rooms = rooms(session, home, document, page)
     if wanted_rooms:
         found_rooms = [r for r in found_rooms if any(w in r.name.lower() for w in wanted_rooms)]

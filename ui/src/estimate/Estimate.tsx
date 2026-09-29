@@ -1,9 +1,10 @@
 import { IconX } from "@tabler/icons-react";
 import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
+import { useEscape } from "../app/keys";
 import { Face } from "../office/Face";
 import { firstName, useOffice, type Staff } from "../office/queries";
-import { Findings, Reopen, ReviewNote, SendBack, WITH_MANAGER } from "../review/Review";
+import { APPROVE, Findings, Reopen, ReviewNote, SendBack, WITH_MANAGER } from "../review/Review";
 import {
   money,
   quantity,
@@ -60,6 +61,8 @@ export function Estimate() {
   const waitingItems = items.filter((i) => i.status === "reviewed").length;
   const waitingRates = (estimate.data?.items ?? []).filter((p) => p.rate?.status === "reviewed").length;
   const waiting = waitingItems + waitingRates;
+  const markupsWaiting = estimate.data?.markups?.status === "reviewed"; // behind Markups and summary, not in the table
+  const needsYou = waiting + (markupsWaiting ? 1 : 0);
   const withManager =
     items.filter((i) => i.status === "proposed").length +
     (estimate.data?.items ?? []).filter((p) => p.rate?.status === "proposed").length;
@@ -78,26 +81,33 @@ export function Estimate() {
       <section aria-label="Bill of quantities" className="flex min-w-0 grow flex-col px-8 pt-7">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div className="flex flex-col gap-1">
-            <h1 className="text-[22px] font-semibold tracking-tight">Estimate</h1>
+            <h1 className="text-[24px] font-semibold tracking-tight">Estimate</h1>
             <span className="text-ink-2">
-              {summary?.priced ?? 0} of {items.length} {items.length === 1 ? "item" : "items"} priced
-              {waiting > 0 && ` · ${waiting} need${waiting === 1 ? "s" : ""} you`}
-              {withManager > 0 && ` · ${withManager} with the Manager`}
+              {boq.data && estimate.data ? (
+                <>
+                  {summary?.priced ?? 0} of {items.length} {items.length === 1 ? "item" : "items"} priced
+                  {needsYou > 0 && ` · ${needsYou} need${needsYou === 1 ? "s" : ""} you`}
+                  {withManager > 0 && ` · ${withManager} with the Manager`}
+                </>
+              ) : (
+                " " // keeps the header's height while the BOQ arrives
+              )}
             </span>
           </div>
           <div className="flex items-center gap-3">
             {summary && (
               <span className="flex flex-col items-end gap-0.5">
-                <span className="text-xs whitespace-nowrap text-ink-3">Net, before markups</span>
+                <span className="text-xs whitespace-nowrap text-ink-3">Tender total excl. VAT</span>
                 <span className="text-lg font-semibold">
-                  {summary.currency} {money(summary.net)}
+                  {summary.currency} {money(summary.total)}
                 </span>
               </span>
             )}
             <button
               onClick={() => keep({ view: "summary" })}
-              className="h-[34px] rounded-lg border border-line-strong bg-white px-3 text-[13px] whitespace-nowrap"
+              className="flex h-[34px] items-center gap-2 rounded-lg border border-line-strong bg-white px-3 text-[13px] whitespace-nowrap"
             >
+              {markupsWaiting && <span aria-hidden className="size-[7px] rounded-full bg-attention" />}
               Markups and summary
             </button>
             {waiting > 0 && (
@@ -126,7 +136,7 @@ export function Estimate() {
         <div className="mt-[18px] flex gap-[18px] border-b border-line">
           {[
             ["all", "All items"],
-            ["waiting", `Needs you · ${waiting}`],
+            ["waiting", `Needs you · ${needsYou}`],
             ["unpriced", `Not priced · ${summary?.unpriced.length ?? 0}`],
           ].map(([key, label]) => (
             <button
@@ -139,7 +149,17 @@ export function Estimate() {
           ))}
         </div>
 
-        {items.length === 0 ? (
+        {filter === "waiting" && markupsWaiting && (
+          <button
+            onClick={() => keep({ view: "summary" })}
+            className="mt-3 flex items-center gap-2 self-start rounded-lg bg-rail px-3 py-2 text-left"
+          >
+            <span className="size-[7px] shrink-0 rounded-full bg-attention" />
+            The markups need your approval
+            <span className="font-medium underline underline-offset-4">Open them</span>
+          </button>
+        )}
+        {!boq.data ? null : items.length === 0 ? (
           <p className="pt-6 text-ink-2">
             No BOQ yet. Ask the office to enter the client’s BOQ, for example: “Enter the BOQ from the package.”
           </p>
@@ -185,9 +205,30 @@ export function Estimate() {
             })}
           </div>
         )}
-        <div className="flex gap-[18px] border-t border-line px-2 py-3 text-xs text-ink-3">
-          Quantix calculates every rate, amount and total from the approved quantities and build-ups.
-        </div>
+        {summary && (
+          <button
+            onClick={() => keep({ view: "summary" })}
+            title="Quantix calculates every rate, amount and total from the approved quantities and build-ups."
+            className="-mx-8 mt-auto flex items-center gap-5 border-t border-line-strong bg-rail px-8 py-3 text-left whitespace-nowrap hover:bg-selected"
+          >
+            {(
+              [
+                ["Net", summary.net],
+                ["Preliminaries", summary.preliminaries],
+                ["Overheads", summary.overheads],
+                ["Profit", summary.profit],
+              ] as const
+            ).map(([label, value]) => (
+              <span key={label} className="text-ink-3 max-lg:hidden">
+                {label} <span className="text-ink-2">{money(value)}</span>
+              </span>
+            ))}
+            <span className="ml-auto font-semibold">
+              <span className="mr-1.5 text-xs font-normal text-ink-3">Tender total excl. VAT</span>
+              {summary.currency} {money(summary.total)}
+            </span>
+          </button>
+        )}
       </section>
       {params.get("view") === "summary" && summary ? (
         <SummaryPanel tenderId={tenderId} summary={summary} markups={estimate.data?.markups ?? null} people={people} />
@@ -204,6 +245,7 @@ export function Estimate() {
 function Close() {
   const [params, setParams] = useSearchParams();
   const show = params.get("show");
+  useEscape(() => setParams(show ? { show } : {}));
   return (
     <button
       aria-label="Close"
@@ -233,7 +275,7 @@ function FactLine({ tenderId, fact, people }: { tenderId: string; fact: Fact; pe
         {fact.status === "reviewed" ? (
           <span className="flex flex-wrap items-center justify-end gap-2">
             <ReviewNote reviewedBy={fact.reviewed_by} note={fact.review_note} people={people} />
-            <button onClick={() => decide.mutate({ kind: "fact", id: fact.id, approve: true })} className="font-medium">
+            <button onClick={() => decide.mutate({ kind: "fact", id: fact.id, approve: true })} className={APPROVE}>
               Approve
             </button>
             <SendBack onSend={(reason) => decide.mutate({ kind: "fact", id: fact.id, approve: false, reason })} />
@@ -263,7 +305,7 @@ function Decide(props: {
     return (
       <div className="flex flex-col gap-2">
         <textarea
-          aria-label="Why reject it"
+          aria-label="What to put right"
           value={reason}
           onChange={(e) => setReason(e.target.value)}
           placeholder={`Tell ${props.who ? firstName(props.who) : "the office"} what’s wrong`}
@@ -288,7 +330,7 @@ function Decide(props: {
           {props.approveLabel}
         </button>
         <button onClick={() => setRejecting(true)} className="h-[38px] rounded-lg border border-line-strong px-3.5 text-sm">
-          Reject
+          Send back
         </button>
       </div>
     </div>
@@ -519,7 +561,7 @@ function SummaryPanel(props: {
           <ReviewNote reviewedBy={markups.reviewed_by} note={markups.review_note} people={props.people} />
           {markups.status === "reviewed" && (
             <span className="flex flex-wrap gap-3">
-              <button onClick={() => decide.mutate({ id: markups.id, approve: true })} className="font-medium">
+              <button onClick={() => decide.mutate({ id: markups.id, approve: true })} className={APPROVE}>
                 Approve markups
               </button>
               <SendBack onSend={(reason) => decide.mutate({ id: markups.id, approve: false, reason })} />

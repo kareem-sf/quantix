@@ -29,6 +29,11 @@ def lessons(session: Session, tender_id: str, statuses: tuple[str, ...] = (TENDE
     return list(session.scalars(query.order_by(Lesson.created_at)))
 
 
+def suggested(session: Session) -> list[Lesson]:
+    """Lessons from every tender that the engineer hasn't kept or dropped yet, newest first: company rules to be."""
+    return list(session.scalars(select(Lesson).where(Lesson.status == TENDER).order_by(Lesson.created_at.desc())))
+
+
 def current(session: Session, tender_id: str) -> list[Lesson]:
     """What the office follows on this tender. A kept lesson is a company rule by then, which every team reads."""
     return lessons(session, tender_id, (TENDER,))

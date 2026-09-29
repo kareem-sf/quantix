@@ -1,75 +1,34 @@
-import { IconArrowUp, IconChevronRight, IconInfoCircle } from "@tabler/icons-react";
+import { IconChevronRight, IconInfoCircle } from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { Link, useParams } from "react-router";
 import { AddDocuments } from "../documents/AddDocuments";
 import { useDocuments } from "../documents/queries";
 import { money, useEstimate, useGates } from "../estimate/queries";
 import { Face } from "../office/Face";
 import { Prose, tidy } from "../office/Prose";
-import { TEAM, firstName, useDecisions, useMessages, useOffice, useSend } from "../office/queries";
+import { firstName, useMessages, useOffice } from "../office/queries";
+import { useShell } from "../app/context";
 import { Opening } from "../app/Opening";
-import { useAudit, useDecideLesson, useLessons } from "../review/queries";
+import { useAudit, type Finding } from "../review/queries";
 import { dueSentence, dueSource, type DueSource as DueSourceOut } from "./due";
+import { useNeedsYou } from "./needsYou";
 import { usePackages } from "../subcontract/queries";
 import { useSubmission } from "../submission/queries";
-import { useDeleteTender, useSetDueDate, useSetOutcome, useTender } from "./queries";
+import { useSetDueDate, useTender } from "./queries";
+import { TenderMenu } from "./TenderMenu";
 
 export function Overview() {
   const { tenderId = "" } = useParams();
+  const { showTeam } = useShell();
   const tender = useTender(tenderId);
   const documents = useDocuments(tenderId);
   const office = useOffice(tenderId);
-  const decisions = useDecisions(tenderId);
   const gates = useGates(tenderId);
+  const { approvals, questions } = useNeedsYou(tenderId);
 
   if (tender.isError) return <p className="pt-14 text-ink-2">{tender.error.message}</p>;
   if (!tender.data || !documents.data || !office.data) return <Opening error={documents.isError || office.isError} />;
 
-  const questions = (decisions.data ?? []).filter((d) => d.status === "waiting");
-  const approvals = [
-    gates.data?.facts && {
-      key: "facts",
-      title: `${gates.data.facts} tender ${gates.data.facts === 1 ? "fact" : "facts"} to approve`,
-      text: "Method of measurement, currency or VAT, as the office read them",
-      to: `/tenders/${tenderId}/estimate`,
-    },
-    gates.data?.takeoff && {
-      key: "takeoff",
-      title: `${gates.data.takeoff} takeoff ${gates.data.takeoff === 1 ? "mark" : "marks"} to check`,
-      text: "Scales and measurements the team drew on the drawings",
-      to: `/tenders/${tenderId}/takeoff`,
-    },
-    gates.data?.drawings && {
-      key: "drawings",
-      title: `${gates.data.drawings} ${gates.data.drawings === 1 ? "query or layer map" : "queries and layer maps"} to decide`,
-      text: "Tender queries for the client, and what the drawings’ layers are",
-      to: `/tenders/${tenderId}/queries`,
-    },
-    gates.data?.pricing && {
-      key: "pricing",
-      title: `${gates.data.pricing} ${gates.data.pricing === 1 ? "price" : "prices"} to approve`,
-      text: "Rates and markups from the office, each with its build-up or source",
-      to: `/tenders/${tenderId}/estimate?show=waiting`,
-    },
-    gates.data?.subcontract && {
-      key: "subcontract",
-      title: `${gates.data.subcontract} ${gates.data.subcontract === 1 ? "quote" : "quotes"} to choose`,
-      text: "Levelled subcontract and supplier quotes with the office’s recommendation",
-      to: `/tenders/${tenderId}/subcontract`,
-    },
-    gates.data?.submission && {
-      key: "submission",
-      title: `${gates.data.submission} ${gates.data.submission === 1 ? "draft" : "drafts"} to review`,
-      text: "Submission documents the office drafted from the tender’s requirements",
-      to: `/tenders/${tenderId}/submission?show=review`,
-    },
-    gates.data?.boq && {
-      key: "boq",
-      title: `${gates.data.boq} BOQ ${gates.data.boq === 1 ? "item" : "items"} to approve`,
-      text: "Entered by the office from the client’s BOQ, each with its page",
-      to: `/tenders/${tenderId}/estimate?show=waiting`,
-    },
-  ].filter((a): a is { key: string; title: string; text: string; to: string } => Boolean(a));
   const waiting = [...questions, ...approvals];
   const manager = office.data.staff.find((m) => m.is_manager);
   const current = documents.data.filter((d) => d.status !== "replaced");
@@ -79,18 +38,34 @@ export function Overview() {
   const state = { working: " The office is working.", paused: " The office is paused.", idle: "" }[office.data.state];
 
   return (
-    <div className="flex min-h-full w-full max-w-[784px] flex-col px-8 pt-14">
-      <span className="text-ink-3">{tender.data.name}</span>
-      <h1 className="mt-1.5 mb-1 text-[28px] font-semibold tracking-tight">
-        {waiting.length === 0
-          ? "Nothing needs you right now"
-          : `${waiting.length} ${waiting.length === 1 ? "decision needs" : "decisions need"} you`}
-      </h1>
-      <p className="flex flex-wrap items-center gap-x-2 text-sm text-ink-2">
-        <DueDate tenderId={tenderId} due={tender.data.due_date} source={tender.data.due_date_source} />
-        {state && <span>{state.trim()}</span>}
-        <Outcome tenderId={tenderId} outcome={tender.data.outcome} />
-      </p>
+    <div className="flex min-h-full w-full max-w-[784px] flex-col px-8">
+      {/* the tender, what needs you and when it closes stay in view while the page scrolls */}
+      <div className="sticky top-0 z-10 -mx-8 flex flex-col bg-white px-8 pt-10 pb-3">
+        <span className="flex items-center justify-between gap-4 text-ink-3">
+          <span className="truncate">
+            {tender.data.name}
+            {tender.data.archived && " · archived"}
+          </span>
+          <TenderMenu
+            tenderId={tenderId}
+            name={tender.data.name}
+            outcome={tender.data.outcome}
+            archived={tender.data.archived}
+          />
+        </span>
+        <h1 className="mt-1.5 mb-1 text-[24px] font-semibold tracking-tight">
+          {waiting.length === 0
+            ? "Nothing needs you right now"
+            : `${waiting.length} ${waiting.length === 1 ? "decision needs" : "decisions need"} you`}
+        </h1>
+        <p className="flex flex-wrap items-center gap-x-2 text-sm text-ink-2">
+          <DueDate tenderId={tenderId} due={tender.data.due_date} source={tender.data.due_date_source} />
+          {state && <span>{state.trim()}</span>}
+          {tender.data.outcome !== "open" && (
+            <span>{{ submitted: "Submitted.", won: "Won.", lost: "Lost." }[tender.data.outcome]}</span>
+          )}
+        </p>
+      </div>
       {manager && gates.data?.manager ? (
         <p className="mt-1 text-sm text-ink-2">
           {gates.data.manager} {gates.data.manager === 1 ? "piece" : "pieces"} of work with {firstName(manager)} for
@@ -101,13 +76,13 @@ export function Overview() {
       {!office.data.ai_ready && (
         <p className="mt-6 text-ink-2">
           Choose the office’s AI in{" "}
-          <Link to="/settings" className="font-medium text-ink underline underline-offset-4">
+          <Link to="/settings?section=ai" className="font-medium text-ink underline underline-offset-4">
             Settings
           </Link>{" "}
           so the team can start work.
         </p>
       )}
-      {manager && <ManagerNote tenderId={tenderId} managerId={manager.id} />}
+      {manager ? <ManagerNote tenderId={tenderId} managerId={manager.id} /> : office.data.ai_ready && <StartOffice />}
 
       {waiting.length > 0 && (
         <>
@@ -126,10 +101,10 @@ export function Overview() {
             {questions.map((d) => {
               const asker = office.data!.staff.find((m) => m.id === d.raised_by);
               return (
-                <Link
+                <button
                   key={d.id}
-                  to={`/tenders/${tenderId}/decisions/${d.id}`}
-                  className="flex items-center gap-3.5 border-b border-line px-1 py-3.5"
+                  onClick={() => showTeam(d.raised_by)}
+                  className="flex w-full items-center gap-3.5 border-b border-line px-1 py-3.5 text-left hover:bg-rail"
                 >
                   <span className="size-[7px] shrink-0 rounded-full bg-attention" />
                   <span className="flex min-w-0 grow flex-col gap-0.5">
@@ -138,7 +113,7 @@ export function Overview() {
                   </span>
                   {asker && <span className="text-ink-3">{firstName(asker)}</span>}
                   <IconChevronRight className="size-4 shrink-0 text-ink-4" stroke={1.75} />
-                </Link>
+                </button>
               );
             })}
           </div>
@@ -164,11 +139,6 @@ export function Overview() {
         </div>
       )}
       {current.length > 0 && <Audit tenderId={tenderId} />}
-      <Lessons tenderId={tenderId} />
-      <DeleteTender tenderId={tenderId} name={tender.data.name} />
-
-      <div className="grow" />
-      <AskOffice tenderId={tenderId} to={manager?.id ?? TEAM} name={manager ? firstName(manager) : undefined} />
     </div>
   );
 }
@@ -203,87 +173,62 @@ function Audit({ tenderId }: { tenderId: string }) {
         </p>
       )}
       <ul className="flex flex-col">
-        {[...blockers, ...warnings, ...accepted].map((f, n) => (
-          <li key={n} className="flex gap-3 border-t border-line px-1 py-2.5 leading-normal">
-            <span
-              className={`mt-[7px] size-[7px] shrink-0 rounded-full ${f.severity === "blocker" ? "bg-attention" : f.reason ? "bg-approved" : "bg-ink-4"}`}
-            />
-            <span className="flex min-w-0 flex-col gap-0.5">
-              <span className={f.reason ? "text-ink-2" : ""}>{f.message}</span>
-              {f.refs.map((r) =>
-                r.document_id ? (
-                  <Link
-                    key={r.label}
-                    to={`/tenders/${tenderId}/documents?doc=${r.document_id}&page=${r.page}`}
-                    className="self-start text-ink-3 underline underline-offset-4"
-                  >
-                    {r.label}
-                  </Link>
-                ) : null,
-              )}
-              {f.reason && (
-                <span className="text-ink-3">
-                  Accepted by {f.accepted_by ?? "the Manager"}: {f.reason}
-                </span>
-              )}
-            </span>
-          </li>
+        {[...blockers, ...warnings].map((f, n) => (
+          <AuditLine key={n} tenderId={tenderId} finding={f} />
         ))}
       </ul>
+      {accepted.length > 0 && (
+        <details className="group border-t border-line">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 px-1 py-2.5 text-ink-3 hover:text-ink">
+            <IconChevronRight className="size-4 transition-transform group-open:rotate-90" stroke={1.75} />
+            {accepted.length} {accepted.length === 1 ? "warning" : "warnings"} accepted by the office, with the reason
+          </summary>
+          <ul className="flex flex-col">
+            {accepted.map((f, n) => (
+              <AuditLine key={n} tenderId={tenderId} finding={f} />
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   );
 }
 
-/** What the Manager learned from work that needed correcting. The office follows it on this tender; the engineer can
- * keep it as a company rule for later tenders, or drop it. */
-function Lessons({ tenderId }: { tenderId: string }) {
-  const lessons = useLessons(tenderId);
-  const decide = useDecideLesson(tenderId);
-  if (!lessons.data?.length) return null;
+function AuditLine({ tenderId, finding: f }: { tenderId: string; finding: Finding }) {
   return (
-    <div className="mt-9 flex flex-col">
-      <h2 className="pb-2 font-semibold text-ink-2">What the office learned</h2>
-      <p className="px-1 pb-2 text-ink-2">From work that needed correcting. Everyone on this tender follows them.</p>
-      <ul className="flex flex-col">
-        {lessons.data.map((lesson) => (
-          <li key={lesson.id} className="flex items-start gap-4 border-t border-line px-1 py-2.5 leading-normal">
-            <span className="flex min-w-0 grow flex-col gap-0.5">
-              <span dir="auto">{lesson.text}</span>
-              <span className="text-ink-3">From {lesson.source}</span>
-            </span>
-            {lesson.status === "kept" ? (
-              <Link to="/rules" className="shrink-0 text-ink-3 hover:text-ink">
-                Kept as a company rule
-              </Link>
-            ) : (
-              <span className="flex shrink-0 gap-3">
-                <button
-                  onClick={() => decide.mutate({ id: lesson.id, status: "kept" })}
-                  disabled={decide.isPending}
-                  className="font-medium text-ink hover:underline"
-                >
-                  Keep for later tenders
-                </button>
-                <button
-                  onClick={() => decide.mutate({ id: lesson.id, status: "dropped" })}
-                  disabled={decide.isPending}
-                  className="text-ink-3 hover:text-ink"
-                >
-                  Drop
-                </button>
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
-      {decide.isError && <p className="px-1 pt-2 text-attention">{decide.error.message}</p>}
-    </div>
+    <li className="flex gap-3 border-t border-line px-1 py-2.5 leading-normal">
+      <span
+        className={`mt-[7px] size-[7px] shrink-0 rounded-full ${f.severity === "blocker" ? "bg-attention" : f.reason ? "bg-approved" : "bg-ink-4"}`}
+      />
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <span className={f.reason ? "text-ink-2" : ""}>{f.message}</span>
+        {f.refs.map((r) =>
+          r.document_id ? (
+            <Link
+              key={r.label}
+              to={`/tenders/${tenderId}/documents?doc=${r.document_id}&page=${r.page}`}
+              className="self-start text-ink-3 underline underline-offset-4"
+            >
+              {r.label}
+            </Link>
+          ) : null,
+        )}
+        {f.reason && (
+          <span className="text-ink-3">
+            Accepted by {f.accepted_by ?? "the Manager"}: {f.reason}
+          </span>
+        )}
+      </span>
+    </li>
   );
 }
 
 function Standing(props: { to: string; label: string; text: string; done: number }) {
   return (
-    <Link to={props.to} className="grid grid-cols-[140px_minmax(0,1fr)_160px] items-center gap-4 px-1 py-2 hover:bg-rail">
+    <Link
+      to={props.to}
+      className="grid grid-cols-[140px_minmax(0,1fr)_160px] items-center gap-4 px-1 py-2 hover:bg-rail"
+    >
       <span className="font-medium">{props.label}</span>
       <span className="min-w-0 text-ink-2">{props.text}</span>
       <span className="relative h-1 overflow-hidden rounded-sm bg-selected">
@@ -321,7 +266,7 @@ function Progress({ tenderId }: { tenderId: string }) {
         <Standing
           to={`/tenders/${tenderId}/estimate`}
           label="Estimate"
-          text={`${summary.priced} of ${summary.items} priced${summary.priced ? ` · ${summary.currency} ${money(summary.total)}` : ""}`}
+          text={`${summary.priced} of ${summary.items} priced${summary.priced ? ` · ${summary.currency} ${money(summary.total)} before VAT` : ""}`}
           done={summary.priced / summary.items}
         />
       )}
@@ -345,40 +290,7 @@ function Progress({ tenderId }: { tenderId: string }) {
   );
 }
 
-function DeleteTender({ tenderId, name }: { tenderId: string; name: string }) {
-  const remove = useDeleteTender(tenderId);
-  const navigate = useNavigate();
-  const [asking, setAsking] = useState(false);
-  if (!asking)
-    return (
-      <button onClick={() => setAsking(true)} className="mt-9 self-start text-ink-3 hover:text-attention">
-        Delete this tender
-      </button>
-    );
-  return (
-    <div className="mt-9 flex flex-col gap-2.5 rounded-[10px] border border-line p-3.5">
-      <span>
-        Delete <span className="font-medium">{name}</span> and everything Quantix keeps for it: documents, BOQ,
-        rates, the team and its conversations. Your original files and built packages stay.
-      </span>
-      <span className="flex gap-2">
-        <button
-          onClick={() => remove.mutate(undefined, { onSuccess: () => navigate("/") })}
-          disabled={remove.isPending}
-          className="h-[34px] rounded-lg bg-attention px-3.5 text-[13px] text-white"
-        >
-          Delete tender
-        </button>
-        <button onClick={() => setAsking(false)} className="h-[34px] rounded-lg border border-line-strong px-3.5 text-[13px]">
-          Keep it
-        </button>
-      </span>
-      {remove.isError && <span className="text-attention">{remove.error.message}</span>}
-    </div>
-  );
-}
-
-/** How the tender went. Later tenders use won and lost rates as benchmarks. */
+/** When the tender closes, and where that date comes from; the engineer can change it. */
 function DueDate({ tenderId, due, source }: { tenderId: string; due: string | null; source?: DueSourceOut | null }) {
   const set = useSetDueDate(tenderId);
   const [value, setValue] = useState<string | null>(null); // the date being entered, while changing it
@@ -452,31 +364,12 @@ function DueSourceNote({ tenderId, source }: { tenderId: string; source?: DueSou
   );
 }
 
-function Outcome({ tenderId, outcome }: { tenderId: string; outcome: "open" | "submitted" | "won" | "lost" }) {
-  const set = useSetOutcome(tenderId);
-  return (
-    <label className="flex items-center gap-1 text-ink-3">
-      · Outcome
-      <select
-      aria-label="Outcome"
-      value={outcome}
-      onChange={(e) => set.mutate(e.target.value as typeof outcome)}
-      className="rounded-md bg-transparent text-ink-3 outline-none hover:text-ink"
-    >
-      <option value="open">Open</option>
-      <option value="submitted">Submitted</option>
-      <option value="won">Won</option>
-      <option value="lost">Lost</option>
-      </select>
-    </label>
-  );
-}
-
 function ManagerNote({ tenderId, managerId }: { tenderId: string; managerId: string }) {
   const office = useOffice(tenderId);
   const chat = useMessages(tenderId, managerId);
   const manager = office.data?.staff.find((m) => m.id === managerId);
   const latest = [...(chat.data ?? [])].reverse().find((m) => m.sender === managerId);
+  const { showTeam } = useShell();
   if (!manager) return null;
   return (
     <div className="mt-7 flex gap-3">
@@ -486,44 +379,31 @@ function ManagerNote({ tenderId, managerId }: { tenderId: string; managerId: str
           {manager.name} <span className="font-normal text-ink-3">Tender Manager</span>
         </span>
         <Prose
-          text={tidy(latest?.text ?? manager.now ?? "Getting to know the tender.", firstName(manager)).split(/\n\s*\n/)[0]}
+          text={
+            tidy(latest?.text ?? manager.now ?? "Getting to know the tender.", firstName(manager)).split(/\n\s*\n/)[0]
+          }
           className="text-[15px] text-[#27272A] [&>*]:line-clamp-4"
         />
-        <Link to={`/tenders/${tenderId}/office?with=${manager.id}`} className="text-ink-3 hover:text-ink">
+        <button onClick={() => showTeam(manager.id)} className="self-start text-ink-3 hover:text-ink">
           Open your chat with {firstName(manager)}
-        </Link>
+        </button>
       </div>
     </div>
   );
 }
 
-function AskOffice({ tenderId, to, name }: { tenderId: string; to: string; name?: string }) {
-  const send = useSend(tenderId);
-  const [draft, setDraft] = useState("");
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    if (draft.trim()) send.mutate({ channel: to, text: draft }, { onSuccess: () => setDraft("") });
-  }
+/** Before the Tender Manager joins: the office starts when the engineer first writes to it, in the team panel. */
+function StartOffice() {
+  const { showTeam } = useShell();
   return (
-    <form onSubmit={submit} className="pt-4 pb-6">
-      <div className="flex items-center gap-2 rounded-xl border border-line-strong py-1.5 pr-1.5 pl-3.5 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-        <input
-          aria-label="Message the office"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder={name ? `Ask ${name} anything` : "Tell the office what you need, for example: review the package"}
-          className="grow bg-transparent text-sm outline-none"
-        />
-        <button
-          aria-label="Send"
-          disabled={!draft.trim() || send.isPending}
-          className="flex size-8 items-center justify-center rounded-lg bg-ink text-white disabled:bg-line-strong"
-        >
-          <IconArrowUp className="size-4" stroke={1.75} />
-        </button>
-      </div>
-      {send.isSuccess && !draft && <p className="pt-2 text-ink-3">Sent. Replies appear in the Office.</p>}
-      {send.isError && <p className="pt-2 text-attention">{send.error.message}</p>}
-    </form>
+    <div className="mt-7 flex items-center gap-4 rounded-xl border border-line-strong px-4 py-3.5">
+      <span className="grow text-ink-2">
+        Tell the office what you need, for example “review the package”. The Tender Manager joins and hires the team the
+        tender needs.
+      </span>
+      <button onClick={() => showTeam()} className="h-8 shrink-0 rounded-lg bg-ink px-3.5 text-white">
+        Write to the office
+      </button>
+    </div>
   );
 }

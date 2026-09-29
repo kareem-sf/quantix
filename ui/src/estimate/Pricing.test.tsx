@@ -90,7 +90,8 @@ describe("Pricing", () => {
     expect(within(panel).getByText("3,488.00")).toBeInTheDocument();
     expect(within(panel).getByText("From a quote")).toBeInTheDocument();
     expect(within(panel).getByRole("link", { name: "Quote.pdf, page 1" })).toBeInTheDocument();
-    expect(screen.getByText("SAR 98,012.80")).toBeInTheDocument();
+    expect(screen.getAllByText("SAR 118,927.17")).toHaveLength(2); // the tender total, atop the BOQ and on its totals bar
+    expect(screen.getByRole("button", { name: /^Net 98,012.80/ })).toHaveTextContent("Preliminaries 7,841.02");
 
     await userEvent.click(within(panel).getByLabelText("Save to the company library"));
     await userEvent.click(within(panel).getByRole("button", { name: "Approve rate" }));
@@ -207,6 +208,36 @@ describe("Pricing", () => {
     expect(within(panel).getByText("SAR 118,927.17")).toBeInTheDocument();
     expect(within(panel).getByText("SAR 136,766.25")).toBeInTheDocument();
     expect(within(panel).getByText("The total includes 1 rate waiting for you.")).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Approve markups" })).toBeInTheDocument();
+  });
+
+  it("counts markups waiting for the engineer under Needs you, one click from them", async () => {
+    fakeService({
+      tenders: [tender],
+      items: [rebar],
+      priced: [{ ...priced, rate: { ...priced.rate!, status: "approved" } }],
+      summary,
+      markups: {
+        id: "mk1",
+        preliminary_items: [],
+        overheads: "0.06",
+        profit: "0.08",
+        adjustment: "0.00",
+        note: "Site support for the 72-working-day programme.",
+        status: "reviewed",
+        proposed_by: "s3",
+        reviewed_by: "s1",
+        review_note: "Checked against the programme.",
+      },
+    });
+    openApp("/tenders/t1/estimate?show=waiting");
+
+    // on the real tender the Overview sent the engineer here for a price to approve, and the list was empty
+    expect(await screen.findByRole("button", { name: "Needs you · 1" })).toBeInTheDocument();
+    expect(screen.getByText(/1 of 1 item priced · 1 needs you/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Approve all/ })).not.toBeInTheDocument(); // markups are approved on their own
+    await userEvent.click(screen.getByRole("button", { name: /The markups need your approval/ }));
+    const panel = await screen.findByRole("complementary", { name: "Price summary" });
     expect(within(panel).getByRole("button", { name: "Approve markups" })).toBeInTheDocument();
   });
 

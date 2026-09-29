@@ -201,17 +201,21 @@ def measure(
     boq_item: str | None,
     status: str = "proposed",
 ) -> Measurement:
-    document, found = _page(session, tender_id, document_id, page)
+    document = session.get(Document, document_id)
+    if by == ENGINEER and document is not None and document.kind == "cad" and document.tender_id == tender_id:
+        _on_the_drawing(session, document, page, points)  # the engineer's clicks, in drawing units
+    else:
+        document, found = _page(session, tender_id, document_id, page)
+        if any(not (0 <= x <= found.width and 0 <= y <= found.height) for x, y in points):
+            raise ValueError(
+                f"A point is off the page; {document.name} page {page} is {found.width:.0f} × {found.height:.0f}."
+            )
     _kind_and_unit(kind, unit, multiplier)
     if kind == "volume":
         raise ValueError("A volume is taken only from a CAD drawing's 3D solids.")
     least = {"length": 2, "area": 3, "count": 1}[kind]
     if len(points) < least:
         raise ValueError(f"A {kind} needs at least {least} points.")
-    if any(not (0 <= x <= found.width and 0 <= y <= found.height) for x, y in points):
-        raise ValueError(
-            f"A point is off the page; {document.name} page {page} is {found.width:.0f} × {found.height:.0f}."
-        )
     item_id = None
     if boq_item:
         item_id = boq.find_item(session, tender_id, boq_item).id
@@ -232,6 +236,21 @@ def measure(
     session.flush()
     _replace_on_older_copies(session, measurement)
     return measurement
+
+
+def _on_the_drawing(session: Session, document: Document, page: int, points: list[list[float]]) -> None:
+    """Points the engineer clicked on a CAD drawing: in model space, where it is full size, and on the drawing."""
+    if document.status == "replaced":
+        raise ValueError(f"A newer copy of {document.name} replaced this one: measure on the newer copy.")
+    if page != 1:
+        raise ValueError("Measure in model space, page 1, where the drawing is full size; layouts show it scaled.")
+    extents = drawings.open_drawing(library.home_of(session), document).space(1).extents
+    if extents is None:
+        raise ValueError(f"{document.name} has nothing drawn in model space.")
+    left, bottom, right, top = extents
+    pad = max(right - left, top - bottom) * 0.05
+    if any(not (left - pad <= x <= right + pad and bottom - pad <= y <= top + pad) for x, y in points):
+        raise ValueError(f"A point is off {document.name}'s drawing.")
 
 
 def set_units(
@@ -296,11 +315,11 @@ def measurable(d: cad.Drawing, found, kind: str) -> list[int]:
 
 
 def resolve(
-    session: Session, home: Path, document: Document, kind: str, rule: cad.Rule
+    session: Session, home: Path, document: Document, kind: str, rule: cad.Rule, page: int = 1
 ) -> tuple[list[str], cad.Drawing]:
     """The keys of the objects (or rooms) a rule takes for a measurement of this kind."""
-    found, found_rooms = drawings.choose(session, home, document, 1, rule)
-    d = drawings.open_drawing(home, document)
+    found, found_rooms = drawings.choose(session, home, document, page, rule)
+    d = drawings.open_page(home, document, page)
     if [t.lower() for t in rule.types] == ["room"]:
         return [drawings.room_key(r) for r in found_rooms], d
     return [d.keys[i] for i in measurable(d, found, kind)], d
@@ -321,21 +340,24 @@ def measure_drawing(
     boq_item: str | None,
     status: str = "proposed",
 ) -> Measurement:
-    """A measurement of a CAD drawing's own objects, chosen by a rule. Quantix works out which objects the rule
-    takes when it is filed, so whoever checks it sees exactly what was counted, and computes the quantity from their
-    geometry whenever it is read. A rule that finds nothing, linked to a BOQ line, records that the line's work isn't
-    on this drawing."""
-    document = drawings.drawing_document(session, tender_id, document_id)
+    """A measurement of a drawing's own objects, chosen by a rule: a CAD drawing's, in model space, or a PDF page's
+    lines. Quantix works out which objects the rule takes when it is filed, so whoever checks it sees exactly what
+    was counted, and computes the quantity from their geometry whenever it is read, with the drawing's units or the
+    PDF page's scale. A rule that finds nothing, linked to a BOQ line, records that the line's work isn't on this
+    drawing."""
+    document = drawings.drawing_page(session, tender_id, document_id, page)
     if document.status == "replaced":
         raise ValueError(f"A newer copy of {document.name} replaced this one: measure on the newer copy.")
-    if page != 1:
+    if page != 1 and document.kind == "cad":
         raise ValueError("Measure in model space, page 1, where the drawing is full size; layouts show it scaled.")
+    if kind == "volume" and document.kind != "cad":
+        raise ValueError("A volume is taken only from a CAD drawing's 3D solids.")
     _kind_and_unit(kind, unit, multiplier)
     if rule.empty():
         raise ValueError(
             "Say which objects to take: layers, blocks, types, words, attributes, a region, rooms or keys."
         )
-    keys, d = resolve(session, home, document, kind, rule)
+    keys, d = resolve(session, home, document, kind, rule, page)
     if len(keys) > MAX_OBJECTS:
         raise ValueError(f"That rule takes {len(keys):,} objects: narrow it to the work you mean.")
     item_id = boq.find_item(session, tender_id, boq_item).id if boq_item else None
@@ -348,7 +370,7 @@ def measure_drawing(
     measurement = Measurement(
         tender_id=tender_id,
         document_id=document_id,
-        page=1,
+        page=page,
         kind=kind,
         label=label.strip(),
         points=[],
@@ -371,7 +393,7 @@ def _drawing_base(session: Session, m: Measurement) -> Decimal | None:
     document = session.get(Document, m.document_id)
     home = library.home_of(session)
     try:
-        d = drawings.open_drawing(home, document)
+        d = drawings.open_page(home, document, m.page)
     except (Unreadable, OSError, ValueError):
         return None
     keys = m.entities or []
@@ -380,7 +402,7 @@ def _drawing_base(session: Session, m: Measurement) -> Decimal | None:
     objects = [d.key_index[k] for k in keys if k in d.key_index]
     if m.kind == "count":
         return Decimal(sum(d.copies(i) for i in objects) + len(found_rooms))
-    metres = drawings.metres_per_unit(session, m.document_id)
+    metres = drawings.metres_per_unit(session, m.document_id, m.page)
     if metres is None:
         return None
     if m.kind == "length":

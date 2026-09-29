@@ -1,8 +1,10 @@
 """The tender audit before release: what the tender still lacks and every open finding on the office's work."""
 
 import io
+import threading
 from datetime import date, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 import openpyxl
 import pytest
@@ -15,7 +17,8 @@ from quantix.boq import records as boq
 from quantix.estimate import records as estimate
 from quantix.estimate.models import LibraryResource, Markups
 from quantix.office import records as office
-from quantix.office.models import ENGINEER, Staff
+from quantix.office import tools
+from quantix.office.models import ENGINEER, Staff, Task
 from quantix.review import audit
 from quantix.review import records as reviews
 from quantix.submission import records as submission
@@ -121,6 +124,15 @@ def test_the_audit_finds_what_keeps_the_tender_from_release(client, tender):
 
     built = client.post(f"/tenders/{tender_id}/export", json={"spread_markups": False}).json()
     assert built["not_ready"] == [found[0].message, found[1].message]  # the engineer sees the blockers
+
+
+def test_what_waits_for_the_engineer_is_counted_in_plain_english(client, tender, monkeypatch):
+    tender_id, _, _ = tender
+    monkeypatch.setattr(audit.estimate, "waiting", lambda session, tender_id: 1)
+    monkeypatch.setattr(audit.takeoff, "waiting", lambda session, tender_id: 2)
+    with client.app.state.sessions() as session:
+        found = audit.open_findings(session, client.app.state.home, tender_id)
+    assert "Waiting for the engineer's approval: 2 takeoff marks, 1 price." in [f.message for f in found]
 
 
 def test_the_manager_accepts_a_warning_with_his_reason_and_the_engineer_sees_it(client, tender):
@@ -271,6 +283,28 @@ def test_the_manager_puts_a_problem_in_approved_work_to_the_engineer_who_decides
         [redo] = [t for t in office.all_tasks(session, tender_id) if t.status == "open"]
         assert (redo.title, redo.brief) == ("Redo the markups", correction)
 
+        # on the real tender the redo came back at 4 months again, and Salem accepted Quantix's warning about it
+        # as "a conservative programme allowance", against the engineer's answer
+        layla = next(m for m in office.team(session, tender_id) if m.first_name == "Layla")
+        staff = [
+            estimate.PreliminaryIn(item=item, quantity=4, unit="month", rate=Decimal("9000"))
+            for item in ("Site engineer", "Foreman")
+        ]
+        zero = Decimal(0)
+        again = estimate.propose_markups(session, tender_id, layla.id, staff, zero, zero, zero, "Four months kept.")
+        verdict = reviews.Verdict(
+            record=f"markups {again.id[:8]}",
+            accept=True,
+            note="Checked the heads and the rates.",
+            warnings_reason="A conservative programme allowance for site support.",
+        )
+        report = reviews.review(
+            session, client.app.state.home, tender_id, session.get(Staff, rania_id), [verdict], False
+        )
+        assert report.startswith("Accepted 0 (waiting for the engineer). Sent back 0.")
+        assert f"The engineer already decided on this work: “{correction}”" in report
+        assert again.status == "proposed"
+
 
 def test_keeping_approved_work_as_it_is_changes_nothing(client, tender):
     tender_id, rania_id, docs = tender
@@ -318,3 +352,31 @@ def test_a_problem_in_approved_work_wakes_the_manager_once(client, tender):
     # as what woke him, not after "Nothing new", which on the real tender he took at its word
     assert f"New for you:\n- Quantix, in work the engineer approved (markups {markups_id[:8]}): " in briefings[0]
     assert asyncio.run(runtime._turn(scripted(brain), tender_id, rania_id)) is False  # once, not every pass
+
+
+def test_work_the_manager_made_is_given_out_again_when_the_engineer_reopens_it(client, tender):
+    """The real tender: the engineer reopened markups Salem had made before the Manager stopped producing work. The
+    redo went to no one, and the office went quiet with no markups."""
+
+    tender_id, _, _ = tender
+    with client.app.state.sessions() as session:
+        rania = office.manager(session, tender_id)
+        markups = estimate.current_markups(session, tender_id)
+        markups.proposed_by = rania.id  # made by the Manager, as the real tender's were
+        reviews.reopen(session, "markups", markups.id, "Price the site staff for the 72-day programme.")
+        session.commit()
+        [task] = [t for t in office.open_tasks(session, rania)]
+        assert task.title == "Give out: Redo the markups"
+        assert task.brief.startswith("Price the site staff for the 72-day programme.\nGive this redo to someone")
+        rania_id = rania.id
+
+    state = client.app.state
+    ctx = SimpleNamespace(
+        deps=tools.Turn(state.home, state.sessions, tender_id, rania_id, False, threading.Event()), tool_call_id="c"
+    )
+    with pytest.raises(Exception, match="Give the redo to someone with assign_task first"):
+        tools.complete_task(ctx, task.id, "Given to Layla.")
+    tools.assign_task(ctx, "Layla", "redo the markups", "Price the site staff for the 72-day programme.")
+    assert tools.complete_task(ctx, task.id, "Given to Layla.") == "Done. The Manager has your result."
+    with client.app.state.sessions() as session:
+        assert session.get(Task, task.id).status == "done"

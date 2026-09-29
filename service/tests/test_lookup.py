@@ -4,6 +4,8 @@ the work still to do as its own tasks, never with a promise to look."""
 import io
 import re
 import threading
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,8 +21,8 @@ from quantix import settings
 from quantix.boq import records as boq
 from quantix.documents import library
 from quantix.estimate import records as estimate
+from quantix.office import agents, tools
 from quantix.office import records as office
-from quantix.office import tools
 from quantix.office.models import Staff, Task
 from quantix.review import lookup
 from quantix.review import records as reviews
@@ -223,6 +225,38 @@ def test_find_records_and_the_priced_boq(client, tender):
         assert lookup.search(session, tender_id, "", "fact")[0].startswith("fact ")
         assert lookup.search(session, tender_id, "nothing like this") == []
 
+        # the real tender: Salem searched for "markup" and "site support allowance" four times and found nothing
+        assert lookup.search(session, tender_id, "markup") == []
+        site = estimate.PreliminaryIn(
+            item="Site support allowance", quantity=Decimal(4), unit="month", rate=Decimal(9000)
+        )
+        zero, six = Decimal(0), Decimal("0.06")
+        filed = estimate.propose_markups(session, tender_id, priya_id, [site], six, zero, zero, "Four months of staff.")
+        [markups] = lookup.search(session, tender_id, "site support allowance")
+        assert markups.startswith(
+            f"markups {filed.id[:8]} · preliminaries priced item by item (1 items: Site support allowance)"
+        )
+        assert "overheads 6.0% and profit 0.0% of cost, adjustment 0.00 as a lump sum" in markups
+        assert lookup.search(session, tender_id, "markup") == [markups]
+        assert lookup.search(session, tender_id, "", "markups") == [markups]
+        # the real tender again: every set was sent back, so the office saw "none proposed yet" and nothing to open
+        filed.status = "rejected"
+        [returned] = lookup.search(session, tender_id, "markup")
+        assert returned.endswith("· sent back") and lookup.find(session, tender_id, "markups") == ("markups", filed)
+        assert lookup.find(session, tender_id, returned) == ("markups", filed)  # the whole line, as Salem cited it
+        assert agents.standing(session, tender_id).count(
+            "Markups: the last set was sent back, and none proposed since."
+        )
+        # and the set the engineer sent back last, not a newer duplicate turned down the day before
+        filed.decided_at = datetime.now(UTC)
+        duplicate = estimate.propose_markups(session, tender_id, priya_id, [site], six, zero, zero, "Again.")
+        duplicate.status, duplicate.decided_at = "rejected", filed.decided_at - timedelta(days=1)
+        assert lookup.find(session, tender_id, "markups") == ("markups", filed)
+        # a redo the Manager sent back after that is dated by his review: it once sent Rashid to the older set
+        redo = estimate.propose_markups(session, tender_id, priya_id, [site], six, zero, zero, "72 days.")
+        redo.status, redo.reviewed_at = "rejected", filed.decided_at + timedelta(minutes=30)
+        assert lookup.find(session, tender_id, "markups") == ("markups", redo)
+
         text = lookup.priced(session, tender_id)
         head, *rows, foot = text.splitlines()
         assert head.startswith("3 lines, 1 priced, together 98,012.80 SAR (Quantix's figures).")
@@ -251,7 +285,7 @@ def fake_turn(client, tender_id, staff_id) -> SimpleNamespace:
     """What a tool sees of the turn it is called in."""
     state = client.app.state
     turn = tools.Turn(state.home, state.sessions, tender_id, staff_id, False, threading.Event())
-    return SimpleNamespace(deps=turn)
+    return SimpleNamespace(deps=turn, tool_call_id="call")
 
 
 def test_lines_past_forty_are_named_so_they_get_entered(client, tender):
@@ -319,6 +353,32 @@ def test_a_question_gets_one_set_of_next_steps_then_an_answer(client, tender):
     tools.open_record(ctx, [f"rate {rate_id[:8]}"])
     assert tools.message_engineer(ctx, "Built up from a gang, rebar and wire.", sources=[f"rate {rate_id[:8]}"]) == (
         "Sent. It replaces your last message, which the engineer hadn't answered."
+    )
+
+
+def test_sources_written_as_the_last_line_are_taken_as_the_sources(client, tender):
+    """On the real tender Salem ended his answer with "Sources: markups, estimate_summary" instead of giving them,
+    was refused, and stopped: the engineer never got the answer."""
+    written = "It is both.\n\n- Overheads 6%.\n\n**Sources:** markups, Bill.xlsx, page 2; estimate_summary"
+    assert tools._written_sources(written) == (
+        "It is both.\n\n- Overheads 6%.",
+        ["markups", "Bill.xlsx, page 2", "estimate_summary"],
+    )
+    assert tools._written_sources("No sources line here.") == ("No sources line here.", [])
+
+    tender_id, priya_id, _ = tender
+    rania_id, rate_id, _ = priced_after_a_send_back(client, tender_id, priya_id)
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": rania_id, "text": QUESTION})
+    ctx = fake_turn(client, tender_id, rania_id)
+    tools.open_record(ctx, [f"rate {rate_id[:8]}"])
+    assert tools.message_engineer(ctx, f"Built up from a gang.\nSources: rate {rate_id[:8]}").startswith("Sent.")
+    answer = client.get(f"/tenders/{tender_id}/messages", params={"channel": rania_id}).json()[-1]
+    assert answer["text"] == "Built up from a gang."
+    assert [s["label"] for s in answer["sources"]] == ["The rate for BOQ item 4.3"]
+    # given and written both, as Salem did next: the line still doesn't show
+    tools.message_engineer(ctx, f"Wire is 1%.\n\nSources: rate {rate_id[:8]}", sources=[f"rate {rate_id[:8]}"])
+    assert (
+        client.get(f"/tenders/{tender_id}/messages", params={"channel": rania_id}).json()[-1]["text"] == "Wire is 1%."
     )
 
 

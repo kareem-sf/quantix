@@ -884,3 +884,264 @@ The engineer asked for the whole of the DWG work in one go, so what the first ro
   UNP100 channels, plates), and the flooring plan's 200 plaster regions now have areas.
 - **Checks:** 4 new service tests, 3 new Rust tests and 1 new interface test; 202 service tests, 79 interface
   tests, typecheck, ruff and clippy pass.
+
+## 28 September 2026: an unanswered question after an AI outage, and each turn's thinking in the chat
+
+The engineer asked Salem "is the markup a % or static number or both or what?" and got no answer, while the rail
+kept saying he was "Checking the estimate". His turn ran for six and a half minutes, then the AI service stopped
+answering ("Couldn't reach the service"). The office tried twice more within 15 seconds and paused. The pause notice
+went to the team room, not to the chat the engineer was reading. His "now" line was never cleared, and his question
+was already marked as read, so it would not have come back as new.
+
+- **Retries.** A passing AI failure is now retried four times, waiting 5, 15, 45 and 135 seconds (over three minutes
+  in all). The wait ends at once if the engineer presses Stop or Quantix closes.
+- **The question comes back.** If the office gives up, what was new for the people whose turns failed is unread
+  again. The engineer's question is then answered when the office carries on.
+- **Why the office stopped.** `GET /office` gives the pause notice, and the chat shows it above the message box. When
+  the office isn't working, nobody's "now" line is shown.
+- **Each turn in the chat.** Every turn keeps its steps (migration 0024, `turns.steps`), saved while it runs. That is
+  what the person was told, their thinking when the AI service returns it, their working notes, and each tool call
+  with what it sent, what Quantix answered or why it sent it back. The chat folds each turn to one line, such as
+  "Salem worked for 32 s", "Salem is working · Reading Conditions.pdf, page 3", or in orange "Salem stopped after
+  6 min 40 s: Couldn't reach the service…". Opened, the line shows the thinking, notes and steps in words. The
+  "Technical details" switch adds the tool names, the arguments, Quantix's answers and the start-of-turn briefing.
+  No model, provider or token figures are shown. A direct chat shows that person's turns; the team room shows
+  everyone's.
+- **Working notes.** Some services keep a model's reasoning private (Runware's gpt-5-4-mini returns none). So the
+  rules now ask each person to write a line or two before their tool calls: what they are about to do and why.
+- **Checks:** 3 new service tests and 2 new interface tests; 205 service tests, 81 interface tests, typecheck and ruff
+  pass. Migration 0024 was rehearsed on a copy of the real database: every table kept its rows.
+- **Markups can be found.** Checked live in the browser: Salem answered the markup question again, and his turn log
+  showed four searches for "markup" and "site support allowance" that found nothing. The record search covered every
+  record except the markups, and he never opened them directly. `find_records` now finds the markups by their
+  preliminaries' names, their note and the words markup, preliminaries, overheads, profit and adjustment. The line it
+  returns says how each part is priced: preliminaries item by item, overheads and profit as percentages of cost, and
+  the adjustment as a lump sum.
+- **Sent-back markups can be opened.** Asked again after that fix, Salem still found nothing: every set of markups on
+  the real tender had been sent back, and the office saw only live records, so its briefing said "none proposed yet".
+  Sent-back drafts were already shown for correcting. Now the newest sent-back set of markups is too:
+  `find_records` and `open_record("markups")` return it marked "sent back", and "where the tender stands" says the
+  last set was sent back and none has been proposed since.
+- **A pasted search line counts as its reference.** Asked a third time, Salem found the sent-back markups and wrote
+  the right answer ("It is both…"), but twice gave the whole `find_records` line as his source. Quantix refused it
+  both times, so the answer never reached the engineer. A source, or anything else opened by reference, is now read
+  by the reference its line starts with ("markups · …" is "markups"). It must still have been opened.
+- **Sources written in the text.** Asked a fourth time, Salem opened the markups and wrote the answer, but ended it
+  with a "Sources: markups, estimate_summary" line instead of giving them. He was refused and stopped. A message with
+  no sources now takes a last "Sources:" line as its sources (a page's own comma, as in "Bill.xlsx, page 2", is
+  kept), and the checks on them are unchanged.
+- **The markups sent back last.** The sent-back set shown to the office was the newest made: a duplicate turned down
+  on 27 September. The set the engineer reopened today (approved on 27 September; "Reduce the site-support allowance
+  to match the 72-working-day programme") is older. The office now sees the set sent back most recently.
+- **Reopened work always has someone to redo it.** After Salem answered, the office went idle with no markups at
+  all. The engineer had reopened the approved set at 12:11. A send-back becomes a "Redo …" task for whoever made the
+  record, but Salem made those markups before the Manager stopped producing work, and the Manager gets no redo
+  tasks. So the redo was no one's. Now, when the maker is the Manager or has been released, the Manager gets
+  "Give out: Redo …" with the reason, to hand to someone with assign_task. He can complete it only once someone
+  else has a task from after it.
+- **Salem's work under Salem, and a reply to the engineer (evening).** The engineer saw Salem's turns under their
+  own message, and no reply to "give the redo to someone". His turn logs showed four causes, all fixed:
+  - **Sent back last.** The Manager's send-back is dated `reviewed_at`, not `decided_at`. The "sent back last"
+    ordering read only `decided_at`, so Rashid was sent to correct the engineer's older 4-month set instead of his
+    own 72-day redo, and refiled it at 4 months. It now orders by either date, and the markups search line carries
+    the set's reference (`markups 2795b746 · …`).
+  - **The engineer's decision stands.** Salem accepted Quantix's warning (4 months against 72 working days) as "a
+    conservative allowance", against the engineer's answer. A warning on work whose earlier version the engineer
+    corrected can no longer be accepted: the Manager sends it back with their decision, or escalates.
+  - **A reply is owed.** Salem gave out and reviewed the work, all in the team room, and never wrote back. Someone
+    the engineer wrote to last whose one finished turn since gave no message, no question and no work filed is
+    woken once more, to tell the engineer what they did. It is read from the records, so a restart keeps it.
+  - **Questions show in the chat.** His question to the engineer went to the Overview only, and a second one was
+    refused because the first was still waiting, while the chat said "Asked you to decide". A direct chat now shows
+    the person's questions as cards (a waiting one at the end): pick an option and send it, or answer in your own
+    words. A refused question reads "Question not sent".
+- **Chat layout.** Each run of one person's turns, messages and questions sits under their face and name, as a
+  chatbot shows its thinking above its reply. A turn's folded line says what they last did ("Worked for 12 s ·
+  Briefing Rashid"). Tools that don't describe themselves get plain words ("Wrote to you", "Gave the review"). A
+  written "Sources:" line is hidden when the sources show as links.
+
+## 28 September 2026: the Manager tells the engineer what waits for their approval
+
+On the real tender Salem accepted the redone markups the engineer had asked to see ("Bring the new markups to me
+when you've reviewed them") and never said so. The engineer found them by chance under Markups and summary. Nothing
+told the engineer when the last approval was done, either. The same gap showed in several places:
+
+- **He tells them, and says when nothing waits.** `reviews.with_engineer` lists what the Manager accepted that waits
+  for the engineer (the rates and markups the Estimate shows, quote recommendations, enquiries to send), and
+  `for_engineer` says it in a line with the screen for each. His duties say to tell the engineer once his review is
+  done, and to say when nothing waits. His review's answer reminds him, and every briefing ends with the line.
+  Quantix wakes him once (not after a finished turn of his that started since) when:
+  - work he accepted waits and his last message to the engineer is older than it; the brief lists each record and
+    its screen;
+  - the engineer approved the last of it (or sent the last enquiry) after his last message.
+- **Stuck in his queue.** The next redo priced monthly site staff by the day (preliminaries 155% of net). Salem
+  couldn't send it back a third time, and his escalation was turned away twice: he named the markups themselves
+  as a BOQ line, and markups have no page of their own. His turn ended and nothing woke him again. Now:
+  - a source naming the escalated work, or giving no page or BOQ line, is left out (once this was live, Salem's third
+    attempt gave the markups as a source with no page, and was refused again);
+  - work Quantix's checks find a problem in needs no page, since its finding shows beside the decision (as for
+    approved work);
+  - work still in his queue after one finished turn since it came, neither decided nor escalated, wakes him once
+    more to settle it.
+- **Where to approve.** The Overview's "1 price to approve" opened the Estimate's "Needs you · 0". Markups waiting
+  now count there, with a dot on Markups and summary and a line that opens them. The Takeoff sheet list marks
+  sheets with marks waiting ("· needs you"). The Overview counts enquiries to send (`gates.enquiries`). The rail
+  shows the count beside the open tender's Overview. The Manager's chat ends with "Waiting for your approval", one
+  click from each screen, until nothing waits (`tenders/needsYou.ts`, shared with the Overview).
+
+## 28 September 2026: every document opens as its own app shows it
+
+The Documents viewer showed PDFs as fixed pictures and everything else as the text Quantix read: a DWG was a list of
+its words, a workbook "A1=… | B1=…". Each kind now opens as its own app shows it, at the page a source names:
+
+- **PDF** with PDF.js (`pdfjs-dist`): pages drawn from the file, sharp at any zoom, text that can be selected, links
+  inside the document. A 100 MB, 2,250-page specification opens by the megabyte at the page asked for, and holds it
+  while pages of other sizes load. Opened from a search, the words searched for are marked. PDF.js's character maps,
+  fonts and image decoders are served under `/pdfjs` (a plugin in `vite.config.ts`); the window's CSP allows
+  WebAssembly for the decoders.
+- **Word** with `docx-preview`: pages, fonts, tables, pictures, headers and footers. A source names one of Quantix's
+  parts of about 3,000 characters; the document opens where that part starts, marked for a moment.
+- **Excel** from the service (`documents/sheets.py`, `GET /documents/{id}/sheets/{n}`): each cell's text as Excel
+  shows it with its number format, merged cells, widths, heights, fonts, fills (theme colours and tints), borders,
+  frozen rows and columns, right-to-left sheets, and sheets as tabs. Hidden rows and columns stay hidden, with a
+  switch to show them; the first 5,000 rows show.
+- **DWG and DXF** drawn by the Takeoff screen's drawing view, read-only, with model space and each layout as tabs.
+- **Images** zoom and pan; a TIFF is sent as PNG, which screens can show.
+- **Open original** opens the file in the app the computer uses for its type (AutoCAD, Excel, Word…), from a
+  read-only copy under `tenders/<id>/opened`, so the stored file stays as supplied. It used to take the whole window
+  to the raw file. Deleting the tender removes the copies.
+- **The list** is narrower, with an icon per kind and plainer coverage ("12 pages opened by the office · 3 cited").
+  A search can be cleared with × or Escape, keeps the open document, and says how many pages it found. Zoom works
+  with the controls and Ctrl + wheel; moving through a document replaces the address instead of adding steps to Back.
+
+## 28 September 2026: the drawing tools on PDFs printed from CAD, and a CAD viewer to measure with
+
+The engineer asked why the Takeoff screen offered none of what came with OpenCADStudio's libraries on the SEC 8485
+and 8486 tender. Its drawings are all PDFs, and only DWG and DXF files were read as drawings; its PDFs were printed
+from CAD, and keep their lines.
+
+- **PDFs read as drawings** (`documents/vectors.py`). The 8485 addendum's 130,498 strokes read as 96,044 objects
+  in its CAD colours, in about 8 s, once: a closed outline is found from strokes printed one side at a time, so
+  clicking the control room's outline gives 86.509 m round and 401.663 m² at the sheet's 1:214 scale. Hatch lines
+  are cut to their clipping outlines as the PDF shows them, AutoCAD's text strokes become their words (the words
+  written invisibly over them), and white masking is left out. The civil base design reads as 158,156 objects.
+- **The Takeoff screen** draws a CAD drawing, or a PDF page drawn in lines, in its own colours, and gains:
+  points placed on the drawing (Length, Area, Count and, on PDFs, Scale), snapped to a line's end or middle, where
+  two lines cross, or onto a line, with the snap named beside the pointer and shift keeping a line square; the
+  length or area placed so far; **Enclosed**, a click inside an area the lines close off, found with opencadkernel
+  in a window around the click that widens until the region lies inside it (0.8 s inside the real control room);
+  choosing by a box (shift-drag), everything like the chosen, or everything on a layer; each layer's colour; what
+  one chosen object is ("closed polyline on orange FF7F00 · 0.51 mm"); words found on the drawing; zooming to a
+  measurement's objects or points with Show; and Esc, Enter and Backspace as in CAD. A scanned page keeps the page
+  picture and its tools.
+- **CAD drawings** now keep their colours (qx-dwg format 4: by layer, by block and true colours), and the engineer
+  can measure by points in model space, in its units.
+- **Staff tools** take a PDF page drawn in lines as they take a CAD drawing: `drawing_overview`, `query_drawing`,
+  `view_drawing` and `measure_drawing` (with its page) work on its pens and objects with the sheet's scale.
+- **Faster:** the screen copy is built without a loop per object (3.7 s to 0.15 s on the addendum).
+- **Checks:** 6 new service tests with a synthetic vector PDF (strokes joined, a tee left apart, a circle, a fill,
+  letters and their word, a clipped hatch line, white, the PDF's own layers, a scan page) and a colour DWG; 5 new
+  interface tests (snapping, crossings, choosing by a box, likeness, words) and 3 screen tests (points on a CAD
+  drawing, Enclosed, a PDF drawn in lines).
+
+
+## 29 September 2026: one window, one tender, the team beside it
+
+The engineer called the interface unstructured: every tender and every staff member in the sidebar, two sidebars
+in the Office, lessons and a delete button on the Overview, and a window that behaved like a web page. The audit
+(44 findings) and the agreed structure are in the UI audit artifact; this is its first part, the shell.
+
+- **Title bar.** The window has no Windows frame; Quantix draws its own bar: sidebar, back and forward, where the
+  engineer is, Search (Ctrl+K), what the team is doing, what needs them, the Team button and its own minimise,
+  maximise and close. Drag it to move the window, double-click it to maximise (`desktop/capabilities`).
+- **Sidebar.** One tender at a time: a switcher lists the others, soonest due first, with what waits in each, and
+  switching goes back to the screen last open in that tender. Each screen counts what waits there. The firm's
+  library, directory, rules and details sit under Company; Settings is only settings. Ctrl+B folds it to icons,
+  and Takeoff folds it, and closes the team, to give the drawing room.
+- **Team panel.** The Office screen became a panel beside any screen (Team or Ctrl+J): faces across the top for
+  the Tender Manager, each person and the team room, the conversation, and a profile that opens over it and closes
+  with its X, Close or Esc. The Overview's own message box is gone; before the Manager joins, it offers "Write to
+  the office". Old links to `/office` open the panel.
+- **Keyboard.** Ctrl+K searches tenders, screens, people and actions; Ctrl+1 to Ctrl+7 open the tender's screens;
+  Alt+Left and Alt+Right go back and forward.
+- **Where the engineer was.** Quantix reopens on the last tender and screen.
+- **Checks:** 5 new shell tests and the Office tests moved to the panel; walked through in the desktop window
+  (switching tenders, the panel and profile, Ctrl+K, maximise, double-click and drag, Takeoff folding, Alt+Left).
+
+## 29 September 2026: the Desk and the tender register
+
+The engineer runs several tenders at once and had no place to see them together, nor history or an archive.
+
+- **Desk** (`/desk`, where Quantix now opens): what needs the engineer on every open tender, grouped by tender and
+  soonest closing first, each one click from where it is decided (a question opens the asker's chat); closing
+  dates; who is working now; four figures (open tenders and how many close this week, priced so far, closed this
+  year, won of decided); and the open tenders with where each stands, its total and what waits.
+- **Tenders** (`/tenders`): the register by Open, Submitted, Won, Lost and Archived, with a search.
+- **The tender's menu** (⋯ on its Overview): how it went (open, submitted, won, lost, dated), Archive or Restore,
+  and Delete behind a confirmation. It replaces the outcome picker in the date line and the delete link at the
+  foot of the Overview. Archiving keeps everything, stops the team, and takes the tender out of the switcher and
+  the Desk.
+- **Service:** `GET /desk` (`api/desk.py`), each tender counted by Quantix: documents read, BOQ items priced,
+  packages chosen, checklist ready, the total before VAT, the team's state and what waits for the engineer.
+  Migration 0025 adds `archived_at` and `outcome_at` to tenders, in place; rehearsed on a copy of the real
+  database (3 tenders and their records unchanged).
+- **Sidebar and title bar:** Desk and Tenders at the top of the sidebar, Desk counting what waits on every open
+  tender; the title-bar bell counts the same and opens the Desk.
+- **Checks:** 2 service tests (the Desk's counts, archiving and dated outcomes) and 3 interface tests (the Desk,
+  the register, the tender's menu); walked through in the desktop window on the real tenders.
+
+## 29 September 2026: each screen one job
+
+- **Overview:** status and the next step only. The office's lessons moved to Company rules as "Suggested by the
+  office" (`GET /lessons`), with Keep as a rule and Drop and a quiet count in the sidebar; warnings the office
+  accepted fold under Before release; the Estimate line says its total is before VAT; record references such as
+  "markups 99d1acc5" no longer show in what the team writes.
+- **Estimate:** the header shows the tender total excluding VAT; a totals bar under the BOQ gives net,
+  preliminaries, overheads and profit, and opens the price summary.
+- **Takeoff:** opens a drawing by itself (one waiting for the engineer, the last measured, or the package's first),
+  and shows a CAD drawing's layer map and Quantix's checks beside it. Queries keeps the client queries and the
+  checks on the BOQ and across drawings. The per-drawing checks read DWG and DXF objects, so they aren't offered on
+  PDFs, where they failed.
+- **Settings:** Office, AI, Web research and Usage, each its own tab.
+- **Chat:** three or more turns in a row with nothing said fold to one line ("13 earlier turns at work").
+- **One look for decisions:** Approve is a real button on every screen and Send back beside it; the Estimate's
+  Reject became Send back, as everywhere else.
+- **Shortcuts on an Arabic keyboard:** Ctrl+K, Ctrl+J, Ctrl+B and Ctrl+1–7 match the key's place (`KeyboardEvent.code`),
+  not its letter, which on an Arabic layout is ن, ت and so on; found in the desktop window.
+- **Checks:** interface tests for the suggested rules, the totals bar, drawing work on Takeoff, Settings sections,
+  record references and the Arabic layout; a service test for `GET /lessons`; walked through in the desktop window
+  on the real tender.
+
+## 29 September 2026: example company rules any firm starts from
+
+The engineer asked for rules any company in any market can use, present by default, as an example and a
+reference to adjust. Migration 0026 adds 23 of them once to every database (new or existing), marked `example`:
+quantities, rates, markups, subcontract, exclusions and qualifications, tender queries, submission, risk and house
+style. None names a currency, tax, method of measurement or local standard: the office reads those from each
+tender. Where a figure is given (5% quantity difference, 30-day quote validity) the rule says it is the firm's to
+change. Company rules shows each as Example, with Edit (`PATCH /rules/{id}`, which makes it the firm's own) and
+Remove. Removed or edited, they never come back. Service tests start from a firm with no rules; one test checks a
+new firm's examples, that none names a market, editing, and that a restart doesn't add them again. Rehearsed on a
+copy of the real database (23 rules added, nothing else changed).
+
+## 29 September 2026: the rest of the audit
+
+- **Windows folder picker:** in the desktop app, Choose folder and Add files open the Windows pickers and the
+  service copies the files from where they are (`POST /tenders/{id}/documents/import`, folder structure kept,
+  hidden and Windows system files skipped). The browser keeps its upload. No more "Upload N files to this site?".
+- **Windows notifications:** when Quantix isn't in front, a notification says which tender has new decisions for
+  the engineer, or that a team finished (`app/notify.ts` compares each Desk refresh, which keeps running while the
+  window is minimised or covered). Quantix sends them itself (`notify` in `desktop/src/main.rs`, on
+  tauri-winrt-notification), under its own name and icon; clicking one brings Quantix forward on that tender, or on
+  the Desk when several tenders have news. The notification plugin went: in a development build it sends as
+  Windows PowerShell and it can't report a click. Windows shows a pop-up only for an app with a Start-menu entry
+  carrying its id: the installer makes Quantix's; a development build makes "Quantix (development)" once, from a
+  second short-lived Quantix process, because creating the shortcut inside the window's process corrupts its
+  memory.
+- **One place to answer:** the question card in the chat shows where an escalation shows, what Quantix found and
+  the Manager's recommended option, and takes an answer in the engineer's own words; the separate decision page is
+  gone, and an old link to it opens the asker's chat.
+- **Polish:** every screen title one size; the Overview's, Settings' and Tenders' headers stay in view while the
+  page scrolls; screens show quiet placeholder rows while they open.
+- **Not done:** Windows 11 snap layouts on Quantix's own maximise button. It worked (a hover sending Win+Z), but
+  the engineer didn't want it; Win+Z still offers them.

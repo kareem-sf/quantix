@@ -3,6 +3,7 @@ it or sends it back to whoever made it. In a fully autonomous office his accepta
 record first: he can't accept one with a blocker, and accepts a warning only with his reason. What the office can't
 settle, he escalates to the engineer with where it shows and his suggested corrections."""
 
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -68,6 +69,21 @@ def _counted(n: int, kind: str) -> str:
     return f"{n} {NAMES[kind][0 if n == 1 else 1]}"
 
 
+WHERE = {  # the screen the engineer decides each kind of work on
+    "boq": "the Estimate screen",
+    "fact": "the Estimate screen",
+    "rate": "the Estimate screen",
+    "markups": "the Estimate screen, under Markups and summary",
+    "scale": "the Takeoff screen",
+    "measurement": "the Takeoff screen",
+    "layers": "the Queries screen",
+    "query": "the Queries screen",
+    "draft": "the Submission screen",
+    "recommendation": "the Subcontract screen",
+    "enquiry": "the Subcontract screen, to send from their own mail",
+}
+
+
 CHECKED = {kind: model for kind, (model, _) in REVIEWED_KINDS.items()} | {"recommendation": Package}
 
 
@@ -76,7 +92,7 @@ class Pending:
     kind: str
     record: Any
     producer: str  # the staff member who made it
-    since: datetime  # when it came to the Manager
+    since: datetime  # when it came to whoever it waits for: the Manager, or the engineer once he accepted it
 
     @property
     def ref(self) -> str:
@@ -113,6 +129,65 @@ def pending(session: Session, tender_id: str) -> list[Pending]:
         for p in session.scalars(recommended)
     ]
     return sorted(found, key=lambda p: p.since)
+
+
+def with_engineer(session: Session, tender_id: str) -> list[Pending]:
+    """What the Tender Manager accepted that waits for the engineer, oldest first: work to approve or send back,
+    quote recommendations to choose from and enquiries to send. The rates and markups are the ones the Estimate
+    shows, so this agrees with the screens."""
+
+    def waiting(kind: str, r: Any, by: str | None) -> Pending:
+        return Pending(kind, r, by or "", r.reviewed_at or r.created_at)
+
+    found: list[Pending] = []
+    for kind, (model, _) in REVIEWED_KINDS.items():
+        if kind not in ("rate", "markups"):
+            query = select(model).where(model.tender_id == tender_id, model.status == REVIEWED)
+            found += [waiting(kind, r, r.proposed_by) for r in session.scalars(query)]
+    rates = [estimate.current_rate(session, item.id) for item in boq.items(session, tender_id)]
+    found += [waiting("rate", r, r.proposed_by) for r in rates if r is not None and r.status == REVIEWED]
+    markups = estimate.current_markups(session, tender_id)
+    if markups is not None and markups.status == REVIEWED:
+        found.append(waiting("markups", markups, markups.proposed_by))
+    recommended = select(Package).where(
+        Package.tender_id == tender_id,
+        Package.recommended_quote_id.is_not(None),
+        Package.reviewed_by.is_not(None),
+        Package.selected_quote_id.is_(None),
+    )
+    found += [waiting("recommendation", p, p.recommended_by) for p in session.scalars(recommended)]
+    to_send = (
+        select(Enquiry)
+        .join(Package, Enquiry.package_id == Package.id)
+        .where(Package.tender_id == tender_id, Enquiry.status == "draft", Enquiry.reviewed_by.is_not(None))
+    )
+    found += [waiting("enquiry", e, e.created_by) for e in session.scalars(to_send)]
+    return sorted(found, key=lambda p: p.since)
+
+
+def for_engineer(session: Session, tender_id: str) -> str:
+    """What waits for the engineer in a line, by kind and where they decide it; empty when nothing does."""
+    by_kind = Counter(p.kind for p in with_engineer(session, tender_id))
+    return "; ".join(f"{_counted(n, kind)} on {WHERE[kind]}" for kind, n in by_kind.items())
+
+
+def last_approved(session: Session, tender_id: str) -> datetime | None:
+    """When the engineer last approved work the Tender Manager had accepted, or sent an enquiry he had."""
+    times = [
+        session.scalar(
+            select(func.max(model.decided_at)).where(
+                model.tender_id == tender_id, model.status == "approved", model.reviewed_by.is_not(None)
+            )
+        )
+        for model, _ in REVIEWED_KINDS.values()
+    ]
+    sent = (
+        select(func.max(Enquiry.sent_at))
+        .join(Package, Enquiry.package_id == Package.id)
+        .where(Package.tender_id == tender_id, Enquiry.reviewed_by.is_not(None))
+    )
+    times.append(session.scalar(sent))
+    return max((t for t in times if t is not None), default=None)
 
 
 def escalation(session: Session, record_id: str) -> Decision | None:
@@ -417,6 +492,11 @@ def review(
             )
     where = "approved by the office" if autonomous else "waiting for the engineer"
     report = f"Accepted {accepted_n} ({where}). Sent back {sent_back}."
+    if accepted_n and not autonomous:
+        report += (
+            " Once your review is done, tell the engineer with message_engineer what now waits for their approval "
+            "and where: " + for_engineer(session, tender_id) + "."
+        )
     return report + ("\nNot done:\n" + "\n".join(problems) if problems else "") + "".join(f"\n{t}" for t in learned)
 
 
@@ -440,6 +520,13 @@ def _accept(
         raise ValueError(
             "Quantix's checks stop it: " + " ".join(blockers) + " Send it back saying exactly what to correct."
         )
+    decided = engineer_correction(session, tender_id, p) if found else None
+    if decided is not None:  # on the real tender he accepted 4 months of site support against the engineer's 72 days
+        raise ValueError(
+            "Quantix warns: " + " ".join(f.message for f in found) + f" The engineer already decided on this work: "
+            f"“{decided.answer}” You can't accept a warning against their decision: send it back with their decision "
+            "as the correction, or escalate it if the office can't meet it."
+        )
     reason = (verdict.warnings_reason or "").strip()
     if found and len(reason.split()) < 3:
         raise ValueError(
@@ -458,6 +545,22 @@ def _accept(
             r.status = REVIEWED
     elif p.kind == "recommendation" and autonomous:
         subcontract.select_quote(session, r, session.get(Quote, r.recommended_quote_id), status="office_approved")
+
+
+def engineer_correction(session: Session, tender_id: str, p: Pending) -> Decision | None:
+    """The engineer's latest answer on this work or an earlier version of it, when it chose a correction."""
+    if p.kind not in REVIEWED_KINDS:
+        return None
+    model = REVIEWED_KINDS[p.kind][0]
+    versions = select(model.id).where(model.tender_id == tender_id, same_work(p.kind, p.record))
+    query = select(Decision).where(
+        Decision.tender_id == tender_id,
+        Decision.subject_kind == p.kind,
+        Decision.subject_id.in_(versions),
+        Decision.status == "answered",
+    )
+    latest = session.scalars(query.order_by(Decision.decided_at.desc())).first()
+    return latest if latest is not None and (latest.answer or "").strip() != KEEP_APPROVED else None
 
 
 def same_work(kind: str, record: Any) -> Any:
@@ -645,18 +748,21 @@ def escalate(
         raise ValueError("You already escalated it. The engineer's answer will come to your chat.")
     if len(problem.split()) < 5:
         raise ValueError("Say what is wrong and why the office can't settle it.")
-    if not sources and not approved:  # approved work: Quantix's own finding says where
-        raise ValueError("Show the engineer where the problem is: at least one document page or BOQ line.")
     suggestions = [s.strip() for s in suggestions if s.strip()]
     if not 1 <= len(suggestions) <= 4:
         raise ValueError("Suggest 1 to 4 corrections for the engineer to choose from, each complete enough to act on.")
     if approved and any(s.lower().startswith(("keep", "leave")) for s in suggestions):
         # any choice but Quantix's own keep reopens the work: a second "keep" would reopen it to be kept
         raise ValueError(f"Give only corrections: Quantix adds “{KEEP_APPROVED}” itself.")
+    # neither the escalated work itself nor a source with no page or BOQ line is a place it shows: the real tender's
+    # markups were refused for each, three times
+    itself = (ref.strip().lower(), p.ref)
+    sources = [s for s in sources if (s.document_id or s.boq_item) and (s.boq_item or "").strip().lower() not in itself]
+    # approved work, or work Quantix's checks find a problem in: the finding says where, beside the decision
+    if not sources and not approved and not checks.for_record(session, library.home_of(session), p.kind, p.record):
+        raise ValueError("Show the engineer where the problem is: at least one document page or BOQ line.")
     shown = _own_sources(session, p)
     for s in sources:
-        if approved and (s.boq_item or "").strip().lower() in (ref.strip().lower(), p.ref):
-            continue  # the escalated work itself, not a place it shows
         try:
             shown.append(_source(session, tender_id, s))
         except ValueError as error:

@@ -28,7 +28,7 @@ export function Details() {
 
   return (
     <div className="flex w-full max-w-[860px] flex-col px-8 pt-7">
-      <h1 className="text-[22px] font-semibold tracking-tight">Company details</h1>
+      <h1 className="text-[24px] font-semibold tracking-tight">Company details</h1>
       <span className="text-ink-2">Your letterhead: every document, workbook and PDF Quantix builds carries it.</span>
 
       <form onSubmit={submit} className="mt-6 flex max-w-[520px] flex-col gap-3">

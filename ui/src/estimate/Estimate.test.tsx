@@ -84,6 +84,19 @@ describe("Estimate", () => {
     expect(within(panel).queryByRole("button", { name: "Approve item" })).not.toBeInTheDocument();
   });
 
+  it("closes an item's panel with Esc, but not while the engineer types in it", async () => {
+    fakeService({ tenders: [tender], staff: [rania, omar], items: [item("i1", "3.1", "Excavation", "1240", "m3")] });
+    openApp("/tenders/t1/estimate?item=i1");
+
+    const panel = await screen.findByRole("complementary", { name: "Item 3.1" });
+    await userEvent.click(within(panel).getByRole("button", { name: "Send back" }));
+    await userEvent.type(within(panel).getByLabelText("What to put right"), "Wrong unit{Escape}");
+    expect(screen.getByRole("complementary", { name: "Item 3.1" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("heading", { name: "Estimate" }));
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("complementary", { name: "Item 3.1" })).not.toBeInTheDocument();
+  });
+
   it("sends an item back with the reason", async () => {
     const service = fakeService({
       tenders: [tender],
@@ -94,8 +107,8 @@ describe("Estimate", () => {
 
     const panel = await screen.findByRole("complementary", { name: "Item 3.1" });
     expect(within(panel).getByText(/Reviewed by Rania/)).toHaveTextContent("Reviewed by Rania: Checked against Bill.xlsx row 2.");
-    await userEvent.click(await screen.findByRole("button", { name: "Reject" }));
-    await userEvent.type(screen.getByLabelText("Why reject it"), "Use the drawing quantity.");
+    await userEvent.click(await screen.findByRole("button", { name: "Send back" }));
+    await userEvent.type(screen.getByLabelText("What to put right"), "Use the drawing quantity.");
     await userEvent.click(screen.getByRole("button", { name: "Send back" }));
     await waitFor(() =>
       expect(service.state.items[0]).toMatchObject({ status: "rejected", reason: "Use the drawing quantity." }),

@@ -284,6 +284,53 @@
         }
       }
     },
+    "/desk": {
+      "get": {
+        "tags": [
+          "desk"
+        ],
+        "summary": "Desk",
+        "operationId": "desk_desk_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TenderGlance"
+                  },
+                  "title": "Response Desk Desk Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/ai/connections": {
       "get": {
         "tags": [
@@ -956,6 +1003,69 @@
         }
       }
     },
+    "/tenders/{tender_id}/documents/import": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Import Documents",
+        "description": "Copy the chosen files into the tender from where they are, as the desktop app's own pickers give them. The\nengineer's files are only read, never changed.",
+        "operationId": "import_documents_tenders__tender_id__documents_import_post",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Added"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/tenders/{tender_id}/search": {
       "get": {
         "tags": [
@@ -1181,6 +1291,124 @@
         }
       }
     },
+    "/documents/{document_id}/sheets/{number}": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Sheet",
+        "description": "A sheet of a workbook as Excel shows it: its cells' text, merges, sizes and formatting. With `hidden`, the rows\nand columns the sheet hides are shown too.",
+        "operationId": "sheet_documents__document_id__sheets__number__get",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Number"
+            }
+          },
+          {
+            "name": "hidden",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Hidden"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SheetView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{document_id}/open": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Open In App",
+        "description": "Opens the file in the app this computer uses for its type. The app gets a read-only copy, so the stored file\nstays exactly as it was supplied.",
+        "operationId": "open_in_app_documents__document_id__open_post",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/tenders/{tender_id}/office": {
       "get": {
         "tags": [
@@ -1216,6 +1444,130 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/OfficeOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenders/{tender_id}/turns": {
+      "get": {
+        "tags": [
+          "office"
+        ],
+        "summary": "List Turns",
+        "operationId": "list_turns_tenders__tender_id__turns_get",
+        "parameters": [
+          {
+            "name": "tender_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tender Id"
+            }
+          },
+          {
+            "name": "staff_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Staff Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TurnOut"
+                  },
+                  "title": "Response List Turns Tenders  Tender Id  Turns Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/turns/{turn_id}": {
+      "get": {
+        "tags": [
+          "office"
+        ],
+        "summary": "Turn Detail",
+        "operationId": "turn_detail_turns__turn_id__get",
+        "parameters": [
+          {
+            "name": "turn_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Turn Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnDetail"
                 }
               }
             }
@@ -2333,7 +2685,7 @@
           "drawings"
         ],
         "summary": "Get Drawing",
-        "description": "What a drawing holds: its pages, units, what couldn't be read, and one page's layers and blocks.",
+        "description": "What a drawing holds: its pages, units, what couldn't be read, and one page's layers and blocks. A PDF page\ndrawn in lines is a drawing of one page, whose layers are its pens (or the PDF's own layers).",
         "operationId": "get_drawing_documents__document_id__drawing_get",
         "parameters": [
           {
@@ -2500,6 +2852,78 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Chosen"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{document_id}/pages/{number}/region": {
+      "post": {
+        "tags": [
+          "drawings"
+        ],
+        "summary": "Region",
+        "description": "The region around a point that the page's lines close off: what the engineer clicked inside, found with\nopencadkernel from the lines themselves, so an area needn't be drawn as one closed outline to be measured.",
+        "operationId": "region_documents__document_id__pages__number__region_post",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Number"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegionIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegionOut"
                 }
               }
             }
@@ -4309,6 +4733,67 @@
       }
     },
     "/rules/{rule_id}": {
+      "patch": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Change Rule",
+        "description": "The engineer adjusts a rule; an example adjusted is the firm's own rule from then on.",
+        "operationId": "change_rule_rules__rule_id__patch",
+        "parameters": [
+          {
+            "name": "rule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rule Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleChange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
         "tags": [
           "company"
@@ -4864,6 +5349,54 @@
         }
       }
     },
+    "/lessons": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "summary": "Suggested Lessons",
+        "description": "What the office learned on every tender and the engineer hasn't kept or dropped: suggested company rules.",
+        "operationId": "suggested_lessons_lessons_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LessonOut"
+                  },
+                  "title": "Response Suggested Lessons Lessons Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/lessons/{lesson_id}": {
       "patch": {
         "tags": [
@@ -5075,6 +5608,39 @@
         ],
         "title": "Boq"
       },
+      "Cell": {
+        "properties": {
+          "column": {
+            "type": "integer",
+            "title": "Column"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "default": ""
+          },
+          "style": {
+            "type": "integer",
+            "title": "Style",
+            "default": 0
+          },
+          "rows": {
+            "type": "integer",
+            "title": "Rows",
+            "default": 1
+          },
+          "columns": {
+            "type": "integer",
+            "title": "Columns",
+            "default": 1
+          }
+        },
+        "type": "object",
+        "required": [
+          "column"
+        ],
+        "title": "Cell"
+      },
       "CheckRequest": {
         "properties": {
           "model": {
@@ -5153,6 +5719,29 @@
           "volume_m3"
         ],
         "title": "Chosen"
+      },
+      "Column": {
+        "properties": {
+          "letter": {
+            "type": "string",
+            "title": "Letter"
+          },
+          "width": {
+            "type": "number",
+            "title": "Width"
+          },
+          "hidden": {
+            "type": "boolean",
+            "title": "Hidden",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "letter",
+          "width"
+        ],
+        "title": "Column"
       },
       "ColumnsOut": {
         "properties": {
@@ -5876,6 +6465,11 @@
             "type": "string",
             "title": "Document Id"
           },
+          "page": {
+            "type": "integer",
+            "title": "Page",
+            "default": 1
+          },
           "kind": {
             "type": "string",
             "enum": [
@@ -6456,6 +7050,10 @@
             "type": "integer",
             "title": "Subcontract"
           },
+          "enquiries": {
+            "type": "integer",
+            "title": "Enquiries"
+          },
           "submission": {
             "type": "integer",
             "title": "Submission"
@@ -6470,6 +7068,7 @@
           "drawings",
           "pricing",
           "subcontract",
+          "enquiries",
           "submission"
         ],
         "title": "Gates"
@@ -6486,6 +7085,32 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "ImportIn": {
+        "properties": {
+          "folder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder"
+          },
+          "files": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Files",
+            "default": []
+          }
+        },
+        "type": "object",
+        "title": "ImportIn",
+        "description": "What the engineer chose on this computer: a whole folder, kept with its folders, or single files."
       },
       "ItemOut": {
         "properties": {
@@ -6699,6 +7324,17 @@
               }
             ],
             "title": "Meaning"
+          },
+          "colour": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Colour"
           }
         },
         "type": "object",
@@ -6754,6 +7390,17 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "tender_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tender Name"
           }
         },
         "type": "object",
@@ -7443,6 +8090,17 @@
             ],
             "title": "State"
           },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notice"
+          },
           "ai_ready": {
             "type": "boolean",
             "title": "Ai Ready"
@@ -7462,6 +8120,7 @@
         "type": "object",
         "required": [
           "state",
+          "notice",
           "ai_ready",
           "staff",
           "waiting"
@@ -8366,6 +9025,92 @@
         ],
         "title": "ReadyIn"
       },
+      "RegionIn": {
+        "properties": {
+          "stamp": {
+            "type": "string",
+            "title": "Stamp"
+          },
+          "point": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Point"
+          },
+          "hidden": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Hidden",
+            "default": []
+          },
+          "within": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Within"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stamp",
+          "point"
+        ],
+        "title": "RegionIn"
+      },
+      "RegionOut": {
+        "properties": {
+          "ring": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Ring"
+          },
+          "area_m2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Area M2"
+          },
+          "perimeter_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Perimeter M"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ring",
+          "area_m2",
+          "perimeter_m"
+        ],
+        "title": "RegionOut"
+      },
       "ReopenIn": {
         "properties": {
           "reason": {
@@ -8586,6 +9331,37 @@
         ],
         "title": "RoomOut"
       },
+      "Row": {
+        "properties": {
+          "number": {
+            "type": "integer",
+            "title": "Number"
+          },
+          "height": {
+            "type": "number",
+            "title": "Height"
+          },
+          "hidden": {
+            "type": "boolean",
+            "title": "Hidden",
+            "default": false
+          },
+          "cells": {
+            "items": {
+              "$ref": "#/components/schemas/Cell"
+            },
+            "type": "array",
+            "title": "Cells"
+          }
+        },
+        "type": "object",
+        "required": [
+          "number",
+          "height",
+          "cells"
+        ],
+        "title": "Row"
+      },
       "Rule": {
         "properties": {
           "layers": {
@@ -8698,6 +9474,37 @@
         "title": "Rule",
         "description": "Which objects of a drawing space to take: every condition given must hold, and within a list any one will do.\nAnnotation (the drawing of dimensions, leaders and tables) is never taken."
       },
+      "RuleChange": {
+        "properties": {
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "title": "RuleChange"
+      },
       "RuleIn": {
         "properties": {
           "topic": {
@@ -8736,6 +9543,11 @@
             "type": "string",
             "title": "Id"
           },
+          "example": {
+            "type": "boolean",
+            "title": "Example",
+            "description": "One Quantix starts every firm with, for the engineer to adjust or remove"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -8747,6 +9559,7 @@
           "topic",
           "text",
           "id",
+          "example",
           "created_at"
         ],
         "title": "RuleOut"
@@ -9039,6 +9852,11 @@
               }
             ],
             "title": "Units"
+          },
+          "lines": {
+            "type": "boolean",
+            "title": "Lines",
+            "default": false
           }
         },
         "type": "object",
@@ -9051,6 +9869,109 @@
           "scale"
         ],
         "title": "Sheet"
+      },
+      "SheetTab": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "hidden": {
+            "type": "boolean",
+            "title": "Hidden",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "SheetTab"
+      },
+      "SheetView": {
+        "properties": {
+          "sheets": {
+            "items": {
+              "$ref": "#/components/schemas/SheetTab"
+            },
+            "type": "array",
+            "title": "Sheets"
+          },
+          "number": {
+            "type": "integer",
+            "title": "Number"
+          },
+          "right_to_left": {
+            "type": "boolean",
+            "title": "Right To Left",
+            "default": false
+          },
+          "gridlines": {
+            "type": "boolean",
+            "title": "Gridlines",
+            "default": true
+          },
+          "frozen_rows": {
+            "type": "integer",
+            "title": "Frozen Rows",
+            "default": 0
+          },
+          "frozen_columns": {
+            "type": "integer",
+            "title": "Frozen Columns",
+            "default": 0
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/Column"
+            },
+            "type": "array",
+            "title": "Columns"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/Row"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "styles": {
+            "items": {
+              "$ref": "#/components/schemas/Style"
+            },
+            "type": "array",
+            "title": "Styles"
+          },
+          "more_rows": {
+            "type": "integer",
+            "title": "More Rows",
+            "default": 0
+          },
+          "more_columns": {
+            "type": "integer",
+            "title": "More Columns",
+            "default": 0
+          },
+          "hidden_rows": {
+            "type": "integer",
+            "title": "Hidden Rows",
+            "default": 0
+          },
+          "hidden_columns": {
+            "type": "integer",
+            "title": "Hidden Columns",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "sheets",
+          "number",
+          "columns",
+          "rows",
+          "styles"
+        ],
+        "title": "SheetView"
       },
       "Source": {
         "properties": {
@@ -9130,6 +10051,153 @@
           "now"
         ],
         "title": "StaffOut"
+      },
+      "Style": {
+        "properties": {
+          "bold": {
+            "type": "boolean",
+            "title": "Bold",
+            "default": false
+          },
+          "italic": {
+            "type": "boolean",
+            "title": "Italic",
+            "default": false
+          },
+          "underline": {
+            "type": "boolean",
+            "title": "Underline",
+            "default": false
+          },
+          "strike": {
+            "type": "boolean",
+            "title": "Strike",
+            "default": false
+          },
+          "font": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Font"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "fill": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fill"
+          },
+          "align": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Align"
+          },
+          "valign": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valign"
+          },
+          "wrap": {
+            "type": "boolean",
+            "title": "Wrap",
+            "default": false
+          },
+          "indent": {
+            "type": "integer",
+            "title": "Indent",
+            "default": 0
+          },
+          "top": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top"
+          },
+          "right": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Right"
+          },
+          "bottom": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bottom"
+          },
+          "left": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Left"
+          }
+        },
+        "type": "object",
+        "title": "Style",
+        "description": "How a cell looks. Colours are \"#rrggbb\"; a border side is CSS, e.g. \"1px solid #000000\"."
       },
       "SubmissionOut": {
         "properties": {
@@ -9378,6 +10446,17 @@
               }
             ],
             "title": "Due Date"
+          },
+          "archived": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived"
           }
         },
         "type": "object",
@@ -9410,6 +10489,162 @@
           "name"
         ],
         "title": "TenderCreate"
+      },
+      "TenderGlance": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "due_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due Date"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "open",
+              "submitted",
+              "won",
+              "lost"
+            ],
+            "title": "Outcome"
+          },
+          "outcome_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome At"
+          },
+          "archived": {
+            "type": "boolean",
+            "title": "Archived"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "team": {
+            "type": "string",
+            "enum": [
+              "working",
+              "paused",
+              "idle"
+            ],
+            "title": "Team"
+          },
+          "doing": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doing",
+            "description": "What someone on the team is doing now, with their first name"
+          },
+          "waiting": {
+            "type": "integer",
+            "title": "Waiting",
+            "description": "Approvals at every gate and questions, waiting for the engineer"
+          },
+          "documents": {
+            "type": "integer",
+            "title": "Documents"
+          },
+          "read": {
+            "type": "integer",
+            "title": "Read",
+            "description": "Documents read, or that can't be read, out of the current ones"
+          },
+          "items": {
+            "type": "integer",
+            "title": "Items"
+          },
+          "priced": {
+            "type": "integer",
+            "title": "Priced"
+          },
+          "currency": {
+            "type": "string",
+            "title": "Currency"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total",
+            "description": "The tender total before VAT, once an item is priced"
+          },
+          "packages": {
+            "type": "integer",
+            "title": "Packages"
+          },
+          "chosen": {
+            "type": "integer",
+            "title": "Chosen"
+          },
+          "requirements": {
+            "type": "integer",
+            "title": "Requirements"
+          },
+          "ready": {
+            "type": "integer",
+            "title": "Ready"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "due_date",
+          "outcome",
+          "outcome_at",
+          "archived",
+          "created_at",
+          "team",
+          "doing",
+          "waiting",
+          "documents",
+          "read",
+          "items",
+          "priced",
+          "currency",
+          "total",
+          "packages",
+          "chosen",
+          "requirements",
+          "ready"
+        ],
+        "title": "TenderGlance",
+        "description": "One tender as the Desk and the register show it. Quantix counts every figure; nothing here is the AI's."
       },
       "TenderOut": {
         "properties": {
@@ -9454,6 +10689,25 @@
             ],
             "title": "Outcome"
           },
+          "outcome_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome At",
+            "description": "When the outcome was last set"
+          },
+          "archived": {
+            "type": "boolean",
+            "title": "Archived",
+            "description": "Put away: kept in the register, out of the sidebar and the Desk",
+            "default": false
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -9492,6 +10746,267 @@
           "tokens"
         ],
         "title": "TenderUsage"
+      },
+      "TurnDetail": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "staff_id": {
+            "type": "string",
+            "title": "Staff Id"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "running": {
+            "type": "boolean",
+            "title": "Running"
+          },
+          "ended": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "steps": {
+            "type": "integer",
+            "title": "Steps"
+          },
+          "doing": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doing"
+          },
+          "log": {
+            "items": {
+              "$ref": "#/components/schemas/TurnStep"
+            },
+            "type": "array",
+            "title": "Log"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "staff_id",
+          "started_at",
+          "ended_at",
+          "running",
+          "ended",
+          "note",
+          "steps",
+          "doing",
+          "log"
+        ],
+        "title": "TurnDetail",
+        "description": "The turn opened: what the person was told, their thinking and notes, and each tool call with its answer."
+      },
+      "TurnOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "staff_id": {
+            "type": "string",
+            "title": "Staff Id"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "running": {
+            "type": "boolean",
+            "title": "Running"
+          },
+          "ended": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "steps": {
+            "type": "integer",
+            "title": "Steps"
+          },
+          "doing": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doing"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "staff_id",
+          "started_at",
+          "ended_at",
+          "running",
+          "ended",
+          "note",
+          "steps",
+          "doing"
+        ],
+        "title": "TurnOut",
+        "description": "One person's turn at work, as the chat shows it folded."
+      },
+      "TurnStep": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "brief",
+              "thinking",
+              "note",
+              "tool"
+            ],
+            "title": "Kind"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "tool": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool"
+          },
+          "args": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Args"
+          },
+          "doing": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doing"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "sent_back": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sent Back"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "TurnStep"
       },
       "UnitsIn": {
         "properties": {

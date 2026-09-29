@@ -8,6 +8,7 @@ from quantix.api import (
     ai,
     boq,
     company,
+    desk,
     documents,
     drawings,
     estimate,
@@ -72,6 +73,7 @@ def create_app(home: Path, token: str) -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(tenders.router, dependencies=[Depends(require_token)])
+    app.include_router(desk.router, dependencies=[Depends(require_token)])
     app.include_router(ai.router, dependencies=[Depends(require_token)])
     app.include_router(documents.router, dependencies=[Depends(require_token)])
     app.include_router(office.router, dependencies=[Depends(require_token)])

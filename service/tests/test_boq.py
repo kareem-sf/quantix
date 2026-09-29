@@ -80,6 +80,7 @@ def test_items_are_saved_only_when_the_page_backs_them(client, package, qs):
         "drawings": 0,
         "pricing": 0,
         "subcontract": 0,
+        "enquiries": 0,
         "submission": 0,
     }
 
@@ -99,7 +100,7 @@ def test_approving_all_tells_the_manager_and_a_rejection_goes_back(client, packa
         manager_id = manager.id
     propose(client, tender_id, qs, [line(bill), line(bill, item="4.2", quantity="312.4", quote="A3=4.2 ... D3=312.4")])
     assert client.post(f"/tenders/{tender_id}/boq/approve-all").json() == {"approved": 0}  # nothing reviewed yet
-    assert manager_accepts(client, tender_id) == "Accepted 2 (waiting for the engineer). Sent back 0."
+    assert manager_accepts(client, tender_id).startswith("Accepted 2 (waiting for the engineer). Sent back 0.")
     [first, second] = client.get(f"/tenders/{tender_id}/boq").json()["items"]
     assert (first["status"], first["reviewed_by"], first["review_note"]) == (
         "reviewed",
@@ -164,6 +165,7 @@ def test_in_an_autonomous_office_the_managers_review_approves(client, package, q
         "drawings": 0,
         "pricing": 0,
         "subcontract": 0,
+        "enquiries": 0,
         "submission": 0,
     }
 
@@ -263,7 +265,8 @@ def test_staff_withdraw_their_own_undecided_lines(client, package, qs):
     def turn_of(staff_id):
         state = client.app.state
         return SimpleNamespace(
-            deps=tools.Turn(state.home, state.sessions, tender_id, staff_id, False, threading.Event())
+            deps=tools.Turn(state.home, state.sessions, tender_id, staff_id, False, threading.Event()),
+            tool_call_id="call",
         )
 
     tender_id, bill, _ = package

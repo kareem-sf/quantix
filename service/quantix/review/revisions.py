@@ -108,15 +108,16 @@ class _NewerCopy:
         return _within(before, box) == _within(after, box)
 
     def same_objects(self, older: Document, record: Scale | Measurement) -> bool:
-        """On a CAD drawing: whether the newer copy states the same units, or whether the measurement's rule takes
-        exactly the same objects there, each with the same extent, length and area. An object added that the rule
-        takes (a door drawn in by an addendum) keeps the measurement on the older copy, to be done again."""
-        if self.document.kind != "cad" or older.kind != "cad":
+        """On a CAD drawing, or a PDF page measured by its lines: whether the newer copy states the same units, or
+        whether the measurement's rule takes exactly the same objects there, each with the same extent, length and
+        area. An object added that the rule takes (a door drawn in by an addendum) keeps the measurement on the older
+        copy, to be done again."""
+        if self.document.kind != older.kind or older.kind not in ("cad", "pdf"):
             return False
         try:
-            before = drawings.open_drawing(self.home, older)
-            after = drawings.open_drawing(self.home, self.document)
-        except (ValueError, OSError):
+            before = drawings.open_page(self.home, older, record.page)
+            after = drawings.open_page(self.home, self.document, record.page)
+        except (ValueError, OSError, readers.Unreadable):
             return False
         if isinstance(record, Scale):
             return before.info["units"] == after.info["units"]
@@ -124,8 +125,10 @@ class _NewerCopy:
             return False
         keys = record.entities or []
         try:
-            again, _ = takeoff.resolve(self.session, self.home, self.document, record.kind, cad.Rule(**record.rule))
-        except ValueError:
+            again, _ = takeoff.resolve(
+                self.session, self.home, self.document, record.kind, cad.Rule(**record.rule), record.page
+            )
+        except (ValueError, readers.Unreadable):
             return False
         if sorted(again) != sorted(keys):
             return False
@@ -143,7 +146,7 @@ class _NewerCopy:
     def moved(self, record: Any) -> dict[str, Any] | None:
         """What changes when the record moves onto this copy, or None if what it cites isn't unchanged here."""
         older = self.session.get(Document, record.document_id)
-        if isinstance(record, Scale | Measurement) and older.kind == "cad":
+        if _by_objects(record, older):
             return {"document_id": self.document.id} if self.same_objects(older, record) else None
         if isinstance(record, Scale | Measurement):
             points = record.line if isinstance(record, Scale) else record.points
@@ -160,6 +163,14 @@ class _NewerCopy:
         page = "sheet" if isinstance(record, PricingColumns) else "page"
         found = self.find(getattr(record, page), record.quote)
         return None if found is None else {"document_id": self.document.id, page: found[0], "quote": found[1]}
+
+
+def _by_objects(record: Any, document: Document) -> bool:
+    """Takeoff that rests on a drawing's objects: a CAD drawing's units or measurements, or objects measured on a PDF
+    page's lines."""
+    if not isinstance(record, Scale | Measurement):
+        return False
+    return document.kind == "cad" or getattr(record, "entities", None) is not None
 
 
 def _pieces(n: int) -> str:
@@ -202,7 +213,7 @@ def problem(session: Session, record: Any) -> str | None:
         )
     if newer.status != "read":
         return f"It rests on an older copy of {document.name}, and Quantix couldn't read the newer copy."
-    if isinstance(record, Scale | Measurement) and document.kind == "cad":
+    if _by_objects(record, document):
         return (
             f"What it measured has changed in the newer copy of {document.name}, or objects were added that its "
             "rule takes: do it again on the newer copy."

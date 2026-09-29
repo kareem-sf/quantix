@@ -494,7 +494,7 @@ def test_the_screen_copy_and_choosing_objects(client, flat):
     tender_id, drawing, _ = flat
     client.post(f"/tenders/{tender_id}/units", json={"document_id": drawing, "units": "millimetres"})
     copy = client.get(f"/documents/{drawing}/pages/1/screen").content
-    assert copy[:4] == b"QXD1"
+    assert copy[:4] == b"QXD2"
     size = int.from_bytes(copy[4:8], "little")
     header = __import__("json").loads(copy[8 : 8 + size])
     assert header["objects"] > 30 and header["segments"] > 30 and "A-WALL" in header["layers"]

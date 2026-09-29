@@ -12,15 +12,18 @@
   "app": {
     "windows": [
       {
+        "label": "main",
+        "create": false,
         "title": "Quantix",
         "width": 1440,
         "height": 900,
         "minWidth": 1024,
-        "minHeight": 680
+        "minHeight": 680,
+        "decorations": false
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:"
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:"
     }
   },
   "bundle": {

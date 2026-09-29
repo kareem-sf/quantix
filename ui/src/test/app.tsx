@@ -4,9 +4,9 @@ import { createMemoryRouter, RouterProvider } from "react-router";
 import { vi } from "vitest";
 import type { Tender } from "../api/client";
 import { routes } from "../app/router";
-import type { SearchHit, TenderDocument } from "../documents/queries";
+import type { SearchHit, TenderDocument, WorkbookSheet } from "../documents/queries";
 import type { BoqItem, Fact, LibraryEntry, Markups, Priced, Summary } from "../estimate/queries";
-import type { Decision, Message, Staff, Task } from "../office/queries";
+import type { Decision, Message, Staff, Task, Turn, TurnStep } from "../office/queries";
 import type { Comparison, Measurement, Sheet } from "../takeoff/queries";
 import type { DrawingInfo, LayerMap, Problem, TenderQuery } from "../takeoff/cad";
 import type { Connection, OfficeSettings, Usage, WebKeys } from "../settings/queries";
@@ -20,7 +20,7 @@ function json(body: unknown, status = 200) {
 }
 
 export interface FakeState {
-  tenders: (Omit<Tender, "outcome"> & Partial<Pick<Tender, "outcome">>)[];
+  tenders: (Omit<Tender, "outcome" | "archived"> & Partial<Pick<Tender, "outcome" | "archived">>)[];
   rules: Rule[];
   company: Profile;
   connections: Connection[];
@@ -28,12 +28,21 @@ export interface FakeState {
   models: string[];
   documents: TenderDocument[];
   pages: Record<string, string>;
+  /** A workbook's sheets as the Documents screen shows them, by sheet number; and the files opened in their apps. */
+  workbook: Record<number, WorkbookSheet>;
+  opened: string[];
+  /** What the desktop app asked Quantix to import from this computer. */
+  imported: { folder: string | null; files: string[] }[];
   hits: SearchHit[];
   staff: Staff[];
   messages: Message[];
   decisions: Decision[];
   tasks: Task[];
   officeState: "working" | "paused" | "idle";
+  /** Why the office paused itself. */
+  notice: string | null;
+  /** Each turn with its steps. */
+  turns: (Turn & { log: TurnStep[] })[];
   items: BoqItem[];
   facts: Fact[];
   sheets: Sheet[];
@@ -86,12 +95,17 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     models: ["model-b", "model-a"],
     documents: [],
     pages: {},
+    workbook: {},
+    opened: [],
+    imported: [],
     hits: [],
     staff: [],
     messages: [],
     decisions: [],
     tasks: [],
     officeState: "idle",
+    notice: null,
+    turns: [],
     items: [],
     facts: [],
     sheets: [],
@@ -165,17 +179,39 @@ export function fakeService(initial: Partial<FakeState> = {}) {
       }
       return json({ added: files.length, unchanged: 0 }, 201);
     }
+    if (path.match(/^\/tenders\/\w+\/documents\/import$/) && method === "POST") {
+      state.imported.push(body); // the folder or files the desktop pickers chose, read from where they are
+      return json({ added: 1, unchanged: 0 });
+    }
     if (documents) return json(state.documents);
     if (path.match(/^\/tenders\/\w+\/search$/)) return json(state.hits);
     const page = path.match(/^\/documents\/(\w+)\/pages\/(\d+)$/);
     if (page) return json({ number: Number(page[2]), text: state.pages[page[1]] ?? "", has_text: true });
+    const workbook = path.match(/^\/documents\/\w+\/sheets\/(\d+)$/);
+    if (workbook) {
+      const hidden = new URL(request.url).searchParams.get("hidden") === "true";
+      const sheet = state.workbook[Number(workbook[1])];
+      return sheet ? json({ ...sheet, columns: sheet.columns.filter((c) => hidden || !c.hidden) }) : json({ detail: "This workbook has no such sheet." }, 404);
+    }
+    const opened = path.match(/^\/documents\/(\w+)\/open$/);
+    if (opened && method === "POST") {
+      state.opened.push(opened[1]);
+      return new Response(null, { status: 204 });
+    }
 
     const office = path.match(/^\/tenders\/(\w+)\/(office|messages|decisions|tasks)$/);
     if (office?.[2] === "office") {
       const waiting = state.decisions.filter((d) => d.status === "waiting").length;
       const ai_ready = state.settings.office_ai !== null;
-      return json({ state: state.officeState, ai_ready, staff: state.staff, waiting });
+      const notice = state.officeState === "paused" ? state.notice : null;
+      return json({ state: state.officeState, notice, ai_ready, staff: state.staff, waiting });
     }
+    if (path.match(/^\/tenders\/\w+\/turns$/)) {
+      const person = new URL(request.url).searchParams.get("staff_id");
+      return json(state.turns.filter((t) => !person || t.staff_id === person).map(({ log, ...turn }) => ({ ...turn, steps: log.length })));
+    }
+    const turn = path.match(/^\/turns\/(\d+)$/);
+    if (turn) return json(state.turns.find((t) => t.id === Number(turn[1])));
     if (office?.[2] === "messages" && method === "POST") {
       const message: Message = {
         id: state.messages.length + 1,
@@ -309,6 +345,10 @@ export function fakeService(initial: Partial<FakeState> = {}) {
       state.measured.push(body);
       return json({ id: "m9", quantity: "20.000" }, 201);
     }
+    if (path.match(/^\/documents\/\w+\/pages\/\d+\/region$/)) {
+      const [x, y] = body.point; // the square of 10 drawing units around the click
+      return json({ ring: [[x - 5, y - 5], [x + 5, y - 5], [x + 5, y + 5], [x - 5, y + 5]], area_m2: 100, perimeter_m: 40 });
+    }
     if (path.match(/^\/tenders\/\w+\/queries$/)) return json(state.queries);
     if (path.match(/^\/tenders\/\w+\/layer-maps$/)) return json(state.layerMaps);
     if (path.match(/^\/tenders\/\w+\/checks$/)) return json(state.checks);
@@ -346,16 +386,19 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     if (path.match(/^\/tenders\/\w+\/gates$/)) {
       const count = (list: { status: string }[], status = "reviewed") => list.filter((r) => r.status === status).length;
       const manager = [state.items, state.facts, state.measurements].reduce((n, list) => n + count(list, "proposed"), 0);
-      return json({ manager, boq: count(state.items), facts: count(state.facts), takeoff: count(state.measurements), drawings: 0, pricing: 0, subcontract: 0, submission: 0 });
+      const pricing = state.priced.filter((p) => p.rate?.status === "reviewed").length + (state.markups?.status === "reviewed" ? 1 : 0);
+      const enquiries = state.packages.flatMap((p) => p.enquiries).filter((e) => e.status === "draft" && e.reviewed_by).length;
+      return json({ manager, boq: count(state.items), facts: count(state.facts), takeoff: count(state.measurements), drawings: 0, pricing, subcontract: 0, enquiries, submission: 0 });
     }
     if (path.match(/^\/tenders\/\w+\/review$/)) return json([]);
     if (path.match(/^\/tenders\/\w+\/audit$/)) return json(state.audit);
     if (path.match(/^\/tenders\/\w+\/lessons$/)) return json(state.lessons.filter((l) => l.status !== "dropped"));
+    if (path === "/lessons") return json(state.lessons.filter((l) => l.status === "tender").map((l) => ({ tender_name: state.tenders[0]?.name ?? null, ...l })));
     const lesson = state.lessons.find((l) => path === `/lessons/${l.id}`);
     if (lesson && method === "PATCH") {
       lesson.status = body.status;
       if (body.status === "kept")
-        state.rules.push({ id: `r${state.rules.length + 1}`, topic: lesson.topic, text: lesson.text, created_at: "" });
+        state.rules.push({ id: `r${state.rules.length + 1}`, topic: lesson.topic, text: lesson.text, example: false, created_at: "" });
       return json(lesson);
     }
     if (path === "/ai/usage") return json(state.usage);
@@ -385,15 +428,35 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     }
     if (path === "/rules" && method === "GET") return json(state.rules);
     if (path === "/rules" && method === "POST") {
-      const rule = { id: `r${state.rules.length + 1}`, created_at: "2026-09-23T10:00:00Z", ...body };
+      const rule = { id: `r${state.rules.length + 1}`, created_at: "2026-09-23T10:00:00Z", example: false, ...body };
       state.rules.push(rule);
       return json(rule, 201);
+    }
+    const rule = state.rules.find((r) => path === `/rules/${r.id}`);
+    if (rule && method === "PATCH") {
+      Object.assign(rule, body, { example: false });
+      return json(rule);
     }
     if (path.startsWith("/rules/") && method === "DELETE") {
       state.rules = state.rules.filter((r) => `/rules/${r.id}` !== path);
       return new Response(null, { status: 204 });
     }
-    if (path === "/tenders" && method === "GET") return json(state.tenders.map((t) => ({ outcome: "open", ...t })));
+    if (path === "/tenders" && method === "GET") return json(state.tenders.map((t) => ({ outcome: "open", archived: false, ...t })));
+    if (path === "/desk") {
+      // every tender at a glance; the fake keeps one tender's records, so each tender shows them
+      const reviewed = (list: { status: string }[]) => list.filter((r) => r.status === "reviewed").length;
+      const waiting = reviewed(state.items) + reviewed(state.facts) + reviewed(state.measurements) +
+        state.decisions.filter((d) => d.status === "waiting").length;
+      return json(state.tenders.map((t) => ({
+        outcome: "open", archived: false, outcome_at: null, ...t,
+        team: state.officeState, doing: null, waiting,
+        documents: state.documents.length, read: state.documents.filter((d) => d.status !== "waiting" && d.status !== "reading").length,
+        items: state.items.length, priced: state.priced.filter((i) => i.rate).length,
+        currency: state.summary?.currency ?? "", total: state.summary?.priced ? state.summary.total : null,
+        packages: state.packages.length, chosen: state.packages.filter((p) => p.selected_quote_id).length,
+        requirements: state.requirements.length, ready: state.requirements.filter((r) => r.state === "ready").length,
+      })));
+    }
     if (path === "/tenders" && method === "POST") {
       const tender = { id: `t${state.tenders.length + 1}`, created_at: "2026-09-23T10:00:00Z", ...body };
       state.tenders.unshift(tender);
@@ -411,7 +474,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
       state.tenders = state.tenders.filter((t) => t !== tender);
       return new Response(null, { status: 204 });
     }
-    if (path.startsWith("/tenders/")) return tender ? json({ outcome: "open", ...tender }) : json({ detail: "Tender not found." }, 404);
+    if (path.startsWith("/tenders/")) return tender ? json({ outcome: "open", archived: false, ...tender }) : json({ detail: "Tender not found." }, 404);
 
     if (path === "/ai/connections" && method === "GET") return json(state.connections);
     if (path === "/ai/connections" && method === "POST") {

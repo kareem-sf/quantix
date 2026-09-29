@@ -1,6 +1,7 @@
 """The Tender Manager reviews everything his staff propose before it reaches the engineer."""
 
 import re
+import time
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -20,7 +21,7 @@ from test_office import scripted, wait_for
 from quantix import settings
 from quantix.boq import records as boq
 from quantix.estimate import records as estimate
-from quantix.office import agents, packs, tools
+from quantix.office import agents, packs, runtime, tools
 from quantix.office import records as office
 from quantix.office.models import Staff, TurnRecord
 from quantix.review import records as reviews
@@ -100,7 +101,10 @@ def test_the_manager_accepts_or_sends_back_each_record(client, office_with_work)
             autonomous=False,
         )
         session.commit()
-    assert report.startswith("Accepted 1 (waiting for the engineer). Sent back 1.\nNot done:\n")
+    assert report.startswith(
+        "Accepted 1 (waiting for the engineer). Sent back 1. Once your review is done, tell the engineer with "
+        "message_engineer what now waits for their approval and where: 1 BOQ line on the Estimate screen.\nNot done:\n"
+    )
     assert f"{queue[fact['id']]}: say in the note what you checked, or what to correct" in report
     assert "rate 12345678: nothing with that reference is waiting for your review" in report
 
@@ -171,13 +175,67 @@ def test_the_manager_wakes_for_new_work_in_his_queue(client, office_with_work, t
 
     client.app.state.office.model = lambda: scripted(brain)
     client.app.state.office.engineer_spoke(tender_id)  # nothing was said to him: his queue alone wakes him
-    wait_for(lambda o: manager_prompts, client, tender_id)
+    wait_for(lambda o: len(manager_prompts) >= 2, client, tender_id)
     assert (
         "Waiting for your review: Omar: 2 BOQ lines, 1 fact. Go through them with review_queue" in (manager_prompts[0])
     )
+    assert manager_prompts[1].startswith(runtime.QUEUE_LEFT)  # left undecided: woken once more to settle it
     client.app.state.office.engineer_spoke(tender_id)
+    time.sleep(0.3)
     wait_for(lambda o: True, client, tender_id)
-    assert len(manager_prompts) == 1  # the same queue doesn't wake him again
+    assert len(manager_prompts) == 2  # then the same queue doesn't wake him again
+
+
+def test_the_manager_tells_the_engineer_what_waits_for_them_and_when_nothing_does(client, office_with_work, tmp_path):
+    """The real tender: Salem accepted the redone markups the engineer had asked to see, and never said so. The
+    engineer found them by chance on the Estimate screen, and no one told them when nothing waited any more."""
+    tender_id, rania_id, _ = office_with_work
+    excavation, slab = client.get(f"/tenders/{tender_id}/boq").json()["items"]
+    for item in (excavation, slab):
+        decide(client, tender_id, rania_id, item["id"], True, "Quantity matches Bill.xlsx row 2.")
+    with client.app.state.sessions() as session:
+        assert reviews.for_engineer(session, tender_id) == "2 BOQ lines on the Estimate screen"
+        assert agents.standing(session, tender_id).endswith(
+            "- Waiting for the engineer's approval: 2 BOQ lines on the Estimate screen."
+        )
+    settings.save(tmp_path, office_ai={"connection_id": "scripted", "model": "brain"})
+    prompts: list[str] = []
+
+    def brain(messages, info):
+        replied = any(isinstance(p, ToolReturnPart) for m in messages for p in m.parts)
+        if "You are Rania Farouk" not in info.instructions or replied:
+            return ModelResponse(parts=[TextPart("Done.")])
+        prompt = next(str(p.content) for m in messages for p in m.parts if isinstance(p, UserPromptPart))
+        if prompt.startswith(runtime.APPROVALS_WAITING):
+            text = "BOQ lines 3.1 and 4.2 wait for your approval on the Estimate screen."
+        elif prompt.startswith(runtime.ALL_APPROVED):
+            text = "You have approved everything; nothing waits for you."
+        else:  # the fact he left in his queue, woken once more for it
+            return ModelResponse(parts=[TextPart("Done.")])
+        prompts.append(prompt)
+        return ModelResponse(parts=[ToolCallPart("message_engineer", {"text": text})])
+
+    client.app.state.office.model = lambda: scripted(brain)
+    client.app.state.office.engineer_spoke(tender_id)  # nothing was said to him: what waits for the engineer wakes him
+    wait_for(lambda o: prompts, client, tender_id)
+    assert prompts[0].startswith(runtime.APPROVALS_WAITING)
+    assert "· by Omar · 3.1: Excavation · 1,240 m3 · on the Estimate screen" in prompts[0]
+    client.app.state.office.engineer_spoke(tender_id)
+    time.sleep(0.3)
+    wait_for(lambda o: True, client, tender_id)
+    assert len(prompts) == 1  # he told them: not woken again for the same work
+
+    for item in (excavation, slab):  # approved on the Estimate screen, with nothing said in the chat
+        assert client.post(f"/boq/{item['id']}/decision", json={"approve": True}).status_code == 200
+    wait_for(lambda o: len(prompts) == 2, client, tender_id)
+    assert prompts[1].startswith(runtime.ALL_APPROVED)
+    assert "- Nothing is waiting for the engineer's approval." in prompts[1]
+    client.app.state.office.engineer_spoke(tender_id)
+    time.sleep(0.3)
+    wait_for(lambda o: True, client, tender_id)
+    assert len(prompts) == 2
+    chat = client.get(f"/tenders/{tender_id}/messages", params={"channel": rania_id}).json()
+    assert [m["text"] for m in chat] == ["You have approved everything; nothing waits for you."]  # one current update
 
 
 def decide(client, tender_id, manager_id, record_id, accept, note, lesson=None) -> str:
@@ -227,7 +285,7 @@ def test_what_the_office_cant_settle_goes_to_the_engineer_with_where_it_shows(cl
     chat = client.get(f"/tenders/{tender_id}/messages", params={"channel": rania_id}).json()
     assert chat[-1]["text"] == "About “The method of measurement”: Re-measured"
     applied = decide(client, tender_id, rania_id, fact["id"], True, "The engineer confirmed re-measurement.")
-    assert applied == "Accepted 1 (waiting for the engineer). Sent back 0."
+    assert applied.startswith("Accepted 1 (waiting for the engineer). Sent back 0.")
 
 
 def test_after_two_send_backs_the_manager_escalates(client, office_with_work):
@@ -275,7 +333,8 @@ def test_the_manager_escalates_through_his_tool(client, office_with_work, tmp_pa
     returned: list[str] = []
 
     def brain(messages, info):
-        if "You are Rania Farouk" not in info.instructions:
+        prompt = next(str(p.content) for m in messages for p in m.parts if isinstance(p, UserPromptPart))
+        if "You are Rania Farouk" not in info.instructions or runtime.QUEUE_LEFT in prompt:  # the BOQ lines he left
             return ModelResponse(parts=[TextPart("Done.")])
         returned[:] = [str(p.content) for m in messages for p in m.parts if isinstance(p, ToolReturnPart)]
         if returned:
@@ -393,7 +452,13 @@ def test_the_engineer_keeps_a_lesson_as_a_company_rule_or_drops_it(client, offic
     unit, method = client.get(f"/tenders/{tender_id}/lessons").json()
     assert (unit["text"], unit["topic"], unit["source"], unit["status"]) == (UNIT, "BOQ", "BOQ item 4.2", "tender")
     assert (method["topic"], method["source"]) == ("Tender facts", "the method of measurement")
+    suggested = client.get("/lessons").json()  # every tender's, for Company rules, newest first
+    assert [(lesson["text"], lesson["tender_name"]) for lesson in suggested] == [
+        (METHOD, "Synthetic school"),
+        (UNIT, "Synthetic school"),
+    ]
     assert client.patch(f"/lessons/{unit['id']}", json={"status": "kept"}).json()["status"] == "kept"
+    assert [lesson["text"] for lesson in client.get("/lessons").json()] == [METHOD]  # kept: a rule now
     assert [(r["topic"], r["text"]) for r in client.get("/rules").json()] == [("BOQ", UNIT)]
     assert client.patch(f"/lessons/{method['id']}", json={"status": "dropped"}).status_code == 200
     assert [lesson["status"] for lesson in client.get(f"/tenders/{tender_id}/lessons").json()] == ["kept"]

@@ -1,86 +1,134 @@
-import { IconArrowRight, IconArrowUp } from "@tabler/icons-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { useParams, useSearchParams } from "react-router";
+import { IconArrowRight, IconArrowUp, IconChevronRight, IconHash, IconPlayerStopFilled, IconX } from "@tabler/icons-react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { Link } from "react-router";
+import { useShell } from "../app/context";
+import { Findings } from "../review/Review";
+import { isChecked, type Checked } from "../review/queries";
+import { useNeedsYou } from "../tenders/needsYou";
 import { Face } from "./Face";
 import { Prose } from "./Prose";
 import {
   ENGINEER,
   TEAM,
   firstName,
+  useAnswer,
+  useDecisions,
   useMessages,
   useOffice,
   useSend,
   useStop,
   useTasks,
+  useTurns,
+  type Decision,
   type Message,
   type Staff,
+  type Turn,
 } from "./queries";
 import { Sources } from "./Sources";
+import { TurnLog } from "./TurnLog";
 
-export function Office() {
-  const { tenderId = "" } = useParams();
-  const [params, setParams] = useSearchParams();
+/** The team beside whatever the engineer is doing: the Tender Manager's chat first, then each person's, then the
+ * team room. Ctrl+J opens and closes it. */
+export function TeamPanel({ tenderId }: { tenderId: string }) {
+  const { team, showTeam, hideTeam, showPerson } = useShell();
   const office = useOffice(tenderId);
+  const decisions = useDecisions(tenderId);
+  const stop = useStop(tenderId);
   const staff = office.data?.staff ?? [];
-  const channel = params.get("with") ?? TEAM;
-  const asked = params.get("person"); // a profile the engineer opened; in a direct chat it shows beside the chat
-  const person = staff.find((m) => m.id === (asked ?? (channel === TEAM ? undefined : channel)));
-  const active = staff.filter((m) => m.status === "active");
+  const active = staff.filter((m) => m.status === "active").sort((a, b) => Number(b.is_manager) - Number(a.is_manager));
+  const manager = active.find((m) => m.is_manager);
+  const chosen = team.channel === TEAM || active.some((m) => m.id === team.channel) ? team.channel : null;
+  const channel = chosen ?? manager?.id ?? TEAM;
+  const person = staff.find((m) => m.id === team.person);
+  const asking = new Set((decisions.data ?? []).filter((d) => d.status === "waiting").map((d) => d.raised_by));
+  const working = office.data?.state === "working";
 
   return (
-    <div className="relative flex h-full w-full">
-      <section
-        aria-label="Conversations"
-        className="flex w-60 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-line px-3 py-7 max-xl:w-52"
-      >
-        <h1 className="mx-2 mb-3.5 text-[22px] font-semibold tracking-tight">Office</h1>
-        <Thread label="Team room" on={channel === TEAM} onClick={() => setParams({})} />
-        {active.map((m) => (
-          <Thread key={m.id} label={m.name} member={m} on={channel === m.id} onClick={() => setParams({ with: m.id })} />
-        ))}
-        {active.length === 0 && (
-          <p className="px-2 pt-3 leading-normal text-ink-3">
-            The Tender Manager joins when you first write to the office, and hires the team the tender needs.
-          </p>
+    <aside
+      aria-label="Team"
+      className="relative flex w-[400px] shrink-0 flex-col border-l border-line bg-white max-[1279px]:absolute max-[1279px]:inset-y-0 max-[1279px]:right-0 max-[1279px]:z-20 max-[1279px]:shadow-[-10px_0_28px_rgba(0,0,0,0.10)]"
+    >
+      <div className="flex items-center gap-2 px-4 pt-3">
+        <span className="grow font-semibold">Team</span>
+        {working && (
+          <button onClick={() => stop.mutate()} className="flex h-7 items-center gap-1.5 rounded-md px-2 text-ink-2 hover:bg-selected hover:text-ink">
+            <IconPlayerStopFilled className="size-3" />
+            Stop the office
+          </button>
         )}
-      </section>
-      <section aria-label="Conversation" className="flex min-w-0 grow flex-col">
+        <button
+          aria-label="Close the team panel"
+          title="Close (Ctrl+J)"
+          onClick={hideTeam}
+          className="flex size-7 items-center justify-center rounded-md text-ink-3 hover:bg-selected hover:text-ink"
+        >
+          <IconX className="size-4" stroke={1.75} />
+        </button>
+      </div>
+      <div role="tablist" aria-label="Conversations" className="flex shrink-0 gap-0.5 overflow-x-auto border-b border-line px-2 pt-2">
+        {active.map((m) => (
+          <Tab key={m.id} on={channel === m.id} label={m.name} onClick={() => showTeam(m.id)}>
+            <span className="relative">
+              <Face id={m.id} size={28} />
+              {asking.has(m.id) ? (
+                <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-attention ring-2 ring-white" />
+              ) : m.now ? (
+                <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-approved ring-2 ring-white" />
+              ) : null}
+            </span>
+            {firstName(m)}
+          </Tab>
+        ))}
+        <Tab on={channel === TEAM} label="Team room" onClick={() => showTeam(TEAM)}>
+          <span className="flex size-7 items-center justify-center rounded-full bg-selected text-ink-2">
+            <IconHash className="size-4" stroke={1.75} />
+          </span>
+          Team room
+        </Tab>
+      </div>
+      {office.data && active.length === 0 && (
+        <p className="px-5 pt-4 leading-normal text-ink-3">
+          The Tender Manager joins when you first write to the office, and hires the team the tender needs.
+        </p>
+      )}
+      <section aria-label="Conversation" className="flex min-h-0 grow flex-col">
         <Conversation
+          key={channel}
           tenderId={tenderId}
           channel={channel}
           staff={staff}
           title={channel === TEAM ? "Team room" : (staff.find((m) => m.id === channel)?.name ?? "")}
-          working={office.data?.state === "working"}
-          onPerson={(id) => setParams({ ...(channel === TEAM ? {} : { with: channel }), person: id })}
+          notice={
+            office.data?.state === "paused"
+              ? (office.data.notice ?? "The office is stopped. Send a message to carry on.")
+              : null
+          }
+          onPerson={showPerson}
         />
       </section>
       {person && (
         <Profile
           tenderId={tenderId}
           member={person}
-          overlay={Boolean(asked)}
-          onMessage={() => setParams({ with: person.id })}
-          onClose={() => setParams(channel === TEAM ? {} : { with: channel })}
+          onMessage={channel === person.id ? undefined : () => showTeam(person.id)}
+          onClose={() => showPerson(null)}
         />
       )}
-    </div>
+    </aside>
   );
 }
 
-function Thread(props: { label: string; member?: Staff; on: boolean; onClick: () => void }) {
+function Tab(props: { on: boolean; label: string; onClick: () => void; children: ReactNode }) {
   return (
     <button
+      role="tab"
+      aria-selected={props.on}
+      aria-label={props.label}
+      title={props.label}
       onClick={props.onClick}
-      className={`flex items-center gap-2.5 rounded-md px-2 py-[7px] text-left ${props.on ? "bg-selected font-semibold" : "hover:bg-rail"}`}
+      className={`flex min-w-[62px] shrink-0 flex-col items-center gap-1 rounded-t-md px-1.5 pt-1 pb-2 text-xs whitespace-nowrap ${props.on ? "font-semibold text-ink shadow-[inset_0_-2px_0_var(--color-ink)]" : "text-ink-3 hover:bg-rail hover:text-ink"}`}
     >
-      {props.member ? (
-        <Face id={props.member.id} size={22} />
-      ) : (
-        <span className="flex size-[22px] items-center justify-center rounded-md bg-selected text-xs font-semibold text-ink-2">
-          #
-        </span>
-      )}
-      <span className="grow truncate">{props.label}</span>
+      {props.children}
     </button>
   );
 }
@@ -90,15 +138,32 @@ export function Conversation(props: {
   channel: string;
   staff: Staff[];
   title: string;
-  working: boolean;
+  notice?: string | null; // why the office is stopped, shown above the message box
   onPerson: (id: string) => void;
 }) {
   const messages = useMessages(props.tenderId, props.channel);
+  // the team room shows everyone's turns; a direct chat shows that person's, and the questions they put to you
+  const direct = props.channel === TEAM ? undefined : props.channel;
+  const turns = useTurns(props.tenderId, direct);
+  const decisions = useDecisions(props.tenderId);
   const send = useSend(props.tenderId);
-  const stop = useStop(props.tenderId);
   const [draft, setDraft] = useState("");
+  const [technical, setTechnical] = useState(false);
   const end = useRef<HTMLDivElement>(null);
-  const count = messages.data?.length ?? 0;
+  const timeline: Item[] = [
+    ...(messages.data ?? []).map((message) => ({ at: message.created_at, message })),
+    ...(turns.data ?? []).map((turn) => ({ at: turn.started_at, turn })),
+    ...(decisions.data ?? []).filter((d) => d.raised_by === direct).map((decision) => ({ at: decision.created_at, decision })),
+  ].sort((a, b) => order(a) - order(b) || 0); // two waiting questions keep their order
+  const count = timeline.length;
+  // one heading per run of the same person's work and words, as a chatbot shows its thinking above its reply
+  const groups: { author: string | null; items: Item[] }[] = [];
+  for (const item of timeline) {
+    const author = authorOf(item);
+    const last = groups.at(-1);
+    if (author && last?.author === author) last.items.push(item);
+    else groups.push({ author, items: [item] });
+  }
   useEffect(() => {
     end.current?.scrollIntoView?.({ block: "end" });
   }, [count]);
@@ -112,27 +177,59 @@ export function Conversation(props: {
 
   return (
     <>
-      <div className="flex items-end justify-between border-b border-line px-8 pt-7 pb-3.5">
-        <div className="flex flex-col gap-1">
-          <h2 className="text-[17px] font-semibold">{props.title}</h2>
-          <span className="text-ink-3">
-            {props.channel === TEAM
-              ? "Everything the team says to each other. Only real messages appear here."
-              : "Your direct conversation."}
-          </span>
-        </div>
-        {props.working && (
-          <button onClick={() => stop.mutate()} className="text-ink-2 hover:text-ink">
-            Stop the office
+      <div className="flex items-baseline gap-2 border-b border-line px-5 py-2.5">
+        <h2 className="truncate font-semibold">{props.title}</h2>
+        <span className="grow truncate text-ink-3">
+          {props.channel === TEAM ? "What the team says to each other" : people.get(props.channel)?.role}
+        </span>
+        {props.channel !== TEAM && (
+          <button onClick={() => props.onPerson(props.channel)} className="shrink-0 text-ink-2 hover:text-ink">
+            About {props.title.split(" ")[0]}
           </button>
         )}
       </div>
-      <div className="flex min-h-0 grow flex-col gap-[18px] overflow-y-auto px-8 py-5">
-        {count === 0 && <p className="text-ink-3">No messages yet.</p>}
-        {messages.data?.map((m) => <Line key={m.id} message={m} author={people.get(m.sender)} onPerson={props.onPerson} />)}
+      <div className="flex min-h-0 grow flex-col gap-[18px] overflow-y-auto px-5 py-4">
+        {count === 0 && messages.data && turns.data && <p className="text-ink-3">No messages yet.</p>}
+        {groups.map((group) =>
+          group.author === null ? (
+            <Aside key={keyOf(group.items[0])} message={(group.items[0] as { message: Message }).message} />
+          ) : (
+            <Block key={keyOf(group.items[0])} author={group.author} person={people.get(group.author)} at={group.items[0].at} onPerson={props.onPerson}>
+              {runs(group.items).map((item) =>
+                Array.isArray(item) ? (
+                  <FoldedTurns key={keyOf(item[0])} count={item.length - 1}>
+                    {item.map((turn) => (
+                      <TurnLog
+                        key={keyOf(turn)}
+                        turn={turn.turn}
+                        name={people.get(turn.turn.staff_id)?.name.split(" ")[0] ?? "Someone"}
+                        technical={technical}
+                        onTechnical={setTechnical}
+                      />
+                    ))}
+                  </FoldedTurns>
+                ) : "turn" in item ? (
+                  <TurnLog
+                    key={keyOf(item)}
+                    turn={item.turn}
+                    name={people.get(item.turn.staff_id)?.name.split(" ")[0] ?? "Someone"}
+                    technical={technical}
+                    onTechnical={setTechnical}
+                  />
+                ) : "decision" in item ? (
+                  <Question key={keyOf(item)} tenderId={props.tenderId} decision={item.decision} />
+                ) : (
+                  <Said key={keyOf(item)} message={item.message} person={people.get(item.message.sender)} />
+                ),
+              )}
+            </Block>
+          ),
+        )}
+        {props.staff.some((m) => m.is_manager && m.id === props.channel) && <WaitingForYou tenderId={props.tenderId} />}
         <div ref={end} />
       </div>
-      <form onSubmit={submit} className="px-8 pt-3.5 pb-6">
+      <form onSubmit={submit} className="px-4 pt-3 pb-4">
+        {props.notice && <p className="pb-2.5 text-[13px] text-attention">{props.notice}</p>}
         <div className="flex items-center gap-2 rounded-xl border border-line-strong py-1.5 pr-1.5 pl-3.5 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
           <input
             aria-label="Message"
@@ -155,85 +252,279 @@ export function Conversation(props: {
   );
 }
 
-function Line({ message, author, onPerson }: { message: Message; author?: Staff; onPerson: (id: string) => void }) {
-  const time = new Date(message.created_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-  if (message.kind === "task" || message.kind === "note") {
-    return (
-      <div className="flex items-center gap-2 pl-10 text-ink-3">
-        <IconArrowRight className="size-3.5 shrink-0" stroke={1.75} />
-        <span className="grow">{message.text}</span>
-        <span className="text-xs">{time}</span>
-      </div>
-    );
+type Item = { at: string; message: Message } | { at: string; turn: Turn } | { at: string; decision: Decision };
+
+/** Whose heading an item goes under; none for the office's notes and handed-out tasks, which stand on their own. */
+function authorOf(item: Item): string | null {
+  if ("turn" in item) return item.turn.staff_id;
+  if ("decision" in item) return item.decision.raised_by;
+  return item.message.kind === "task" || item.message.kind === "note" ? null : item.message.sender;
+}
+
+/** Where an item sits: when it happened, but a question still waiting stays at the end, where the engineer is. */
+function order(item: Item): number {
+  return "decision" in item && item.decision.status === "waiting" ? Infinity : Date.parse(item.at);
+}
+
+type TurnItem = { at: string; turn: Turn };
+
+/** Three or more turns in a row with nothing said between them fold together, keeping the latest in view. */
+function runs(items: Item[]): (Item | TurnItem[])[] {
+  const out: (Item | TurnItem[])[] = [];
+  let run: TurnItem[] = [];
+  const flush = () => {
+    if (run.length >= 3) out.push(run);
+    else out.push(...run);
+    run = [];
+  };
+  for (const item of items) {
+    if ("turn" in item) run.push(item);
+    else {
+      flush();
+      out.push(item);
+    }
   }
-  const mine = message.sender === ENGINEER;
+  flush();
+  return out;
+}
+
+/** Earlier turns folded to one line; the latest shows below it. */
+function FoldedTurns({ count, children }: { count: number; children: ReactNode[] }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div className="flex gap-3">
-      {author ? (
-        <button onClick={() => onPerson(author.id)} aria-label={`About ${author.name}`}>
-          <Face id={author.id} size={28} />
+    <>
+      <button
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="flex items-center gap-1.5 self-start text-[13px] text-ink-3 hover:text-ink"
+      >
+        {open ? "Fold" : `${count} earlier turns at work`}
+        <IconChevronRight className={`size-3.5 transition-transform ${open ? "rotate-90" : ""}`} stroke={1.75} />
+      </button>
+      {open ? children : children.at(-1)}
+    </>
+  );
+}
+
+function keyOf(item: Item): string {
+  return "turn" in item ? `t${item.turn.id}` : "decision" in item ? `d${item.decision.id}` : `m${item.message.id}`;
+}
+
+function clock(at: string): string {
+  return new Date(at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+}
+
+function Aside({ message }: { message: Message }) {
+  return (
+    <div className="flex items-center gap-2 pl-9 text-ink-3">
+      <IconArrowRight className="size-3.5 shrink-0" stroke={1.75} />
+      <span className="grow">{message.text}</span>
+      <span className="text-xs">{clock(message.created_at)}</span>
+    </div>
+  );
+}
+
+/** One person's run of work and words under their face and name: their turns, messages and questions. */
+function Block(props: { author: string; person?: Staff; at: string; onPerson: (id: string) => void; children: ReactNode }) {
+  const { person } = props;
+  const mine = props.author === ENGINEER;
+  return (
+    <div className="flex gap-2.5">
+      {person ? (
+        <button onClick={() => props.onPerson(person.id)} aria-label={`About ${person.name}`} className="self-start">
+          <Face id={person.id} size={28} />
         </button>
       ) : (
         <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-ink text-xs text-white">
           {mine ? "You" : "?"}
         </span>
       )}
-      <div className="flex max-w-[640px] min-w-0 flex-col gap-1">
+      <div className="flex min-w-0 grow flex-col gap-2">
         <span>
-          <span className="font-semibold">{mine ? "You" : author ? firstName(author) : "Office"}</span>{" "}
+          <span className="font-semibold">{mine ? "You" : person ? firstName(person) : "Office"}</span>{" "}
           <span className="text-ink-3">
-            {author?.role ? `${author.role} · ` : ""}
-            {time}
+            {person?.role ? `${person.role} · ` : ""}
+            {clock(props.at)}
           </span>
-          {message.kind === "concern" && <span className="text-xs font-medium text-attention"> · raised a concern</span>}
         </span>
-        {mine ? (
-          <span className="text-sm leading-relaxed whitespace-pre-wrap text-[#27272A] [overflow-wrap:anywhere]" dir="auto">
-            {message.text}
-          </span>
-        ) : (
-          <Prose text={message.text} signer={author ? firstName(author) : undefined} className="text-sm text-[#27272A]" />
-        )}
-        {message.sources && message.sources.length > 0 && (
-          <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-ink-3">
-            <span>From</span>
-            <Sources sources={message.sources} />
-          </div>
-        )}
+        {props.children}
       </div>
     </div>
   );
 }
 
+/** A written "Sources: …" line repeats what shows under the message as links. */
+function withoutSourcesLine(text: string): string {
+  return text.replace(/\n\s*\**sources?\**\s*:\**[^\n]*\s*$/i, "");
+}
+
+function Said({ message, person }: { message: Message; person?: Staff }) {
+  const linked = Boolean(message.sources && message.sources.length > 0);
+  return (
+    <div className="flex flex-col gap-1">
+      {message.kind === "concern" && <span className="text-xs font-medium text-attention">Raised a concern</span>}
+      {message.sender === ENGINEER ? (
+        <span className="text-sm leading-relaxed whitespace-pre-wrap text-[#27272A] [overflow-wrap:anywhere]" dir="auto">
+          {message.text}
+        </span>
+      ) : (
+        <Prose
+          text={linked ? withoutSourcesLine(message.text) : message.text}
+          signer={person ? firstName(person) : undefined}
+          className="text-sm text-[#27272A]"
+        />
+      )}
+      {linked && (
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-ink-3">
+          <span>From</span>
+          <Sources sources={message.sources!} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A question put to the engineer, answered where it was asked: pick an option and send it, or open it in full. */
+/** A question put to the engineer, answered where it was asked: pick an option, or answer in your own words. An
+ * escalation shows where the problem shows, what Quantix found, and the Manager's recommended correction first. */
+function Question({ tenderId, decision }: { tenderId: string; decision: Decision }) {
+  const answer = useAnswer(tenderId);
+  const [choice, setChoice] = useState("");
+  const [own, setOwn] = useState<string | null>(null); // the engineer's own words, once they chose to write them
+  const waiting = decision.status === "waiting";
+  const escalated = isChecked(decision.subject_kind) && Boolean(decision.subject_id);
+  const reply = own?.trim() || choice;
+  return (
+    <div className="flex flex-col gap-2.5 rounded-xl border border-line-strong px-4 py-3.5" role="group" aria-label={decision.title}>
+      <span className="text-xs font-semibold text-ink-2">{waiting ? "Needs your decision" : "You decided"}</span>
+      <span className="font-semibold">{decision.title}</span>
+      <Prose text={decision.text} className="text-sm text-[#27272A]" />
+      {waiting && decision.sources && decision.sources.length > 0 && (
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-ink-3">
+          <span>Where it shows</span>
+          <Sources sources={decision.sources} />
+        </div>
+      )}
+      {waiting && escalated && <Findings kind={decision.subject_kind as Checked} id={decision.subject_id!} tenderId={tenderId} />}
+      {waiting ? (
+        <>
+          <div className="flex flex-col gap-1.5">
+            {decision.options.map((option, n) => (
+              <button
+                key={option}
+                onClick={() => {
+                  setChoice(option);
+                  setOwn(null);
+                }}
+                aria-pressed={choice === option && own === null}
+                className={`flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-left text-sm ${choice === option && own === null ? "border-ink bg-rail" : "border-line hover:bg-rail"}`}
+              >
+                {option}
+                {n === 0 && escalated && <span className="shrink-0 text-xs font-medium text-approved">Recommended</span>}
+              </button>
+            ))}
+            {own !== null && (
+              <textarea
+                aria-label="Your answer"
+                autoFocus
+                rows={3}
+                value={own}
+                onChange={(e) => setOwn(e.target.value)}
+                placeholder="What the office should do"
+                className="rounded-lg border border-line-strong px-3 py-2 text-sm outline-none focus:border-ink"
+                dir="auto"
+              />
+            )}
+          </div>
+          <div className="flex items-center gap-4">
+            <button
+              disabled={!reply || answer.isPending}
+              onClick={() => answer.mutate({ id: decision.id, answer: reply })}
+              className="h-8 rounded-lg bg-ink px-3.5 text-sm text-white disabled:bg-line-strong"
+            >
+              Send answer
+            </button>
+            {own === null && (
+              <button onClick={() => setOwn("")} className="text-sm text-ink-2 hover:text-ink">
+                Answer in your own words
+              </button>
+            )}
+          </div>
+          {answer.isError && <p className="text-attention">{answer.error.message}</p>}
+        </>
+      ) : (
+        <span className="text-sm text-ink-2">{decision.answer}</span>
+      )}
+    </div>
+  );
+}
+
+/** What the Tender Manager accepted that waits for the engineer, each one click from the screen it is decided on. At
+ * the end of his chat, where he tells them about it; gone once nothing waits. */
+function WaitingForYou({ tenderId }: { tenderId: string }) {
+  const { approvals } = useNeedsYou(tenderId);
+  if (approvals.length === 0) return null;
+  return (
+    <div
+      role="group"
+      aria-label="Waiting for your approval"
+      className="ml-9 flex flex-col gap-1 rounded-xl border border-line-strong px-4 py-3"
+    >
+      <span className="pb-1 text-xs font-semibold text-ink-2">Waiting for your approval</span>
+      {approvals.map((a) => (
+        <Link key={a.key} to={a.to} className="flex items-center gap-2.5 py-1 text-sm hover:text-ink-2">
+          <span className="size-[7px] shrink-0 rounded-full bg-attention" />
+          <span className="grow">{a.title}</span>
+          <IconChevronRight className="size-4 shrink-0 text-ink-4" stroke={1.75} />
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+/** A generated profile field worth showing: words, not a placeholder such as "Character_Overview". */
+function written(text: string | number | undefined): boolean {
+  return typeof text === "string" && /\s/.test(text.trim());
+}
+
+/** Who someone is, over the chat until the engineer closes it (Close or Esc) or messages them. */
 function Profile(props: {
   tenderId: string;
   member: Staff;
-  overlay: boolean;
-  onMessage: () => void;
+  onMessage?: () => void; // none when this is already their chat
   onClose: () => void;
 }) {
-  const { tenderId, member, onMessage } = props;
+  const { tenderId, member, onMessage, onClose } = props;
   const tasks = useTasks(tenderId);
   const mine = (tasks.data ?? []).filter((t) => t.staff_id === member.id);
   const p = member.profile as Record<string, string | number | undefined>;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
   return (
     <aside
       aria-label={member.name}
-      className={`flex w-[340px] shrink-0 flex-col gap-5 overflow-y-auto border-l border-line bg-white px-6 pt-7 pb-6 ${
-        props.overlay
-          ? "max-[1400px]:absolute max-[1400px]:inset-y-0 max-[1400px]:right-0 max-[1400px]:z-10 max-[1400px]:shadow-[-8px_0_24px_rgba(0,0,0,0.08)]"
-          : "max-[1400px]:hidden"
-      }`}
+      className="absolute inset-0 z-10 flex flex-col gap-5 overflow-y-auto bg-white px-6 pt-6 pb-6"
     >
       <div className="flex items-center gap-3.5">
         <Face id={member.id} size={56} />
-        <div className="flex flex-col gap-0.5">
+        <div className="flex grow flex-col gap-0.5">
           <span className="text-[17px] font-semibold">{member.name}</span>
           <span className="text-ink-2">
             {member.role}
             {p.experience_years ? ` · ${p.experience_years} years` : ""}
           </span>
         </div>
+        <button
+          aria-label="Close the profile"
+          title="Close (Esc)"
+          onClick={onClose}
+          className="flex size-7 shrink-0 items-center justify-center self-start rounded-md text-ink-3 hover:bg-selected hover:text-ink"
+        >
+          <IconX className="size-4" stroke={1.75} />
+        </button>
       </div>
       {[
         ["Background", p.background],
@@ -241,7 +532,7 @@ function Profile(props: {
         ["What they believe", p.opinions],
         ["Now", member.status === "released" ? "Released from this tender" : (member.now ?? "Idle")],
       ].map(([label, text]) =>
-        text ? (
+        (label === "Now" ? text : written(text)) ? (
           <div key={label as string} className="flex flex-col gap-1.5">
             <span className="text-xs font-semibold text-ink-2">{label}</span>
             <span className="leading-normal text-[#27272A]">{text}</span>
@@ -262,12 +553,12 @@ function Profile(props: {
         </div>
       )}
       <div className="grow" />
-      {member.status === "active" && (
+      {member.status === "active" && onMessage && (
         <button onClick={onMessage} className="h-[38px] shrink-0 rounded-lg bg-ink text-sm text-white">
           Message {firstName(member)}
         </button>
       )}
-      <button onClick={props.onClose} className="shrink-0 text-center text-ink-3 hover:text-ink">
+      <button onClick={onClose} className="shrink-0 text-center text-ink-3 hover:text-ink">
         Close
       </button>
     </aside>

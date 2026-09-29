@@ -16,6 +16,21 @@ export function useAddRule() {
   });
 }
 
+/** The engineer adjusts a rule; an example adjusted becomes the firm's own. */
+export function useChangeRule() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: { id: string; topic: string; text: string }) =>
+      must(
+        await api.PATCH("/rules/{rule_id}", {
+          params: { path: { rule_id: body.id } },
+          body: { topic: body.topic, text: body.text },
+        }),
+      ),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["rules"] }),
+  });
+}
+
 export function useRemoveRule() {
   const client = useQueryClient();
   return useMutation({

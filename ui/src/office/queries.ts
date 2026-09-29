@@ -6,6 +6,8 @@ export type Staff = components["schemas"]["StaffOut"];
 export type Message = components["schemas"]["MessageOut"];
 export type Decision = components["schemas"]["DecisionOut"];
 export type Task = components["schemas"]["TaskOut"];
+export type Turn = components["schemas"]["TurnOut"];
+export type TurnStep = components["schemas"]["TurnStep"];
 
 export const TEAM = "team";
 export const ENGINEER = "engineer";
@@ -16,6 +18,7 @@ export function useOffice(tenderId: string) {
     queryKey: ["office", tenderId],
     queryFn: async () => must(await api.GET("/tenders/{tender_id}/office", { params: { path: { tender_id: tenderId } } })),
     refetchInterval: LIVE,
+    enabled: Boolean(tenderId),
   });
 }
 
@@ -29,6 +32,30 @@ export function useMessages(tenderId: string, channel: string) {
         }),
       ),
     refetchInterval: LIVE,
+  });
+}
+
+/** Everyone's turns at work, or one person's: shown folded in the chat between the messages. */
+export function useTurns(tenderId: string, staffId?: string) {
+  return useQuery({
+    queryKey: ["turns", tenderId, staffId ?? null],
+    queryFn: async () =>
+      must(
+        await api.GET("/tenders/{tender_id}/turns", {
+          params: { path: { tender_id: tenderId }, query: { staff_id: staffId } },
+        }),
+      ),
+    refetchInterval: LIVE,
+  });
+}
+
+/** One turn opened: its thinking, notes and tool calls; followed live while it runs. */
+export function useTurn(turnId: number, open: boolean, running: boolean) {
+  return useQuery({
+    queryKey: ["turn", turnId, running], // fetched once more when it ends
+    queryFn: async () => must(await api.GET("/turns/{turn_id}", { params: { path: { turn_id: turnId } } })),
+    enabled: open,
+    refetchInterval: running ? LIVE : false,
   });
 }
 

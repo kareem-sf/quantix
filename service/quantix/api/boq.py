@@ -75,6 +75,7 @@ class Gates(BaseModel):
     drawings: int  # layer maps and tender queries
     pricing: int
     subcontract: int
+    enquiries: int  # accepted by the Tender Manager, for the engineer to send
     submission: int
 
 
@@ -149,6 +150,7 @@ def gates(tender_id: str, session: DB) -> Gates:
         drawings=layers.waiting(session, tender_id) + queries.waiting(session, tender_id),
         pricing=estimate.waiting(session, tender_id),
         subcontract=subcontract.waiting(session, tender_id),
+        enquiries=subcontract.to_send(session, tender_id),
         submission=submission.waiting(session, tender_id),
     )
 

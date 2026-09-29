@@ -59,6 +59,12 @@ export function Findings({ kind, id, tenderId }: { kind: Checked; id: string; te
   );
 }
 
+/** The one look for approving on every screen, and for the quieter actions beside it. */
+export const APPROVE =
+  "h-7 shrink-0 rounded-md bg-ink px-2.5 text-[13px] font-medium text-white hover:bg-ink/85 disabled:bg-line-strong";
+export const SECONDARY =
+  "h-7 shrink-0 rounded-md border border-line-strong bg-white px-2.5 text-[13px] text-ink-2 hover:text-ink";
+
 /** Send it back with the reason, so whoever did it knows what to put right. */
 export function SendBack(props: { onSend: (reason: string) => void; label?: string; placeholder?: string }) {
   const [open, setOpen] = useState(false);
@@ -67,7 +73,7 @@ export function SendBack(props: { onSend: (reason: string) => void; label?: stri
   const placeholder = props.placeholder ?? "What to put right";
   if (!open)
     return (
-      <button onClick={() => setOpen(true)} className="text-ink-2 hover:text-ink">
+      <button onClick={() => setOpen(true)} className={SECONDARY}>
         {label}
       </button>
     );

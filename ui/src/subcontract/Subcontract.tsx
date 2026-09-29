@@ -30,7 +30,7 @@ export function Subcontract() {
   return (
     <div className="flex h-full w-full max-xl:flex-col max-xl:overflow-y-auto">
       <div className="flex min-w-0 grow flex-col px-8 pt-7">
-        <h1 className="text-[22px] font-semibold tracking-tight">Subcontract</h1>
+        <h1 className="text-[24px] font-semibold tracking-tight">Subcontract</h1>
         <span className="text-ink-2">Trade and material packages</span>
         {list.length === 0 && packages.data && (
           <p className="pt-6 text-ink-2">

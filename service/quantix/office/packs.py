@@ -56,14 +56,19 @@ WORK: dict[str, Work] = {
         "takeoff against the BOQ.",
         "Measuring: set a sheet's scale from a printed dimension, and measure a second known dimension before you "
         "rely on it. Take each point from what you see: look at the sheet, then zoom in on each corner. Link each "
-        "measurement to its BOQ line. Work out cut and fill from levels with earthwork_volumes, citing the levels.",
+        "measurement to its BOQ line. Work out cut and fill from levels with earthwork_volumes, citing the levels. "
+        "A PDF printed from CAD keeps its lines: once its scale is set, take off from them exactly with the drawings "
+        "work (query_drawing, measure_drawing with the page) rather than by points.",
         reads=[t.find_on_page, t.takeoff_summary, t.earthwork_volumes],
         produces=[t.set_scale, t.measure],
     ),
     "drawings": Work(
-        "CAD drawings (DWG and DXF): what their layers and blocks hold, rooms, takeoff from their own objects, "
-        "checking them and the BOQ, and tender queries for missing items and conflicts.",
+        "CAD drawings (DWG and DXF) and PDFs printed from CAD: what their layers and blocks hold, rooms, takeoff from "
+        "their own objects, checking them and the BOQ, and tender queries for missing items and conflicts.",
         "CAD drawings: start with drawing_overview. Set the units with set_drawing_units from what the drawing says. "
+        "A PDF page drawn in lines works the same with its page number: its layers are its pens (colour and line "
+        "weight, which its legend explains) unless it keeps the drawing's own, and its scale, set with set_scale, "
+        "stands for units. "
         "Work out what each layer and block is from what it holds, not from its name alone, and propose the layer "
         "map. Take off by rule with measure_drawing (count a block's copies, take the length or area of what is on "
         "a layer, or a room's area and perimeter); try each rule with query_drawing first, and never work out a "

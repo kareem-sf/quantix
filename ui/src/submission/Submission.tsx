@@ -1,6 +1,7 @@
 import { IconX } from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
+import { useEscape } from "../app/keys";
 import { money } from "../estimate/queries";
 import { Face } from "../office/Face";
 import { firstName, useOffice, type Staff } from "../office/queries";
@@ -57,7 +58,7 @@ export function Submission() {
   return (
     <div className="relative flex h-full w-full">
       <section aria-label="Submission checklist" className="flex min-w-0 grow flex-col px-8 pt-7">
-        <h1 className="text-[22px] font-semibold tracking-tight">Submission</h1>
+        <h1 className="text-[24px] font-semibold tracking-tight">Submission</h1>
         <span className="text-ink-2">
           {rows.length ? `${ready} of ${rows.length} ready` : "What the tender asks you to submit"}
           {tender.data?.due_date && ` · submit ${dueShort(tender.data.due_date).replace("due ", "by ")}`}
@@ -228,6 +229,7 @@ function RequirementPanel(props: { tenderId: string; requirement: Requirement; p
   const ready = useMarkReady(tenderId);
   const attach = useAttach(tenderId);
   const remove = useRemoveRequirement(tenderId);
+  useEscape(() => setParams({}));
   const [removing, setRemoving] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");

@@ -20,7 +20,7 @@ export function Library() {
     <div className="flex w-full max-w-[1100px] flex-col px-8 pt-7">
       <div className="flex items-end justify-between gap-4">
         <div className="flex flex-col gap-1">
-          <h1 className="text-[22px] font-semibold tracking-tight">Company library</h1>
+          <h1 className="text-[24px] font-semibold tracking-tight">Company library</h1>
           <span className="text-ink-2">Rates the firm reuses across tenders. Staff check each date before relying on it.</span>
         </div>
         <input

@@ -8,7 +8,7 @@ from io import BytesIO
 from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
-from sqlalchemy import String, Text, select
+from sqlalchemy import Boolean, String, Text, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from quantix import settings
@@ -28,6 +28,7 @@ class CompanyRule(Base):
     owner_id: Mapped[str] = mapped_column(String(64), default=LOCAL_OWNER)
     topic: Mapped[str] = mapped_column(String(100))
     text: Mapped[str] = mapped_column(Text)
+    example: Mapped[bool] = mapped_column(Boolean, default=False)  # a starting rule the engineer hasn't adjusted
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=lambda: datetime.now(UTC))
 
 

@@ -6,7 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from quantix.boq import records as boq
@@ -97,13 +97,14 @@ def _tender_of(session: Session, record: Any) -> str:
 
 
 def find(session: Session, tender_id: str, ref: str) -> tuple[str, Any]:
-    """A record by its reference ("rate 42a9fb15", "markups") or a BOQ line by its number ("Earthwork / C.1.2")."""
-    text = ref.strip()
+    """A record by its reference ("rate 42a9fb15", "markups") or a BOQ line by its number ("Earthwork / C.1.2"). A
+    whole line from find_records is taken by the reference it starts with."""
+    text = ref.split(" · ")[0].strip()
     kind, _, short = text.partition(" ")
     kind = {"recommendation": "package", "requirement": "checklist"}.get(kind.lower(), kind.lower())
     short = short.strip().lower()
     if kind == "markups" and not short:
-        markups = estimate.current_markups(session, tender_id)
+        markups = estimate.current_markups(session, tender_id) or returned_markups(session, tender_id)
         if markups is None:
             raise ValueError("No markups have been proposed yet.")
         return kind, markups
@@ -119,6 +120,18 @@ def find(session: Session, tender_id: str, ref: str) -> tuple[str, Any]:
         raise ValueError(
             f"“{text}” is neither a record like “rate 42a9fb15” nor a BOQ line like “C.1.2”: {error}"
         ) from error
+
+
+def returned_markups(session: Session, tender_id: str) -> Markups | None:
+    """The markups sent back last, when nothing has replaced them: what to correct. Sent back last, not made last:
+    reopening approved markups sends back an older set than a duplicate turned down the day before. The engineer's
+    send-back is dated decided_at, the Manager's reviewed_at; the Manager's alone once sent Rashid back to the
+    engineer's older set."""
+    if estimate.current_markups(session, tender_id) is not None:
+        return None
+    query = select(Markups).where(Markups.tender_id == tender_id, Markups.status == "rejected")
+    sent_back = func.coalesce(Markups.decided_at, Markups.reviewed_at, Markups.created_at)
+    return session.scalars(query.order_by(sent_back.desc())).first()
 
 
 def returned_draft(session: Session, requirement: Requirement) -> Draft | None:
@@ -342,7 +355,7 @@ def _boq_line(session: Session, item: BoqItem) -> str:
     return line
 
 
-FINDABLE = ("boq", "fact", "checklist", "draft", "measurement", "query", "package", "quote")
+FINDABLE = ("boq", "fact", "checklist", "draft", "measurement", "query", "package", "quote", "markups")
 
 
 def search(session: Session, tender_id: str, words: str, kind: str | None = None) -> list[str]:
@@ -395,6 +408,18 @@ def search(session: Session, tender_id: str, words: str, kind: str | None = None
                 f"{q.title} {q.detail} {queries.KINDS[q.kind]}",
                 f"query {q.id[:8]} · {queries.KINDS[q.kind]}: {q.title} · {SHORT.get(q.status, q.status)}",
             )
+    markups = None
+    if kind in (None, "markups"):
+        markups = estimate.current_markups(session, tender_id) or returned_markups(session, tender_id)
+    if markups is not None:  # one record, found by what it holds: its preliminaries by name, and its note
+        heads = ", ".join(i["item"] for i in markups.preliminary_items)
+        add(
+            f"markups markup preliminaries overheads profit adjustment {heads} {markups.note}",
+            f"markups {markups.id[:8]} · preliminaries priced item by item "
+            f"({len(markups.preliminary_items)} items: {heads or 'none'}), "
+            f"overheads {markups.overheads:.1%} and profit {markups.profit:.1%} of cost, adjustment "
+            f"{markups.adjustment:.2f} as a lump sum · {STATES.get(markups.status, markups.status)}",
+        )
     if kind in (None, "package", "quote"):
         for p in subcontract.packages(session, tender_id):
             if kind in (None, "package"):
@@ -515,7 +540,7 @@ def cited(session: Session, tender_id: str, staff_id: str, text: str) -> dict[st
         return {"label": f"{document.name}, page {number}", "document_id": document.id, "page": number}
     kind, record = find(session, tender_id, wanted)
     if not office.has_opened(session, staff_id, kind, record.id):
-        raise ValueError(f"You haven't opened {wanted}. Open it with open_record first.")
+        raise ValueError(f"You haven't opened {wanted.split(' · ')[0]}. Open it with open_record first.")
     return _link(session, kind, record)
 
 

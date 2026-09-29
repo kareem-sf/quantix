@@ -1,7 +1,7 @@
-import type { DrawingInfo } from "../takeoff/cad";
+import type { DrawingInfo, LayerMap } from "../takeoff/cad";
 
 /** A packed screen copy as the service sends it: a wall line (object 0) along the x axis through the centre, a
- * door's leaf (object 1) above it, and the word KITCHEN (object 2). */
+ * door's leaf (object 1) above it in red, and the word KITCHEN (object 2). */
 export function screenCopy(): ArrayBuffer {
   const header = new TextEncoder().encode(
     JSON.stringify({
@@ -16,13 +16,13 @@ export function screenCopy(): ArrayBuffer {
       types: ["Line", "Text"],
       objects: 3,
       segments: 2,
-      texts: [[2, "KITCHEN", 0, -5, 1, 0]],
+      texts: [[2, "KITCHEN", 0, -5, 1, 0, 1]],
     }),
   );
   const padded = header.length + ((4 - (header.length % 4)) % 4);
-  const buffer = new ArrayBuffer(8 + padded + 2 * 16 + 2 * 4 + 3 * 12 + 3 * 16);
+  const buffer = new ArrayBuffer(8 + padded + 2 * 16 + 2 * 4 + 3 * 12 + 3 * 16 + 3 * 4);
   const bytes = new Uint8Array(buffer);
-  bytes.set(new TextEncoder().encode("QXD1"), 0);
+  bytes.set(new TextEncoder().encode("QXD2"), 0);
   new DataView(buffer).setUint32(4, padded, true);
   bytes.set(header, 8);
   bytes.fill(32, 8 + header.length, 8 + padded);
@@ -34,6 +34,8 @@ export function screenCopy(): ArrayBuffer {
   new Uint32Array(buffer, offset, 9).set([0, 0, 0, 1, 0, 0, 2, 1, 0]);
   offset += 36;
   new Float32Array(buffer, offset, 12).set([-10, 0, 10, 0, -2, 6, 2, 6, 0, -5, 4, -4]);
+  offset += 48;
+  new Uint32Array(buffer, offset, 3).set([0x404046, 0xff0000, 0x404046]);
   return buffer;
 }
 
@@ -52,4 +54,18 @@ export const drawingInfo: DrawingInfo = {
   ],
   blocks: [],
   meanings: { walls: "Walls" },
+};
+
+/** The office's layer map of A-101.dwg, reviewed by the Tender Manager and waiting for the engineer. */
+export const layerMap: LayerMap = {
+  id: "lm1",
+  document_id: "d3",
+  document_name: "A-101.dwg",
+  layers: { "A-WALL": "walls", "A-FLOR": "floor_finish" },
+  blocks: { "DOOR-900": "doors" },
+  note: "From what each layer holds.",
+  status: "reviewed",
+  proposed_by: "s2",
+  reviewed_by: "s1",
+  review_note: "Checked each layer on the plan.",
 };

@@ -18,7 +18,13 @@ class RuleIn(BaseModel):
 
 class RuleOut(RuleIn):
     id: str
+    example: bool = Field(description="One Quantix starts every firm with, for the engineer to adjust or remove")
     created_at: datetime
+
+
+class RuleChange(BaseModel):
+    topic: str | None = Field(default=None, min_length=1, max_length=100)
+    text: str | None = Field(default=None, min_length=1)
 
 
 @router.get("/rules")
@@ -30,6 +36,21 @@ def get_rules(session: DB) -> list[RuleOut]:
 def add_rule(body: RuleIn, session: DB) -> RuleOut:
     rule = company.CompanyRule(topic=body.topic.strip(), text=body.text.strip())
     session.add(rule)
+    session.commit()
+    return RuleOut.model_validate(rule, from_attributes=True)
+
+
+@router.patch("/rules/{rule_id}")
+def change_rule(rule_id: str, body: RuleChange, session: DB) -> RuleOut:
+    """The engineer adjusts a rule; an example adjusted is the firm's own rule from then on."""
+    rule = session.get(company.CompanyRule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Not found.")
+    if body.topic is not None:
+        rule.topic = body.topic.strip()
+    if body.text is not None:
+        rule.text = body.text.strip()
+    rule.example = False
     session.commit()
     return RuleOut.model_validate(rule, from_attributes=True)
 

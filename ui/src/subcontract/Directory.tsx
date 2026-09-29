@@ -15,7 +15,7 @@ export function Directory() {
     <div className="flex w-full max-w-[1100px] flex-col px-8 pt-7">
       <div className="flex items-end justify-between gap-4">
         <div className="flex flex-col gap-1">
-          <h1 className="text-[22px] font-semibold tracking-tight">Directory</h1>
+          <h1 className="text-[24px] font-semibold tracking-tight">Directory</h1>
           <span className="text-ink-2">Subcontractors and suppliers the office sends enquiries to.</span>
         </div>
         <input

@@ -61,6 +61,23 @@ export interface paths {
         patch: operations["change_tender_tenders__tender_id__patch"];
         trace?: never;
     };
+    "/desk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Desk */
+        get: operations["desk_desk_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/ai/connections": {
         parameters: {
             query?: never;
@@ -224,6 +241,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tenders/{tender_id}/documents/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Documents
+         * @description Copy the chosen files into the tender from where they are, as the desktop app's own pickers give them. The
+         *     engineer's files are only read, never changed.
+         */
+        post: operations["import_documents_tenders__tender_id__documents_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tenders/{tender_id}/search": {
         parameters: {
             query?: never;
@@ -292,6 +330,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/documents/{document_id}/sheets/{number}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Sheet
+         * @description A sheet of a workbook as Excel shows it: its cells' text, merges, sizes and formatting. With `hidden`, the rows
+         *     and columns the sheet hides are shown too.
+         */
+        get: operations["sheet_documents__document_id__sheets__number__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{document_id}/open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open In App
+         * @description Opens the file in the app this computer uses for its type. The app gets a read-only copy, so the stored file
+         *     stays exactly as it was supplied.
+         */
+        post: operations["open_in_app_documents__document_id__open_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tenders/{tender_id}/office": {
         parameters: {
             query?: never;
@@ -301,6 +381,40 @@ export interface paths {
         };
         /** Office */
         get: operations["office_tenders__tender_id__office_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tenders/{tender_id}/turns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Turns */
+        get: operations["list_turns_tenders__tender_id__turns_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/turns/{turn_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Turn Detail */
+        get: operations["turn_detail_turns__turn_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -634,7 +748,8 @@ export interface paths {
         };
         /**
          * Get Drawing
-         * @description What a drawing holds: its pages, units, what couldn't be read, and one page's layers and blocks.
+         * @description What a drawing holds: its pages, units, what couldn't be read, and one page's layers and blocks. A PDF page
+         *     drawn in lines is a drawing of one page, whose layers are its pens (or the PDF's own layers).
          */
         get: operations["get_drawing_documents__document_id__drawing_get"];
         put?: never;
@@ -679,6 +794,27 @@ export interface paths {
          * @description What Quantix measures of the objects chosen: how many, their length and closed area.
          */
         post: operations["choose_documents__document_id__pages__number__choose_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{document_id}/pages/{number}/region": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Region
+         * @description The region around a point that the page's lines close off: what the engineer clicked inside, found with
+         *     opencadkernel from the lines themselves, so an area needn't be drawn as one closed outline to be measured.
+         */
+        post: operations["region_documents__document_id__pages__number__region_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1224,7 +1360,11 @@ export interface paths {
         delete: operations["remove_rule_rules__rule_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Change Rule
+         * @description The engineer adjusts a rule; an example adjusted is the firm's own rule from then on.
+         */
+        patch: operations["change_rule_rules__rule_id__patch"];
         trace?: never;
     };
     "/company": {
@@ -1367,6 +1507,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lessons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Suggested Lessons
+         * @description What the office learned on every tender and the engineer hasn't kept or dropped: suggested company rules.
+         */
+        get: operations["suggested_lessons_lessons_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lessons/{lesson_id}": {
         parameters: {
             query?: never;
@@ -1439,6 +1599,31 @@ export interface components {
             /** Facts */
             facts: components["schemas"]["FactOut"][];
         };
+        /** Cell */
+        Cell: {
+            /** Column */
+            column: number;
+            /**
+             * Text
+             * @default
+             */
+            text: string;
+            /**
+             * Style
+             * @default 0
+             */
+            style: number;
+            /**
+             * Rows
+             * @default 1
+             */
+            rows: number;
+            /**
+             * Columns
+             * @default 1
+             */
+            columns: number;
+        };
         /** CheckRequest */
         CheckRequest: {
             /** Model */
@@ -1458,6 +1643,18 @@ export interface components {
             area_m2: number | null;
             /** Volume M3 */
             volume_m3: number | null;
+        };
+        /** Column */
+        Column: {
+            /** Letter */
+            letter: string;
+            /** Width */
+            width: number;
+            /**
+             * Hidden
+             * @default false
+             */
+            hidden: boolean;
         };
         /** ColumnsOut */
         ColumnsOut: {
@@ -1683,6 +1880,11 @@ export interface components {
             /** Document Id */
             document_id: string;
             /**
+             * Page
+             * @default 1
+             */
+            page: number;
+            /**
              * Kind
              * @enum {string}
              */
@@ -1866,6 +2068,8 @@ export interface components {
             pricing: number;
             /** Subcontract */
             subcontract: number;
+            /** Enquiries */
+            enquiries: number;
             /** Submission */
             submission: number;
         };
@@ -1873,6 +2077,19 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * ImportIn
+         * @description What the engineer chose on this computer: a whole folder, kept with its folders, or single files.
+         */
+        ImportIn: {
+            /** Folder */
+            folder?: string | null;
+            /**
+             * Files
+             * @default []
+             */
+            files: string[];
         };
         /** ItemOut */
         ItemOut: {
@@ -1941,6 +2158,8 @@ export interface components {
             prints: boolean;
             /** Meaning */
             meaning: string | null;
+            /** Colour */
+            colour?: string | null;
         };
         /** LessonDecision */
         LessonDecision: {
@@ -1967,6 +2186,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Tender Name */
+            tender_name?: string | null;
         };
         /** LibraryIn */
         LibraryIn: {
@@ -2199,6 +2420,8 @@ export interface components {
              * @enum {string}
              */
             state: "working" | "paused" | "idle";
+            /** Notice */
+            notice: string | null;
             /** Ai Ready */
             ai_ready: boolean;
             /** Staff */
@@ -2451,6 +2674,29 @@ export interface components {
              */
             note: string;
         };
+        /** RegionIn */
+        RegionIn: {
+            /** Stamp */
+            stamp: string;
+            /** Point */
+            point: number[];
+            /**
+             * Hidden
+             * @default []
+             */
+            hidden: string[];
+            /** Within */
+            within?: number[] | null;
+        };
+        /** RegionOut */
+        RegionOut: {
+            /** Ring */
+            ring: number[][];
+            /** Area M2 */
+            area_m2: number | null;
+            /** Perimeter M */
+            perimeter_m: number | null;
+        };
         /** ReopenIn */
         ReopenIn: {
             /** Reason */
@@ -2505,6 +2751,20 @@ export interface components {
             source: string;
             /** Ring */
             ring: number[][];
+        };
+        /** Row */
+        Row: {
+            /** Number */
+            number: number;
+            /** Height */
+            height: number;
+            /**
+             * Hidden
+             * @default false
+             */
+            hidden: boolean;
+            /** Cells */
+            cells: components["schemas"]["Cell"][];
         };
         /**
          * Rule
@@ -2571,6 +2831,13 @@ export interface components {
              */
             keys: string[];
         };
+        /** RuleChange */
+        RuleChange: {
+            /** Topic */
+            topic?: string | null;
+            /** Text */
+            text?: string | null;
+        };
         /** RuleIn */
         RuleIn: {
             /** Topic */
@@ -2586,6 +2853,11 @@ export interface components {
             text: string;
             /** Id */
             id: string;
+            /**
+             * Example
+             * @description One Quantix starts every firm with, for the engineer to adjust or remove
+             */
+            example: boolean;
             /**
              * Created At
              * Format: date-time
@@ -2683,6 +2955,74 @@ export interface components {
             kind: string;
             /** Units */
             units?: string | null;
+            /**
+             * Lines
+             * @default false
+             */
+            lines: boolean;
+        };
+        /** SheetTab */
+        SheetTab: {
+            /** Name */
+            name: string;
+            /**
+             * Hidden
+             * @default false
+             */
+            hidden: boolean;
+        };
+        /** SheetView */
+        SheetView: {
+            /** Sheets */
+            sheets: components["schemas"]["SheetTab"][];
+            /** Number */
+            number: number;
+            /**
+             * Right To Left
+             * @default false
+             */
+            right_to_left: boolean;
+            /**
+             * Gridlines
+             * @default true
+             */
+            gridlines: boolean;
+            /**
+             * Frozen Rows
+             * @default 0
+             */
+            frozen_rows: number;
+            /**
+             * Frozen Columns
+             * @default 0
+             */
+            frozen_columns: number;
+            /** Columns */
+            columns: components["schemas"]["Column"][];
+            /** Rows */
+            rows: components["schemas"]["Row"][];
+            /** Styles */
+            styles: components["schemas"]["Style"][];
+            /**
+             * More Rows
+             * @default 0
+             */
+            more_rows: number;
+            /**
+             * More Columns
+             * @default 0
+             */
+            more_columns: number;
+            /**
+             * Hidden Rows
+             * @default 0
+             */
+            hidden_rows: number;
+            /**
+             * Hidden Columns
+             * @default 0
+             */
+            hidden_columns: number;
         };
         /** Source */
         Source: {
@@ -2713,6 +3053,62 @@ export interface components {
             status: string;
             /** Now */
             now: string | null;
+        };
+        /**
+         * Style
+         * @description How a cell looks. Colours are "#rrggbb"; a border side is CSS, e.g. "1px solid #000000".
+         */
+        Style: {
+            /**
+             * Bold
+             * @default false
+             */
+            bold: boolean;
+            /**
+             * Italic
+             * @default false
+             */
+            italic: boolean;
+            /**
+             * Underline
+             * @default false
+             */
+            underline: boolean;
+            /**
+             * Strike
+             * @default false
+             */
+            strike: boolean;
+            /** Font */
+            font?: string | null;
+            /** Size */
+            size?: number | null;
+            /** Color */
+            color?: string | null;
+            /** Fill */
+            fill?: string | null;
+            /** Align */
+            align?: string | null;
+            /** Valign */
+            valign?: string | null;
+            /**
+             * Wrap
+             * @default false
+             */
+            wrap: boolean;
+            /**
+             * Indent
+             * @default 0
+             */
+            indent: number;
+            /** Top */
+            top?: string | null;
+            /** Right */
+            right?: string | null;
+            /** Bottom */
+            bottom?: string | null;
+            /** Left */
+            left?: string | null;
         };
         /** SubmissionOut */
         SubmissionOut: {
@@ -2787,6 +3183,8 @@ export interface components {
             outcome?: ("open" | "submitted" | "won" | "lost") | null;
             /** Due Date */
             due_date?: string | null;
+            /** Archived */
+            archived?: boolean | null;
         };
         /** TenderCreate */
         TenderCreate: {
@@ -2794,6 +3192,73 @@ export interface components {
             name: string;
             /** Due Date */
             due_date?: string | null;
+        };
+        /**
+         * TenderGlance
+         * @description One tender as the Desk and the register show it. Quantix counts every figure; nothing here is the AI's.
+         */
+        TenderGlance: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Due Date */
+            due_date: string | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "open" | "submitted" | "won" | "lost";
+            /** Outcome At */
+            outcome_at: string | null;
+            /** Archived */
+            archived: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Team
+             * @enum {string}
+             */
+            team: "working" | "paused" | "idle";
+            /**
+             * Doing
+             * @description What someone on the team is doing now, with their first name
+             */
+            doing: string | null;
+            /**
+             * Waiting
+             * @description Approvals at every gate and questions, waiting for the engineer
+             */
+            waiting: number;
+            /** Documents */
+            documents: number;
+            /**
+             * Read
+             * @description Documents read, or that can't be read, out of the current ones
+             */
+            read: number;
+            /** Items */
+            items: number;
+            /** Priced */
+            priced: number;
+            /** Currency */
+            currency: string;
+            /**
+             * Total
+             * @description The tender total before VAT, once an item is priced
+             */
+            total: string | null;
+            /** Packages */
+            packages: number;
+            /** Chosen */
+            chosen: number;
+            /** Requirements */
+            requirements: number;
+            /** Ready */
+            ready: number;
         };
         /** TenderOut */
         TenderOut: {
@@ -2813,6 +3278,17 @@ export interface components {
              */
             outcome: "open" | "submitted" | "won" | "lost";
             /**
+             * Outcome At
+             * @description When the outcome was last set
+             */
+            outcome_at?: string | null;
+            /**
+             * Archived
+             * @description Put away: kept in the register, out of the sidebar and the Desk
+             * @default false
+             */
+            archived: boolean;
+            /**
              * Created At
              * Format: date-time
              */
@@ -2826,6 +3302,82 @@ export interface components {
             name: string;
             /** Tokens */
             tokens: number;
+        };
+        /**
+         * TurnDetail
+         * @description The turn opened: what the person was told, their thinking and notes, and each tool call with its answer.
+         */
+        TurnDetail: {
+            /** Id */
+            id: number;
+            /** Staff Id */
+            staff_id: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Ended At */
+            ended_at: string | null;
+            /** Running */
+            running: boolean;
+            /** Ended */
+            ended: string | null;
+            /** Note */
+            note: string | null;
+            /** Steps */
+            steps: number;
+            /** Doing */
+            doing: string | null;
+            /** Log */
+            log: components["schemas"]["TurnStep"][];
+        };
+        /**
+         * TurnOut
+         * @description One person's turn at work, as the chat shows it folded.
+         */
+        TurnOut: {
+            /** Id */
+            id: number;
+            /** Staff Id */
+            staff_id: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Ended At */
+            ended_at: string | null;
+            /** Running */
+            running: boolean;
+            /** Ended */
+            ended: string | null;
+            /** Note */
+            note: string | null;
+            /** Steps */
+            steps: number;
+            /** Doing */
+            doing: string | null;
+        };
+        /** TurnStep */
+        TurnStep: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "brief" | "thinking" | "note" | "tool";
+            /** Text */
+            text?: string | null;
+            /** Tool */
+            tool?: string | null;
+            /** Args */
+            args?: string | null;
+            /** Doing */
+            doing?: string | null;
+            /** Result */
+            result?: string | null;
+            /** Sent Back */
+            sent_back?: string | null;
         };
         /** UnitsIn */
         UnitsIn: {
@@ -3155,6 +3707,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TenderOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    desk_desk_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenderGlance"][];
                 };
             };
             /** @description Validation Error */
@@ -3601,6 +4184,43 @@ export interface operations {
             };
         };
     };
+    import_documents_tenders__tender_id__documents_import_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Added"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     search_tenders__tender_id__search_get: {
         parameters: {
             query: {
@@ -3733,6 +4353,73 @@ export interface operations {
             };
         };
     };
+    sheet_documents__document_id__sheets__number__get: {
+        parameters: {
+            query?: {
+                hidden?: boolean;
+            };
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                document_id: string;
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SheetView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    open_in_app_documents__document_id__open_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     office_tenders__tender_id__office_get: {
         parameters: {
             query?: never;
@@ -3753,6 +4440,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OfficeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_turns_tenders__tender_id__turns_get: {
+        parameters: {
+            query?: {
+                staff_id?: string | null;
+            };
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                tender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TurnOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    turn_detail_turns__turn_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                turn_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TurnDetail"];
                 };
             };
             /** @description Validation Error */
@@ -4517,6 +5272,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Chosen"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    region_documents__document_id__pages__number__region_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                document_id: string;
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegionOut"];
                 };
             };
             /** @description Validation Error */
@@ -5674,6 +6467,43 @@ export interface operations {
             };
         };
     };
+    change_rule_rules__rule_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RuleChange"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuleOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_profile_company_get: {
         parameters: {
             query?: never;
@@ -5976,6 +6806,37 @@ export interface operations {
             path: {
                 tender_id: string;
             };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LessonOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    suggested_lessons_lessons_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;

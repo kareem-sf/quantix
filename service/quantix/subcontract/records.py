@@ -355,3 +355,13 @@ def waiting(session: Session, tender_id: str) -> int:
     return sum(
         1 for p in packages(session, tender_id) if p.recommended_quote_id and p.reviewed_by and not p.selected_quote_id
     )
+
+
+def to_send(session: Session, tender_id: str) -> int:
+    """Enquiries the Tender Manager accepted, for the engineer to send from their own mail."""
+    query = (
+        select(Enquiry.id)
+        .join(Package, Enquiry.package_id == Package.id)
+        .where(Package.tender_id == tender_id, Enquiry.status == "draft", Enquiry.reviewed_by.is_not(None))
+    )
+    return len(session.scalars(query).all())

@@ -3,7 +3,7 @@
 import re
 import threading
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -90,6 +90,7 @@ class Turn:
     autonomous: bool
     stop: threading.Event
     sees_images: bool = True  # False when the office's AI failed the image check
+    doing: dict[str, str] = field(default_factory=dict)  # what each tool call was doing, in words, by its call id
 
 
 BLIND = (  # in the instructions of a turn whose AI can't see; its image tools are left out
@@ -107,13 +108,17 @@ def _working(ctx: RunContext[Turn], doing: str | None = None):
         raise Stopped()
     with ctx.deps.sessions() as session:
         me = session.get(Staff, ctx.deps.staff_id)
+        before = me.now
         if doing:
             me.now = doing[:300]
+            ctx.deps.doing[ctx.tool_call_id] = me.now  # kept for the turn's steps, even if the call is sent back
         try:
             yield session, me
         except ValueError as error:
             session.rollback()
             raise ModelRetry(str(error)) from error
+        if me.now and me.now != before:  # the tool said what it did once it knew, such as the page it read
+            ctx.deps.doing[ctx.tool_call_id] = me.now
         session.commit()
 
 
@@ -354,6 +359,19 @@ ANSWER_NOW = (
 )
 
 
+# a last line "Sources: markups, Bill.xlsx, page 2": what a weak model writes instead of giving sources
+SOURCES_LINE = re.compile(r"\n\s*\**sources?\**\s*:\**\s*(.+?)\s*$", re.IGNORECASE)
+
+
+def _written_sources(text: str) -> tuple[str, list[str]]:
+    """The message without its written "Sources:" line, and the sources it names (a page's own comma is kept)."""
+    found = SOURCES_LINE.search(text)
+    if found is None:
+        return text, []
+    named = re.split(r";|,(?!\s*page\b)", found[1])
+    return text[: found.start()].rstrip(), [n.strip(" .*`") for n in named if n.strip(" .*`")]
+
+
 def message_engineer(
     ctx: RunContext[Turn], text: str, sources: list[str] | None = None, next_steps: list[str] | None = None
 ) -> str:
@@ -370,6 +388,8 @@ def message_engineer(
     steps = [s.strip() for s in next_steps or [] if s.strip()]
     if len(steps) > 3:
         raise ModelRetry("Give at most 3 next steps: the ones you will do yourself next.")
+    text, written = _written_sources(text)  # the sources show under the message, so the line never does
+    sources = sources or written
     with _working(ctx) as (session, me):
         try:
             cited = [lookup.cited(session, ctx.deps.tender_id, me.id, s) for s in sources or [] if s.strip()]
@@ -447,11 +467,17 @@ def complete_task(ctx: RunContext[Turn], task_id: str, result: str, only_reporte
         own = task is not None and task.title.startswith(FOLLOW_UP)
         if task is not None and task.staff_id == me.id and task.status == "open" and not own:
             filed = reviews.filed_since(session, me.id, task.created_at)
-            if not filed and task.title.startswith("Redo "):
+            if task.title.startswith("Give out: "):  # done once someone else has the redo
+                given = select(Task.id).where(
+                    Task.tender_id == ctx.deps.tender_id, Task.staff_id != me.id, Task.created_at >= task.created_at
+                )
+                if session.scalars(given).first() is None:
+                    raise ValueError("Give the redo to someone with assign_task first, then complete this task.")
+            elif not filed and task.title.startswith("Redo "):
                 raise ValueError(
                     "You haven't filed the corrected work yet. Redo it with its tool, then complete the task."
                 )
-            if not filed and not only_reported:
+            elif not filed and not only_reported:
                 raise ValueError(
                     "You haven't filed anything since this task began. If it asked you to draft, measure, price, enter "
                     "or record something, do that with its tool first. If it only asked you to find, read or check "
@@ -656,10 +682,11 @@ def open_record(ctx: RunContext[Turn], references: list[str]) -> str:
 
 def find_records(ctx: RunContext[Turn], words: str = "", kind: str | None = None) -> str:
     """Find the office's own records by words: BOQ lines (with their rates), facts, checklist items and their drafts,
-    measurements, packages and quotes. kind narrows it to one of boq, fact, checklist, draft, measurement, package or
-    quote; with a kind and no words it lists them all. Each line starts with the reference to open it with
-    open_record."""
-    with _working(ctx, f"Looking through the office's records for “{words}”") as (session, _):
+    measurements, packages, quotes and the markups. kind narrows it to one of boq, fact, checklist, draft,
+    measurement, package, quote or markups; with a kind and no words it lists them all. Each line starts with the
+    reference to open it with open_record."""
+    doing = f"Looking through the office's records for “{words}”" if words.strip() else "Listing the office's records"
+    with _working(ctx, doing + (f" ({kind})" if kind and not words.strip() else "")) as (session, _):
         found = lookup.search(session, ctx.deps.tender_id, words, kind)
     if not found:
         return "No record matches. Try fewer or other words, or the Arabic or English term."
@@ -833,12 +860,20 @@ LAYERS_AT_ONCE = 60  # drawing_overview rows at a time
 UNIT_WORDS = {"mm": "millimetres", "cm": "centimetres", "m": "metres", "in": "inches", "ft": "feet"}
 
 
-def _drawing(ctx: RunContext[Turn], session: Session, document_id: str) -> tuple[Document, cad.Drawing]:
-    document = drawings.drawing_document(session, ctx.deps.tender_id, document_id)
-    return document, drawings.open_drawing(ctx.deps.home, document)
+def _drawing(ctx: RunContext[Turn], session: Session, document_id: str, page: int = 1) -> tuple[Document, cad.Drawing]:
+    """A CAD drawing, or the lines of a PDF page drawn in them."""
+    document = drawings.drawing_page(session, ctx.deps.tender_id, document_id, page)
+    return document, drawings.open_page(ctx.deps.home, document, page)
 
 
-def _units_line(session: Session, document: Document, d: cad.Drawing) -> tuple[str, float | None]:
+def _units_line(session: Session, document: Document, d: cad.Drawing, page: int = 1) -> tuple[str, float | None]:
+    if document.kind == "pdf":
+        record = drawings.units_record(session, document.id, page)
+        if record is None:
+            return "Scale: not set yet (set it with set_scale on a dimension printed on the sheet).", None
+        state = "approved" if record.status in APPROVED else "waiting for approval"
+        ratio = takeoff.drawing_ratio(record.metres_per_point)
+        return f"Scale: about 1:{ratio:,} ({state}); lengths are in points on the sheet.", record.metres_per_point
     record = drawings.units_record(session, document.id)
     if record is not None:
         state = "approved" if record.status in APPROVED else "waiting for approval"
@@ -867,17 +902,18 @@ def _amounts(totals: dict[str, float], metres: float | None) -> str:
 
 
 def drawing_overview(ctx: RunContext[Turn], document_id: str, page: int = 1, start: int = 1) -> str:
-    """A CAD drawing (DWG or DXF) at a glance: its units and what in it says so, its pages (page 1 is model space,
-    the others its layouts), what Quantix couldn't read, every layer with what it holds (objects by type, total length
-    in drawing units, closed outlines, blocks placed on it, hatch patterns, sample words, whether it prints) 60 at a
-    time from start, and every block with its copies. With the layer map, each one's meaning. Work out what a layer
-    is from what it holds, not from its name alone."""
+    """A CAD drawing (DWG or DXF), or a PDF page drawn in lines, at a glance: its units (a PDF page's scale) and
+    what in it says so, its pages (page 1 is model space, the others its layouts), what Quantix couldn't read, every
+    layer with what it holds (objects by type, total length in drawing units, closed outlines, blocks placed on it,
+    hatch patterns, sample words, whether it prints) 60 at a time from start, and every block with its copies. A PDF's
+    layers are its pens (colour and line weight) unless it keeps the drawing's own. With the layer map, each one's
+    meaning. Work out what a layer is from what it holds, not from its name alone."""
     with _working(ctx) as (session, me):
-        document, d = _drawing(ctx, session, document_id)
+        document, d = _drawing(ctx, session, document_id, page)
         space = d.space(page)
         me.now = f"Looking over {document.name}"
         _opened(ctx, session, "page", f"{document_id}:{page}")
-        units, metres = _units_line(session, document, d)
+        units, metres = _units_line(session, document, d, page)
         known = drawings.meanings(session, ctx.deps.tender_id)
         facts = drawings.layer_facts(d, page)
         counts = drawings.block_counts(d, page)
@@ -928,16 +964,17 @@ def drawing_overview(ctx: RunContext[Turn], document_id: str, page: int = 1, sta
 def query_drawing(
     ctx: RunContext[Turn], document_id: str, rule: cad.Rule, page: int = 1, group_by: str = "layer", show: int = 20
 ) -> str:
-    """Find objects on a CAD drawing by a rule and see what Quantix measures of them: how many (each copy of a block
-    counted), their total length and closed area, in drawing units and in metres once the units are set, grouped by
-    layer, block, type, room or a block attribute's tag ("attribute:TYPE"), with the first objects and their keys.
-    types ['Room'] lists the rooms Quantix finds from the layer map. Try a rule here before you measure with it."""
+    """Find objects on a CAD drawing, or a PDF page drawn in lines, by a rule and see what Quantix measures of them:
+    how many (each copy of a block counted), their total length and closed area, in drawing units and in metres once
+    the units (a PDF page's scale) are set, grouped by layer, block, type, room or a block attribute's tag
+    ("attribute:TYPE"), with the first objects and their keys. types ['Room'] lists the rooms Quantix finds from a
+    CAD drawing's layer map. Try a rule here before you measure with it."""
     with _working(ctx) as (session, me):
-        document, d = _drawing(ctx, session, document_id)
+        document, d = _drawing(ctx, session, document_id, page)
         me.now = f"Looking through {document.name}"
         _opened(ctx, session, "page", f"{document_id}:{page}")
         found, found_rooms = drawings.choose(session, ctx.deps.home, document, page, rule)
-        metres = drawings.metres_per_unit(session, document.id)
+        metres = drawings.metres_per_unit(session, document.id, page)
     if [t.lower() for t in rule.types] == ["room"]:
         if not found_rooms:
             return (
@@ -1000,11 +1037,12 @@ def view_drawing(
     region: list[float] | None = None,
     rule: cad.Rule | None = None,
 ) -> ToolReturn:
-    """Look at a CAD drawing as a picture: a whole page, or a region of it as [left, bottom, right, top] in drawing
-    units. With a rule, the objects it takes are drawn in orange and numbered, and the reply gives each number's
-    key. A picture is for checking what things are; count and measure with query_drawing, never by eye."""
+    """Look at a CAD drawing, or a PDF page drawn in lines, as a picture: a whole page, or a region of it as [left,
+    bottom, right, top] in drawing units. With a rule, the objects it takes are drawn in orange and numbered, and the
+    reply gives each number's key. A picture is for checking what things are; count and measure with query_drawing,
+    never by eye."""
     with _working(ctx) as (session, me):
-        document, d = _drawing(ctx, session, document_id)
+        document, d = _drawing(ctx, session, document_id, page)
         me.now = f"Looking at {document.name}"
         _opened(ctx, session, "page", f"{document_id}:{page}")
         marked: dict[int, str] = {}
@@ -1033,7 +1071,7 @@ def find_problems(ctx: RunContext[Turn], document_id: str | None = None) -> str:
     with _working(ctx, "Checking the drawings and the BOQ") as (session, _):
         _opened(ctx, session, "summary", "find_problems")
         if document_id:
-            document, _d = _drawing(ctx, session, document_id)
+            document = drawings.drawing_document(session, ctx.deps.tender_id, document_id)
             _opened(ctx, session, "page", f"{document_id}:1")
             found = drawings.drawing_problems(session, ctx.deps.home, document)
             where = document.name
@@ -1071,23 +1109,25 @@ def measure_drawing(
     unit: str,
     multiplier_m: float | None = None,
     boq_item: str | None = None,
+    page: int = 1,
 ) -> str:
-    """Take off from a CAD drawing's own objects in model space, by a rule: kind count (block copies or objects),
-    length (lines, polylines, arcs; a room's perimeter), area (closed outlines, hatches and regions; a room's area)
-    or volume (3D solids). unit: count nr; length m, or m2 with a height as multiplier_m; area m2, or m3 with a
-    thickness; volume m3, or kg or t with the material's density per m3 (steel 7850 kg). Link the BOQ line it
-    belongs to. Quantix takes the objects the rule finds, lists them for the Tender Manager and computes the quantity
-    from their geometry and the drawing's units. A rule that finds nothing, linked to a BOQ line, records that the
-    line's work isn't on this drawing. Try the rule with query_drawing first."""
+    """Take off from a drawing's own objects by a rule: a CAD drawing's in model space (page 1), or a PDF page's
+    lines (its page). kind count (block copies or objects), length (lines, polylines, arcs; a room's perimeter), area
+    (closed outlines, hatches and regions; a room's area) or volume (a CAD drawing's 3D solids). unit: count nr;
+    length m, or m2 with a height as multiplier_m; area m2, or m3 with a thickness; volume m3, or kg or t with the
+    material's density per m3 (steel 7850 kg). Link the BOQ line it belongs to. Quantix takes the objects the rule
+    finds, lists them for the Tender Manager and computes the quantity from their geometry and the drawing's units or
+    the PDF page's scale. A rule that finds nothing, linked to a BOQ line, records that the line's work isn't on this
+    drawing. Try the rule with query_drawing first."""
     with _working(ctx, f"Measuring {label}") as (session, me):
-        _read_first(ctx, session, {(document_id, 1)})
+        _read_first(ctx, session, {(document_id, page)})
         m = takeoff.measure_drawing(
             session,
             ctx.deps.home,
             ctx.deps.tender_id,
             me.id,
             document_id,
-            1,
+            page,
             kind,
             label,
             rule,
@@ -1098,8 +1138,11 @@ def measure_drawing(
         q = takeoff.quantity(session, m)
         item = session.get(BoqItem, m.boq_item_id) if m.boq_item_id else None
         name = session.get(Document, document_id).name
+        on_pdf = session.get(Document, document_id).kind == "pdf"
     if not m.entities:
         return f"Recorded that {label} isn't on {name}: nothing there matches the rule."
+    if q is None and on_pdf:
+        return f"Took {len(m.entities)} objects, but page {page} of {name} has no scale yet: set it with set_scale."
     if q is None:
         return f"Took {len(m.entities)} objects, but {name} has no units yet: set them with set_drawing_units."
     report = f"Measured {label}: {len(m.entities)} objects, {q} {unit} (Quantix's figure)."
@@ -1648,7 +1691,7 @@ def escalate(
     """Bring the engineer a problem the office can't settle: a record in your review queue that keeps coming back
     wrong, one only the engineer can decide, or work the engineer already approved that Quantix finds a problem in.
     problem: what is wrong, what it costs or risks, and why the office can't settle it. sources: where it shows, each
-    a document page or a BOQ line, with what the engineer will find there; for approved work Quantix found a problem
+    a document page or a BOQ line, with what the engineer will find there; for work Quantix's checks found a problem
     in, they may be left out, as its finding says where. suggestions: 1 to 4 corrections, your
     recommended one first, each complete enough to act on. A record in your queue waits there; the engineer's answer
     comes to your chat, and you apply it with review. For approved work Quantix adds "Keep it as approved"; a

@@ -32,14 +32,14 @@ from quantix.takeoff import records as takeoff
 
 PRICE_FACTS = ("currency", "vat")  # the price can't be stated without them
 QUERY_FACTS = ("contract_type", "precedence")
-AREAS = {
-    "boq": "BOQ lines",
-    "facts": "tender facts",
-    "takeoff": "takeoff marks",
-    "drawings": "layer maps and tender queries",
-    "pricing": "prices",
-    "subcontract": "quote choices",
-    "submission": "drafts",
+AREAS = {  # what waits at each gate: one, many
+    "boq": ("BOQ line", "BOQ lines"),
+    "facts": ("tender fact", "tender facts"),
+    "takeoff": ("takeoff mark", "takeoff marks"),
+    "drawings": ("layer map or tender query", "layer maps and tender queries"),
+    "pricing": ("price", "prices"),
+    "subcontract": ("quote choice", "quote choices"),
+    "submission": ("draft", "drafts"),
 }
 _CELL = re.compile(r"([A-Z]{1,3})(\d+)=(.*)")
 
@@ -117,7 +117,7 @@ def _waiting(session: Session, tender_id: str) -> list[Finding]:
         "submission": submission.waiting(session, tender_id),
     }
     if any(gates.values()):
-        listed = ", ".join(f"{n} {AREAS[area]}" for area, n in gates.items() if n)
+        listed = ", ".join(_plural(n, *AREAS[area]) for area, n in gates.items() if n)
         found.append(Finding("waiting:engineer", BLOCKER, f"Waiting for the engineer's approval: {listed}."))
     questions = office.decisions(session, tender_id, waiting_only=True)
     if questions:

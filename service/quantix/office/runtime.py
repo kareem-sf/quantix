@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic_ai.models import Model
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -16,7 +16,7 @@ from quantix import settings, tenders
 from quantix.ai import connections, providers
 from quantix.documents import library
 from quantix.office import agents, packs, records
-from quantix.office.models import ENGINEER, OFFICE, TEAM, Message, Staff, TurnRecord
+from quantix.office.models import ENGINEER, OFFICE, TEAM, Decision, Message, Staff, TurnRecord
 from quantix.office.tools import Stopped, Turn
 from quantix.review import audit, revisions
 from quantix.review import records as reviews
@@ -26,8 +26,25 @@ log = logging.getLogger("quantix.office")
 
 TURN_BUDGET = 40  # turns without hearing from the engineer before the office pauses
 CARRY_ON = "Your last turn was cut short. Carry on from where you stopped, and report what you have."
-RETRIES = 2  # turns cut short by a passing AI failure that are tried again before the office pauses
-RETRY_WAIT = 5.0  # seconds before the first retry; each further one waits longer
+NOT_REPLIED = (
+    "The engineer wrote to you in your chat and you haven't written back. Tell them now with message_engineer what "
+    "you did about it and what happens next, giving what it rests on as sources."
+)
+APPROVALS_WAITING = (
+    "Work you accepted now waits for the engineer's approval, and you haven't told them. Tell them now with "
+    "message_engineer, in one short message: what waits for them, anything to look at before they approve it, and on "
+    "which screen, giving the records as sources.\nWaiting for the engineer:\n"
+)
+ALL_APPROVED = (
+    "The engineer has approved the last of the work that waited for them: nothing waits for their approval now. Tell "
+    "them so with message_engineer in a line or two, with what the office does next or what it still needs from them."
+)
+QUEUE_LEFT = (
+    "Work is still in your review queue after your last turn, neither decided nor escalated. Settle each now: accept "
+    "it, send it back, or escalate it to the engineer if the office can't. Nothing may wait unresolved."
+)
+RETRIES = 4  # turns cut short by a passing AI failure that are tried again before the office pauses
+RETRY_WAIT = 5.0  # seconds before the first retry; each further one waits three times longer, over 3 minutes in all
 ALLOWANCE_USED = (
     "The office paused: this tender has used the AI allowance set in Settings. Raise it there, then send a message "
     "to carry on."
@@ -64,6 +81,9 @@ class Office:
         # person carries on from the records instead (their turn record says the work is unfinished)
         self._carry: dict[str, list] = {}
         self._failures: dict[str, int] = {}  # turns in a row cut short by the AI service, per tender
+        # what the person had read before a run of failed turns: if the office gives up, what was new for them is
+        # new again, so the engineer's question is answered when the office carries on rather than left as read
+        self._read_before: dict[str, tuple[str, int]] = {}  # staff id: (tender id, last message read)
 
     # The engineer's side -------------------------------------------------------------------------------------
 
@@ -196,9 +216,15 @@ class Office:
                 or revisions.news(session, tender_id, member.reviewed_up_to)
                 or bool(unseen)
             )
+            owed = self._reply_owed(session, member)
+            approvals = self._approvals_owed(session, member)
+            left = self._queue_left(session, member)
             if (
                 not new
                 and not to_review
+                and not owed
+                and not approvals
+                and not left
                 and not records.unfinished(session, staff_id)
                 and not records.new_task(session, member)
             ):
@@ -209,6 +235,13 @@ class Office:
                 records.note_opened(session, tender_id, staff_id, "finding", finding.key[:80])
             if history is not None:
                 prompt = f"{CARRY_ON}\n\n{prompt}"
+            if approvals:
+                prompt = f"{approvals}\n\n{prompt}"
+            if left:
+                prompt = f"{QUEUE_LEFT}\n\n{prompt}"
+            if owed:
+                prompt = f"{NOT_REPLIED}\n\n{prompt}"
+            self._read_before.setdefault(staff_id, (tender_id, member.last_read))
             records.mark_read(session, member)
             if member.is_manager:  # the briefing showed him his queue
                 member.reviewed_up_to = datetime.now(UTC)
@@ -221,7 +254,8 @@ class Office:
         turn = Turn(
             self.home, self.sessions, tender_id, staff_id, autonomous, self._stop_event(tender_id), self.sees_images()
         )
-        trace = agents.Trace()
+        trace = agents.Trace(save=lambda steps: self._save_steps(record_id, steps))
+        gave_up = False
         try:
             try:
                 conversation = await agents.run_turn(model, turn, member, prompt, autonomous, history, trace)
@@ -232,23 +266,29 @@ class Office:
                     raise cut.error from cut.error.__cause__  # keep the provider's own error as the cause
                 log.info("%s's turn was cut short (%s); trying again", member.name, trace.note)
                 self._carry[staff_id] = cut.conversation
-                await asyncio.sleep(RETRY_WAIT * failures)
+                await asyncio.to_thread(self._stop_event(tender_id).wait, RETRY_WAIT * 3 ** (failures - 1))
                 return True
             self._failures.pop(tender_id, None)
+            self._read_before.pop(staff_id, None)
             if conversation is not None and history is None:
                 self._carry[staff_id] = conversation  # one continuation in a row; after that, from the records
         except Stopped:
             trace.ended = "interrupted" if self._closing.is_set() else "stopped"
+            self._read_before.pop(staff_id, None)
             raise
         except Exception as error:
             if trace.ended != "ai_failed":
                 trace.ended, trace.note = "failed", f"{type(error).__name__}: {str(error)[:500]}"
+            gave_up = True
             raise
         finally:
             with self.sessions() as session:
                 record = session.get(TurnRecord, record_id)
                 record.ended, record.note, record.calls = trace.ended, trace.note, trace.calls
+                record.steps = trace.steps
                 record.ended_at = datetime.now(UTC)
+                if gave_up:
+                    self._unread_again(session, tender_id)
                 record.requests, record.output_tokens = trace.usage.requests, trace.usage.output_tokens
                 record.input_tokens, record.cached_tokens = trace.usage.input_tokens, trace.usage.cache_read_tokens
                 if trace.ended not in records.UNFINISHED:
@@ -257,6 +297,83 @@ class Office:
                     self._left_tasks(session, tender_id, member, trace.calls)
                 session.commit()
         return True
+
+    @staticmethod
+    def _reply_owed(session: Session, member: Staff) -> bool:
+        """The engineer wrote to them last, and their one finished turn since gave no message, question or work: woken
+        once more to reply. The real tender's Manager gave out and reviewed the work the engineer asked for, all in
+        the team room, and the engineer's chat stayed silent. Read from the records, so a restart keeps it."""
+        last = records.messages(session, member.tender_id, member.id, limit=1)
+        if not last or last[0].sender != ENGINEER:
+            return False
+        since = last[0].created_at
+        done = select(func.count()).select_from(TurnRecord)
+        done = done.where(TurnRecord.staff_id == member.id, TurnRecord.started_at >= since, TurnRecord.ended == "done")
+        asked = select(Decision.id).where(Decision.raised_by == member.id, Decision.created_at >= since)
+        return (
+            session.scalar(done) == 1
+            and session.scalars(asked).first() is None
+            and not reviews.filed_since(session, member.id, since)
+        )
+
+    @staticmethod
+    def _queue_left(session: Session, member: Staff) -> bool:
+        """Work in the Tender Manager's queue that one finished turn of his since it came left undecided and not
+        escalated: woken once more to settle it. On the real tender his escalation of the markups redo was turned away
+        and his turn ended, and the engineer waited for markups no one would bring. Read from the records."""
+        if not member.is_manager:
+            return False
+        escalated = reviews.escalated(session, member.tender_id)
+        waiting = [p for p in reviews.pending(session, member.tender_id) if p.record.id not in escalated]
+        if not waiting:
+            return False
+        since = max(p.since for p in waiting)
+        done = select(func.count()).select_from(TurnRecord)
+        done = done.where(TurnRecord.staff_id == member.id, TurnRecord.started_at >= since, TurnRecord.ended == "done")
+        return session.scalar(done) == 1
+
+    @staticmethod
+    def _approvals_owed(session: Session, member: Staff) -> str | None:
+        """What the Tender Manager hasn't told the engineer about their approvals: work he accepted that now waits
+        for them, or, once they approved the last of it, that nothing does. On the real tender he accepted the redone
+        markups the engineer had asked to see, and they found them by chance. Each wakes him once: not again after a
+        finished turn of his that started since. Read from the records, so a restart keeps it."""
+        if not member.is_manager:
+            return None
+        waiting = reviews.with_engineer(session, member.tender_id)
+        since = max(p.since for p in waiting) if waiting else reviews.last_approved(session, member.tender_id)
+        if since is None:
+            return None
+        mine = select(Message).where(
+            Message.tender_id == member.tender_id, Message.channel == member.id, Message.sender == member.id
+        )
+        told = session.scalars(mine.order_by(Message.id.desc()).limit(1)).first()
+        if told is not None and told.created_at >= since:
+            return None
+        done = select(func.count()).select_from(TurnRecord)
+        done = done.where(TurnRecord.staff_id == member.id, TurnRecord.started_at >= since, TurnRecord.ended == "done")
+        if session.scalar(done):
+            return None
+        if not waiting:
+            return ALL_APPROVED
+        names = {m.id: m.first_name for m in records.team(session, member.tender_id, include_released=True)}
+        listed = [f"- {reviews.describe(session, p, names)} · on {reviews.WHERE[p.kind]}" for p in waiting[:15]]
+        more = [f"- … and {len(waiting) - 15} more."] if len(waiting) > 15 else []
+        return APPROVALS_WAITING + "\n".join(listed + more)
+
+    def _save_steps(self, record_id: int, steps: list[dict]) -> None:
+        with self.sessions() as session:
+            session.get(TurnRecord, record_id).steps = steps
+            session.commit()
+
+    def _unread_again(self, session: Session, tender_id: str) -> None:
+        """The office gave up on the tender: what was new for anyone whose turns failed is new for them again."""
+        for staff_id, (tender, last_read) in list(self._read_before.items()):
+            if tender == tender_id:
+                del self._read_before[staff_id]
+                member = session.get(Staff, staff_id)
+                if member is not None:
+                    member.last_read = min(member.last_read, last_read)
 
     @staticmethod
     def _left_tasks(session: Session, tender_id: str, member: Staff, calls: list[dict]) -> None:

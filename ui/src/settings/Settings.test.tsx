@@ -6,7 +6,7 @@ import { fakeService, openApp } from "../test/app";
 describe("Settings", () => {
   it("adds a connection, checks a model and gives it to the office", async () => {
     const service = fakeService();
-    openApp("/settings");
+    openApp("/settings?section=ai");
 
     expect(await screen.findByText("Add an AI connection so the office can start work.")).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("API key"), "sk-ant-secret-9f2c");
@@ -25,7 +25,7 @@ describe("Settings", () => {
 
   it("asks for the address of an OpenAI-compatible service", async () => {
     fakeService();
-    openApp("/settings");
+    openApp("/settings?section=ai");
 
     await userEvent.click(await screen.findByRole("radio", { name: "OpenAI-compatible service" }));
     expect(screen.getByLabelText("Service address")).toBeInTheDocument();
@@ -33,7 +33,7 @@ describe("Settings", () => {
 
   it("shows why a key was refused", async () => {
     fakeService({ fail: { "/ai/connections": "The key was refused. Check it and try again." } });
-    openApp("/settings");
+    openApp("/settings?section=ai");
 
     await userEvent.type(await screen.findByLabelText("API key"), "wrong");
     await userEvent.click(screen.getByRole("button", { name: "Add connection" }));
@@ -43,7 +43,7 @@ describe("Settings", () => {
 
   it("shows the key being typed when asked", async () => {
     fakeService();
-    openApp("/settings");
+    openApp("/settings?section=ai");
 
     const key = await screen.findByLabelText("API key");
     expect(key).toHaveAttribute("type", "password");
@@ -55,7 +55,7 @@ describe("Settings", () => {
 
   it("says so plainly when the Quantix service isn't running", async () => {
     const service = fakeService();
-    openApp("/settings");
+    openApp("/settings?section=ai");
     await screen.findByLabelText("API key");
 
     service.fetch.mockRejectedValue(new TypeError("Failed to fetch"));
@@ -68,7 +68,7 @@ describe("Settings", () => {
 
   it("keeps a free web research key, and forgets it", async () => {
     const service = fakeService();
-    openApp("/settings");
+    openApp("/settings?section=web");
 
     await userEvent.type(await screen.findByLabelText("TinyFish key"), "tf-key-1234");
     await userEvent.click(screen.getByRole("button", { name: "Save the TinyFish key" }));
@@ -82,7 +82,7 @@ describe("Settings", () => {
 
   it("shows why a web research key was refused", async () => {
     fakeService({ fail: { "/web/keys/firecrawl": "The key was refused." } });
-    openApp("/settings");
+    openApp("/settings?section=web");
 
     await userEvent.type(await screen.findByLabelText("Firecrawl key"), "wrong");
     await userEvent.click(screen.getByRole("button", { name: "Save the Firecrawl key" }));
@@ -109,7 +109,7 @@ describe("The office's AI use", () => {
         tenders: [{ tender_id: "t1", name: "Substation earthworks", tokens: 3_400_000 }],
       },
     });
-    openApp("/settings");
+    openApp("/settings?section=usage");
 
     const row = await screen.findByRole("row", { name: /gpt-5-4-mini/ });
     const cells = within(row).getAllByRole("cell").map((c) => c.textContent);
@@ -129,7 +129,7 @@ describe("The office's AI use", () => {
 
   it("says when no AI has worked yet", async () => {
     fakeService();
-    openApp("/settings");
+    openApp("/settings?section=usage");
     expect(await screen.findByText("Nothing yet. Each turn the office works is counted here.")).toBeInTheDocument();
   });
 });
