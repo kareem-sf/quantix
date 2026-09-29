@@ -43,7 +43,6 @@ export function screenOf(pathname: string): string {
   if (pathname === "/desk") return "Desk";
   if (pathname === "/tenders") return "Tenders";
   if (pathname === "/settings") return "Settings";
-  if (pathname === "/about") return "About Quantix";
   if (pathname === "/new") return "New tender";
   return COMPANY_SCREENS.find(([, path]) => pathname.startsWith(path))?.[0] ?? "";
 }

@@ -104,15 +104,6 @@ describe("Settings", () => {
     await userEvent.click(await screen.findByRole("radio", { name: /Decisions only/ }));
     await waitFor(() => expect(service.state.settings.notifications).toBe("decisions"));
   });
-
-  it("links to About Quantix, which has its own screen", async () => {
-    fakeService();
-    const router = openApp("/settings");
-
-    await screen.findByRole("heading", { name: "Settings" });
-    await userEvent.click(within(screen.getByRole("main")).getByRole("link", { name: "About Quantix" }));
-    expect(router.state.location.pathname).toBe("/about");
-  });
 });
 
 describe("The office's AI use", () => {

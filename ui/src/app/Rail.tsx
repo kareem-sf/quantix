@@ -1,6 +1,5 @@
 import {
   IconHome,
-  IconInfoCircle,
   IconListDetails,
   IconPlus,
   IconSelector,
@@ -54,7 +53,6 @@ export function Rail({ tender }: { tender?: Tender }) {
         {folded && <span className="my-2 border-t border-line" />}
         <Company />
         <span className="grow" />
-        <Item to="/about" label="About Quantix" icon={IconInfoCircle} />
         <Item to="/settings" label="Settings" icon={IconSettings} />
       </div>
     </nav>

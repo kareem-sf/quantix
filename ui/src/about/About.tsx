@@ -1,8 +1,7 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { useEffect, useState, type ReactNode } from "react";
-import lockup from "../../../brand/logo/quantix-lockup-endorsed-on-light.svg?url";
-import signature from "../../../brand/founder/signature-on-light.svg?url";
+import lockup from "../../../brand/logo/quantix-lockup-horizontal-on-light.svg?url";
 
 /** The QS Mind products, in the order a quantity surveyor's work runs: estimate, tender, procure. */
 const HOUSE: [stage: string, name: string, what: string][] = [
@@ -18,7 +17,7 @@ const DOES = [
   "Every finding cites the document page or web page it came from, one click away.",
 ];
 
-/** About Quantix: what it is, the QS Mind house it belongs to, and who made it. */
+/** Settings › About: what Quantix is, the QS Mind house it belongs to, and who made it. */
 export function About() {
   const [version, setVersion] = useState<string | null>(null);
   useEffect(() => {
@@ -26,10 +25,10 @@ export function About() {
   }, []);
 
   return (
-    <div className="flex w-full max-w-[704px] flex-col gap-10 px-8 pt-10 pb-12">
-      <header className="flex flex-col gap-4">
-        <img src={lockup} alt="Quantix by QS Mind" className="h-14 self-start" draggable={false} />
-        <p className="text-[15px] leading-relaxed text-ink-2">
+    <>
+      <header className="flex flex-col gap-3">
+        <img src={lockup} alt="Quantix" className="h-11 self-start" draggable={false} />
+        <p className="text-[15px] text-ink-2">
           Your tendering office, on your desktop.{version && <span className="text-ink-3"> · Version {version}</span>}
         </p>
       </header>
@@ -75,28 +74,24 @@ export function About() {
         </p>
       </Part>
 
-      <Part title="Founder">
-        <a
-          href="https://kareemsafwat.com"
-          target="_blank"
-          rel="noreferrer"
-          className="flex items-center gap-4 self-start rounded-xl border border-line-strong px-4 py-3 hover:border-ink-4"
-        >
-          <FounderMark />
-          <span className="flex flex-col gap-1">
-            <img src={signature} alt="Kareem Safwat" className="h-7 self-start" draggable={false} />
-            <span className="text-ink-2">
-              Founded &amp; developed by <span className="font-medium text-ink">Kareem Safwat</span> · kareemsafwat.com
-            </span>
-          </span>
-        </a>
-      </Part>
-
-      <footer className="border-t border-line pt-5 text-xs leading-relaxed text-ink-3">
-        © {new Date().getFullYear()} QS Mind. All rights reserved. Quantix and the Weave mark belong to QS Mind. The
-        brand typeface, Urbanist, is used under the SIL Open Font License.
+      <footer className="flex flex-col gap-1.5 border-t border-line pt-5 text-ink-2">
+        <span>
+          Founded &amp; developed by{" "}
+          <a
+            href="https://kareemsafwat.com"
+            target="_blank"
+            rel="noreferrer"
+            className="font-medium text-ink underline underline-offset-4 hover:text-ink-2"
+          >
+            Kareem Safwat
+          </a>
+        </span>
+        <span className="text-xs leading-relaxed text-ink-3">
+          © {new Date().getFullYear()} QS Mind. All rights reserved. Quantix and the Weave mark belong to QS Mind. The
+          brand typeface, Urbanist, is used under the SIL Open Font License.
+        </span>
       </footer>
-    </div>
+    </>
   );
 }
 
@@ -106,31 +101,5 @@ function Part({ title, children }: { title: string; children: ReactNode }) {
       <h2 className="text-[15px] font-semibold">{title}</h2>
       {children}
     </section>
-  );
-}
-
-/** Kareem Safwat's K, as brand/founder/k-mark.svg draws it. */
-function FounderMark() {
-  return (
-    <svg viewBox="0 0 300 300" fill="none" className="size-10 shrink-0" aria-hidden="true" focusable="false">
-      <defs>
-        <linearGradient id="quantix-founder-k" x1="80" y1="70" x2="220" y2="230" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="#FEF08A" />
-          <stop offset="50%" stopColor="#D97706" />
-          <stop offset="100%" stopColor="#78350F" />
-        </linearGradient>
-      </defs>
-      <line x1="80" y1="70" x2="80" y2="230" stroke="url(#quantix-founder-k)" strokeWidth="8" strokeLinecap="square" />
-      <line x1="80" y1="150" x2="220" y2="70" stroke="url(#quantix-founder-k)" strokeWidth="8" strokeLinecap="square" />
-      <line
-        x1="80"
-        y1="150"
-        x2="220"
-        y2="230"
-        stroke="url(#quantix-founder-k)"
-        strokeWidth="8"
-        strokeLinecap="square"
-      />
-    </svg>
   );
 }

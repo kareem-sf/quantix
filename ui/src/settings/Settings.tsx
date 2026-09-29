@@ -1,6 +1,7 @@
 import { IconEye, IconEyeOff } from "@tabler/icons-react";
 import { useState, type FormEvent, type ReactNode } from "react";
-import { Link, useSearchParams } from "react-router";
+import { useSearchParams } from "react-router";
+import { About } from "../about/About";
 import { ProviderLogo } from "./ProviderLogo";
 import {
   PROVIDERS,
@@ -57,6 +58,7 @@ const SECTIONS = [
       </>
     ),
   ],
+  ["about", "About", () => <About />],
 ] as const;
 
 /** Only settings: how the office works, its AI, web research and what the AI has used. The firm's own details,
@@ -85,9 +87,6 @@ export function Settings() {
       <div className="flex flex-col gap-9">
         <Body />
       </div>
-      <Link to="/about" className="mt-12 self-start text-ink-3 hover:text-ink">
-        About Quantix
-      </Link>
     </div>
   );
 }

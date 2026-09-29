@@ -17,7 +17,6 @@ import { Overview } from "../tenders/Overview";
 import { Tenders } from "../tenders/Tenders";
 import { useTenders } from "../tenders/queries";
 import { TEAM, useDecisions } from "../office/queries";
-import { About } from "../about/About";
 import { Opening } from "./Opening";
 import { Shell } from "./Shell";
 import { useShell } from "./context";
@@ -90,7 +89,6 @@ export const routes: RouteObject[] = [
             element: <OpenDecision />,
           },
           { path: "/settings", element: <Settings /> },
-          { path: "/about", element: <About /> },
           { path: "/library", element: <Library /> },
           { path: "/directory", element: <Directory /> },
           { path: "/rules", element: <Rules /> },
