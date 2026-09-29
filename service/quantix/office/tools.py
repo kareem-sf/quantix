@@ -214,7 +214,23 @@ def _page_text(ctx: RunContext[Turn], session: Session, document: Document, foun
             f"{where}, read from the scan by OCR ({found.ocr_score:.0%} sure; each line is a row of the page, cells "
             f"split by |). Check figures that matter on the image with view_page:\n{found.text}"
         )
+    if document.kind == "cad":
+        me = session.get(Staff, ctx.deps.staff_id)
+        return f"{where}, the words on a CAD drawing. Its {_cad_work(me)}\n{found.text}"
     return f"{where}:\n{found.text}"
+
+
+def _cad_work(me: Staff | None) -> str:
+    """Where a CAD drawing's quantities come from: its own objects, never its words or a picture of it."""
+    if me is not None and me.is_manager:
+        return (
+            "counts, lengths and areas come from its own objects with the drawings work: give the takeoff to the "
+            "person on your team who does drawings or takeoff, with assign_task."
+        )
+    return (
+        "counts, lengths and areas come from its own objects: use the drawings work (drawing_overview, "
+        "query_drawing, measure_drawing), not its words."
+    )
 
 
 def read_sheet(
@@ -298,6 +314,8 @@ def view_page(
     enlarge as [left, top, right, bottom] in view_page pixels of the whole page."""
     with _working(ctx) as (session, me):
         document = _document(session, ctx.deps.tender_id, document_id)
+        if document.kind == "cad":
+            raise ValueError(f"{document.name} is a CAD drawing: {_cad_work(me)}")
         if document.kind not in ("pdf", "image") or not 1 <= page <= (document.page_count or 0):
             raise ValueError(
                 f"Only PDF pages and images can be viewed; {document.name} has {document.page_count or 0} pages: "

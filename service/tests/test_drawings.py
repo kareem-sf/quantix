@@ -512,3 +512,23 @@ def test_the_screen_copy_and_choosing_objects(client, flat):
 
 def test_the_reader_is_the_one_quantix_built():
     assert cad.reader().exists()
+
+
+def test_a_cad_drawing_points_to_its_objects_and_the_manager_to_his_team(client, flat):
+    """A drawing's quantities come from its objects: its words and a picture of it say so, and tell the Manager to
+    give the takeoff to his team."""
+    from pydantic_ai.exceptions import ModelRetry
+    from test_lookup import fake_turn
+
+    from quantix.office import tools
+
+    tender_id, drawing, qs_id = flat
+    with client.app.state.sessions() as session:
+        manager = office.hire(session, tender_id, "Rania Farouk", "Tender Manager", {}, is_manager=True)
+        session.commit()
+        manager_id = manager.id
+
+    words = tools.read_page(fake_turn(client, tender_id, qs_id), drawing, 1)
+    assert "the words on a CAD drawing" in words and "query_drawing, measure_drawing" in words
+    with pytest.raises(ModelRetry, match="CAD drawing: .*assign_task"):
+        tools.view_page(fake_turn(client, tender_id, manager_id), drawing, 1)
