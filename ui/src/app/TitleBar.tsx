@@ -20,6 +20,7 @@ import { useDesk } from "../tenders/queries";
 import type { Tender } from "../api/client";
 import { screenOf } from "./screens";
 import { useShell } from "./context";
+import { Logo } from "./Logo";
 
 /** Quantix's own title bar: back and forward, where the engineer is, search, what the team is doing, what needs
  * them and the team panel. Drag it to move the window; double-click it to maximise. In a narrower window search
@@ -36,6 +37,15 @@ export function TitleBar({ tender }: { tender?: Tender }) {
       data-tauri-drag-region
       className="relative flex h-[38px] shrink-0 items-center gap-0.5 border-b border-line bg-rail pl-2 select-none"
     >
+      <Link
+        to="/desk"
+        draggable={false}
+        aria-label="Quantix: your Desk"
+        title="Quantix"
+        className="mr-1 flex size-7 items-center justify-center rounded-md text-ink hover:bg-selected"
+      >
+        <Logo className="h-3.5" />
+      </Link>
       <Tool label="Sidebar (Ctrl+B)" onClick={shell.toggleSidebar}>
         <IconLayoutSidebar className="size-4" stroke={1.75} />
       </Tool>
