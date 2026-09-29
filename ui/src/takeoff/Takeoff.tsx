@@ -4,7 +4,7 @@ import { useParams, useSearchParams } from "react-router";
 import { pageImage, useDocuments } from "../documents/queries";
 import { useBoq, quantity as formatQuantity } from "../estimate/queries";
 import { firstName, useOffice } from "../office/queries";
-import { Findings, Reopen, ReviewNote, SendBack, WITH_MANAGER } from "../review/Review";
+import { APPROVE, Findings, Reopen, ReviewNote, SendBack, WITH_MANAGER } from "../review/Review";
 import { DrawingWork } from "./TenderQueries";
 import { CadDrawing, LayerList, type Box, type Shape } from "./CadDrawing";
 import {
@@ -436,7 +436,7 @@ export function Takeoff() {
               }}
               onChoose={(layer) => setChosen(onLayer(copy.data!, layer))}
             />
-            {documentId && <DrawingWork tenderId={tenderId} documentId={documentId} />}
+            {documentId && isCad && <DrawingWork tenderId={tenderId} documentId={documentId} />}
           </>
         ) : (
           <SheetPanel
@@ -589,7 +589,7 @@ function ScaleNote({ tenderId, sheet }: { tenderId: string; sheet: Sheet }) {
       {sheet.scale.status === "reviewed" && (
         <>
           <ReviewNote reviewedBy={sheet.scale.reviewed_by} note={sheet.scale.review_note} people={people} />
-          <button onClick={() => decide.mutate({ id: sheet.scale!.id, approve: true })} className="font-medium text-ink">
+          <button onClick={() => decide.mutate({ id: sheet.scale!.id, approve: true })} className={APPROVE}>
             Approve scale
           </button>
           <SendBack onSend={(reason) => decide.mutate({ id: sheet.scale!.id, approve: false, reason })} />
@@ -750,7 +750,7 @@ function SheetPanel({
             <span className="flex flex-wrap gap-3 pt-1">
               {m.status === "reviewed" && (
                 <>
-                  <button onClick={() => decide.mutate({ id: m.id, approve: true })} className="font-medium">
+                  <button onClick={() => decide.mutate({ id: m.id, approve: true })} className={APPROVE}>
                     Approve
                   </button>
                   <SendBack onSend={(reason) => decide.mutate({ id: m.id, approve: false, reason })} />
@@ -803,7 +803,7 @@ function UnitsNote(props: { tenderId: string; documentId: string; scale: Sheet["
       {scale.status === "reviewed" && (
         <>
           <ReviewNote reviewedBy={scale.reviewed_by} note={scale.review_note} people={people} />
-          <button onClick={() => decide.mutate({ id: scale.id, approve: true })} className="font-medium text-ink">
+          <button onClick={() => decide.mutate({ id: scale.id, approve: true })} className={APPROVE}>
             Approve units
           </button>
           <SendBack onSend={(reason) => decide.mutate({ id: scale.id, approve: false, reason })} />

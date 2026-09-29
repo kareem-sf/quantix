@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { Face } from "../office/Face";
 import { firstName, useOffice, type Staff } from "../office/queries";
-import { Findings, Reopen, ReviewNote, SendBack, WITH_MANAGER } from "../review/Review";
+import { APPROVE, Findings, Reopen, ReviewNote, SendBack, WITH_MANAGER } from "../review/Review";
 import {
   money,
   quantity,
@@ -273,7 +273,7 @@ function FactLine({ tenderId, fact, people }: { tenderId: string; fact: Fact; pe
         {fact.status === "reviewed" ? (
           <span className="flex flex-wrap items-center justify-end gap-2">
             <ReviewNote reviewedBy={fact.reviewed_by} note={fact.review_note} people={people} />
-            <button onClick={() => decide.mutate({ kind: "fact", id: fact.id, approve: true })} className="font-medium">
+            <button onClick={() => decide.mutate({ kind: "fact", id: fact.id, approve: true })} className={APPROVE}>
               Approve
             </button>
             <SendBack onSend={(reason) => decide.mutate({ kind: "fact", id: fact.id, approve: false, reason })} />
@@ -303,7 +303,7 @@ function Decide(props: {
     return (
       <div className="flex flex-col gap-2">
         <textarea
-          aria-label="Why reject it"
+          aria-label="What to put right"
           value={reason}
           onChange={(e) => setReason(e.target.value)}
           placeholder={`Tell ${props.who ? firstName(props.who) : "the office"} what’s wrong`}
@@ -328,7 +328,7 @@ function Decide(props: {
           {props.approveLabel}
         </button>
         <button onClick={() => setRejecting(true)} className="h-[38px] rounded-lg border border-line-strong px-3.5 text-sm">
-          Reject
+          Send back
         </button>
       </div>
     </div>
@@ -559,7 +559,7 @@ function SummaryPanel(props: {
           <ReviewNote reviewedBy={markups.reviewed_by} note={markups.review_note} people={props.people} />
           {markups.status === "reviewed" && (
             <span className="flex flex-wrap gap-3">
-              <button onClick={() => decide.mutate({ id: markups.id, approve: true })} className="font-medium">
+              <button onClick={() => decide.mutate({ id: markups.id, approve: true })} className={APPROVE}>
                 Approve markups
               </button>
               <SendBack onSend={(reason) => decide.mutate({ id: markups.id, approve: false, reason })} />

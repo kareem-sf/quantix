@@ -1089,3 +1089,25 @@ The engineer runs several tenders at once and had no place to see them together,
   tender; the title-bar bell counts the same and opens the Desk.
 - **Checks:** 2 service tests (the Desk's counts, archiving and dated outcomes) and 3 interface tests (the Desk,
   the register, the tender's menu); walked through in the desktop window on the real tenders.
+
+## 29 September 2026: each screen one job
+
+- **Overview:** status and the next step only. The office's lessons moved to Company rules as "Suggested by the
+  office" (`GET /lessons`), with Keep as a rule and Drop and a quiet count in the sidebar; warnings the office
+  accepted fold under Before release; the Estimate line says its total is before VAT; record references such as
+  "markups 99d1acc5" no longer show in what the team writes.
+- **Estimate:** the header shows the tender total excluding VAT; a totals bar under the BOQ gives net,
+  preliminaries, overheads and profit, and opens the price summary.
+- **Takeoff:** opens a drawing by itself (one waiting for the engineer, the last measured, or the package's first),
+  and shows a CAD drawing's layer map and Quantix's checks beside it. Queries keeps the client queries and the
+  checks on the BOQ and across drawings. The per-drawing checks read DWG and DXF objects, so they aren't offered on
+  PDFs, where they failed.
+- **Settings:** Office, AI, Web research and Usage, each its own tab.
+- **Chat:** three or more turns in a row with nothing said fold to one line ("13 earlier turns at work").
+- **One look for decisions:** Approve is a real button on every screen and Send back beside it; the Estimate's
+  Reject became Send back, as everywhere else.
+- **Shortcuts on an Arabic keyboard:** Ctrl+K, Ctrl+J, Ctrl+B and Ctrl+1–7 match the key's place (`KeyboardEvent.code`),
+  not its letter, which on an Arabic layout is ن, ت and so on; found in the desktop window.
+- **Checks:** interface tests for the suggested rules, the totals bar, drawing work on Takeoff, Settings sections,
+  record references and the Arabic layout; a service test for `GET /lessons`; walked through in the desktop window
+  on the real tender.

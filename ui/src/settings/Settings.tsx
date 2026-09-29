@@ -1,5 +1,6 @@
 import { IconEye, IconEyeOff } from "@tabler/icons-react";
 import { useState, type FormEvent, type ReactNode } from "react";
+import { useSearchParams } from "react-router";
 import { ProviderLogo } from "./ProviderLogo";
 import {
   PROVIDERS,
@@ -23,16 +24,55 @@ const input = "h-9 rounded-lg border border-line-strong px-3 text-[13px] outline
 const secondary = "h-9 rounded-lg border border-line-strong bg-white px-3 text-[13px] disabled:text-ink-4";
 const primary = "h-9 rounded-lg bg-ink px-4 text-[13px] text-white disabled:bg-line-strong disabled:text-ink-3";
 
+const SECTIONS = [
+  ["office", "Office", () => <OfficeMode />],
+  [
+    "ai",
+    "AI",
+    () => (
+      <>
+        <Connections />
+        <OfficeAI />
+      </>
+    ),
+  ],
+  ["web", "Web research", () => <WebResearch />],
+  [
+    "usage",
+    "Usage",
+    () => (
+      <>
+        <Scorecard />
+        <Allowance />
+      </>
+    ),
+  ],
+] as const;
+
+/** Only settings: how the office works, its AI, web research and what the AI has used. The firm's own details,
+ * library, directory and rules are under Company in the sidebar. */
 export function Settings() {
+  const [params, setParams] = useSearchParams();
+  const [key, , Body] = SECTIONS.find(([k]) => k === params.get("section")) ?? SECTIONS[0];
   return (
-    <div className="flex w-full max-w-[704px] flex-col gap-9 px-8 py-11">
-      <h1 className="text-[22px] font-semibold tracking-tight">Settings</h1>
-      <OfficeMode />
-      <Connections />
-      <OfficeAI />
-      <WebResearch />
-      <Scorecard />
-      <Allowance />
+    <div className="flex w-full max-w-[704px] flex-col px-8 py-8">
+      <h1 className="text-[24px] font-semibold tracking-tight">Settings</h1>
+      <div role="tablist" aria-label="Settings" className="mt-4 mb-7 flex gap-5 border-b border-line">
+        {SECTIONS.map(([k, label]) => (
+          <button
+            key={k}
+            role="tab"
+            aria-selected={k === key}
+            onClick={() => setParams(k === "office" ? {} : { section: k })}
+            className={`h-8 ${k === key ? "font-semibold shadow-[inset_0_-2px_0_var(--color-ink)]" : "text-ink-2 hover:text-ink"}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="flex flex-col gap-9">
+        <Body />
+      </div>
     </div>
   );
 }
@@ -95,7 +135,9 @@ function Connections() {
       {connections.data?.length === 0 && (
         <p className="text-ink-2">Add an AI connection so the office can start work.</p>
       )}
-      {connections.data?.map((connection) => <ConnectionRow key={connection.id} connection={connection} />)}
+      {connections.data?.map((connection) => (
+        <ConnectionRow key={connection.id} connection={connection} />
+      ))}
       <AddConnection />
     </Section>
   );
@@ -124,7 +166,12 @@ function ConnectionRow({ connection }: { connection: Connection }) {
       </div>
       <div className="flex items-center gap-2">
         {models.data && models.data.length > 0 ? (
-          <select aria-label="Model" value={model} onChange={(e) => setModel(e.target.value)} className={`${input} grow`}>
+          <select
+            aria-label="Model"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            className={`${input} grow`}
+          >
             <option value="">Choose a model…</option>
             {models.data.map((name) => (
               <option key={name} value={name}>
@@ -310,7 +357,9 @@ function Scorecard() {
                     {m.finished} of {m.turns}
                   </td>
                   <td className={cell}>{m.calls ? `${Math.round((100 * m.calls_sent_back) / m.calls)}%` : "–"}</td>
-                  <td className={cell}>{m.accepted + m.sent_back ? `${m.accepted} of ${m.accepted + m.sent_back}` : "–"}</td>
+                  <td className={cell}>
+                    {m.accepted + m.sent_back ? `${m.accepted} of ${m.accepted + m.sent_back}` : "–"}
+                  </td>
                   <td className={cell}>{m.accepted ? compact.format(m.tokens / m.accepted) : "–"}</td>
                 </tr>
               ))}
@@ -371,7 +420,11 @@ function WebKeyRow(props: { service: WebService; label: string; note: string; hi
             placeholder="Free key"
             className={`${input} grow`}
           />
-          <button aria-label={`Save the ${props.label} key`} disabled={!key.trim() || save.isPending} className={secondary}>
+          <button
+            aria-label={`Save the ${props.label} key`}
+            disabled={!key.trim() || save.isPending}
+            className={secondary}
+          >
             {save.isPending ? "Checking…" : "Save"}
           </button>
         </form>

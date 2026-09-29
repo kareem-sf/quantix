@@ -72,7 +72,7 @@ export function Overview() {
       {!office.data.ai_ready && (
         <p className="mt-6 text-ink-2">
           Choose the office’s AI in{" "}
-          <Link to="/settings" className="font-medium text-ink underline underline-offset-4">
+          <Link to="/settings?section=ai" className="font-medium text-ink underline underline-offset-4">
             Settings
           </Link>{" "}
           so the team can start work.

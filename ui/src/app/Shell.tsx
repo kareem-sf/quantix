@@ -45,7 +45,8 @@ export function Shell() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const key = e.key.toLowerCase();
+      // the key's place, not its letter: the shortcuts work the same with an Arabic keyboard layout
+      const key = e.code.replace(/^(Key|Digit)/, "").toLowerCase();
       if (e.ctrlKey && !e.shiftKey && !e.altKey) {
         if (key === "k") setPalette((open) => !open);
         else if (key === "j") setTeam((t) => ({ ...t, open: !t.open, person: null }));

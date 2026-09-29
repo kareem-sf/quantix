@@ -1,6 +1,6 @@
 import { Link, useParams } from "react-router";
 import { firstName, useOffice, type Staff } from "../office/queries";
-import { Findings, Reopen, ReviewNote, SendBack, WITH_MANAGER } from "../review/Review";
+import { APPROVE, Findings, Reopen, ReviewNote, SendBack, WITH_MANAGER } from "../review/Review";
 import {
   useChecks,
   useDecideLayerMap,
@@ -83,7 +83,7 @@ function QueryCard(props: { tenderId: string; query: TenderQuery; people: Map<st
       <span className="flex flex-wrap gap-3 pt-1">
         {q.status === "reviewed" && (
           <>
-            <button onClick={() => decide.mutate({ id: q.id, approve: true })} className="font-medium">
+            <button onClick={() => decide.mutate({ id: q.id, approve: true })} className={APPROVE}>
               Approve for the client
             </button>
             <SendBack onSend={(reason) => decide.mutate({ id: q.id, approve: false, reason })} />
@@ -100,7 +100,8 @@ function QueryCard(props: { tenderId: string; query: TenderQuery; people: Map<st
   );
 }
 
-/** Beside a drawing on the Takeoff screen: what its layers and blocks are, and what Quantix's checks find on it. */
+/** Beside a CAD drawing on the Takeoff screen: what its layers and blocks are, and what Quantix's checks find on it.
+ * The checks read a drawing's own objects, so they run on DWG and DXF files, not on PDFs. */
 export function DrawingWork({ tenderId, documentId }: { tenderId: string; documentId: string }) {
   const maps = useLayerMaps(tenderId);
   const office = useOffice(tenderId);
@@ -145,7 +146,7 @@ function MapCard(props: { tenderId: string; layerMap: LayerMap; people: Map<stri
       <span className="flex flex-wrap gap-3 pt-1">
         {m.status === "reviewed" && (
           <>
-            <button onClick={() => decide.mutate({ id: m.id, approve: true })} className="font-medium">
+            <button onClick={() => decide.mutate({ id: m.id, approve: true })} className={APPROVE}>
               Approve the map
             </button>
             <SendBack onSend={(reason) => decide.mutate({ id: m.id, approve: false, reason })} />

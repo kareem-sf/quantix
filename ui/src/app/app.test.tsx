@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { fakeService, openApp } from "../test/app";
@@ -128,6 +128,15 @@ describe("Quantix shell", () => {
     await userEvent.keyboard("{Control>}b{/Control}");
     expect(within(sidebar).queryByText("Company")).not.toBeInTheDocument(); // folded to icons
     expect(within(sidebar).getByRole("link", { name: "Estimate" })).toBeInTheDocument();
+  });
+
+  it("keeps its shortcuts on an Arabic keyboard layout", async () => {
+    fakeService({ tenders: [school] });
+    openApp("/tenders/t1");
+    await screen.findByRole("heading", { name: "Nothing needs you right now" });
+
+    fireEvent.keyDown(document, { key: "ن", code: "KeyK", ctrlKey: true }); // K on an Arabic layout
+    expect(screen.getByRole("dialog", { name: "Search or jump to" })).toBeInTheDocument();
   });
 
   it("opens and closes the team beside any screen", async () => {
