@@ -1339,7 +1339,11 @@ export interface paths {
         delete: operations["remove_rule_rules__rule_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Change Rule
+         * @description The engineer adjusts a rule; an example adjusted is the firm's own rule from then on.
+         */
+        patch: operations["change_rule_rules__rule_id__patch"];
         trace?: never;
     };
     "/company": {
@@ -2793,6 +2797,13 @@ export interface components {
              */
             keys: string[];
         };
+        /** RuleChange */
+        RuleChange: {
+            /** Topic */
+            topic?: string | null;
+            /** Text */
+            text?: string | null;
+        };
         /** RuleIn */
         RuleIn: {
             /** Topic */
@@ -2808,6 +2819,11 @@ export interface components {
             text: string;
             /** Id */
             id: string;
+            /**
+             * Example
+             * @description One Quantix starts every firm with, for the engineer to adjust or remove
+             */
+            example: boolean;
             /**
              * Created At
              * Format: date-time
@@ -6368,6 +6384,43 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    change_rule_rules__rule_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RuleChange"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuleOut"];
+                };
             };
             /** @description Validation Error */
             422: {

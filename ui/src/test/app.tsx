@@ -391,7 +391,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     if (lesson && method === "PATCH") {
       lesson.status = body.status;
       if (body.status === "kept")
-        state.rules.push({ id: `r${state.rules.length + 1}`, topic: lesson.topic, text: lesson.text, created_at: "" });
+        state.rules.push({ id: `r${state.rules.length + 1}`, topic: lesson.topic, text: lesson.text, example: false, created_at: "" });
       return json(lesson);
     }
     if (path === "/ai/usage") return json(state.usage);
@@ -421,9 +421,14 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     }
     if (path === "/rules" && method === "GET") return json(state.rules);
     if (path === "/rules" && method === "POST") {
-      const rule = { id: `r${state.rules.length + 1}`, created_at: "2026-09-23T10:00:00Z", ...body };
+      const rule = { id: `r${state.rules.length + 1}`, created_at: "2026-09-23T10:00:00Z", example: false, ...body };
       state.rules.push(rule);
       return json(rule, 201);
+    }
+    const rule = state.rules.find((r) => path === `/rules/${r.id}`);
+    if (rule && method === "PATCH") {
+      Object.assign(rule, body, { example: false });
+      return json(rule);
     }
     if (path.startsWith("/rules/") && method === "DELETE") {
       state.rules = state.rules.filter((r) => `/rules/${r.id}` !== path);

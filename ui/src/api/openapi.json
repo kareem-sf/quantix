@@ -4670,6 +4670,67 @@
       }
     },
     "/rules/{rule_id}": {
+      "patch": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Change Rule",
+        "description": "The engineer adjusts a rule; an example adjusted is the firm's own rule from then on.",
+        "operationId": "change_rule_rules__rule_id__patch",
+        "parameters": [
+          {
+            "name": "rule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rule Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleChange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
         "tags": [
           "company"
@@ -9324,6 +9385,37 @@
         "title": "Rule",
         "description": "Which objects of a drawing space to take: every condition given must hold, and within a list any one will do.\nAnnotation (the drawing of dimensions, leaders and tables) is never taken."
       },
+      "RuleChange": {
+        "properties": {
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "title": "RuleChange"
+      },
       "RuleIn": {
         "properties": {
           "topic": {
@@ -9362,6 +9454,11 @@
             "type": "string",
             "title": "Id"
           },
+          "example": {
+            "type": "boolean",
+            "title": "Example",
+            "description": "One Quantix starts every firm with, for the engineer to adjust or remove"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -9373,6 +9470,7 @@
           "topic",
           "text",
           "id",
+          "example",
           "created_at"
         ],
         "title": "RuleOut"

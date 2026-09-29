@@ -1111,3 +1111,15 @@ The engineer runs several tenders at once and had no place to see them together,
 - **Checks:** interface tests for the suggested rules, the totals bar, drawing work on Takeoff, Settings sections,
   record references and the Arabic layout; a service test for `GET /lessons`; walked through in the desktop window
   on the real tender.
+
+## 29 September 2026: example company rules any firm starts from
+
+The engineer asked for rules any company in any market can use, present by default, as an example and a
+reference to adjust. Migration 0026 adds 23 of them once to every database (new or existing), marked `example`:
+quantities, rates, markups, subcontract, exclusions and qualifications, tender queries, submission, risk and house
+style. None names a currency, tax, method of measurement or local standard: the office reads those from each
+tender. Where a figure is given (5% quantity difference, 30-day quote validity) the rule says it is the firm's to
+change. Company rules shows each as Example, with Edit (`PATCH /rules/{id}`, which makes it the firm's own) and
+Remove. Removed or edited, they never come back. Service tests start from a firm with no rules; one test checks a
+new firm's examples, that none names a market, editing, and that a restart doesn't add them again. Rehearsed on a
+copy of the real database (23 rules added, nothing else changed).

@@ -1,11 +1,14 @@
 import io
 from decimal import Decimal
 
+from conftest import TOKEN
+from fastapi.testclient import TestClient
 from PIL import Image
 from test_documents import read_all, upload
 from test_estimate import bill
 
 from quantix import company
+from quantix.api.app import create_app
 from quantix.boq import records as boq
 from quantix.estimate import records as estimate
 from quantix.office import agents
@@ -55,6 +58,26 @@ def test_every_team_reads_the_firms_rules(client):
 
     assert client.delete(f"/rules/{rule.json()['id']}").status_code == 204
     assert [r["topic"] for r in client.get("/rules").json()] == ["Exclusions"]
+
+
+def test_a_new_firm_starts_with_example_rules_it_adjusts(tmp_path):
+    with TestClient(create_app(tmp_path, TOKEN), headers={"Authorization": f"Bearer {TOKEN}"}) as fresh:
+        rules = fresh.get("/rules").json()
+        assert len(rules) == 23 and all(r["example"] for r in rules)
+        topics = {r["topic"] for r in rules}
+        assert {"Quantities", "Rates", "Markups", "Subcontract", "Tender queries", "Submission"} <= topics
+        text = " ".join(r["text"] for r in rules)
+        for local in ("SAR", "VAT", "POMI", "SMM", "Saudi"):  # nothing tied to one market; each tender says those
+            assert local not in text
+
+        quote = next(r for r in rules if "30 days" in r["text"])
+        changed = fresh.patch(f"/rules/{quote['id']}", json={"text": "Quotes are valid for 14 days."}).json()
+        assert (changed["text"], changed["topic"]) == ("Quotes are valid for 14 days.", "Rates")
+        assert changed["example"] is False  # adjusted: the firm's own rule now
+        assert fresh.patch("/rules/nope", json={"text": "x"}).status_code == 404
+
+    with TestClient(create_app(tmp_path, TOKEN), headers={"Authorization": f"Bearer {TOKEN}"}) as reopened:
+        assert len(reopened.get("/rules").json()) == 23  # added once, never again when Quantix restarts
 
 
 def test_the_engineer_records_how_a_tender_went(client):
