@@ -1,0 +1,21 @@
+/* Tailwind v4: paste into your CSS entry after @import "tailwindcss"; */
+@theme {
+  --font-sans: 'Urbanist', 'Segoe UI', system-ui, sans-serif;
+  --color-qs-stage: #0E1013;
+  --color-qs-panel: #15181D;
+  --color-qs-tile: #111418;
+  --color-qs-ivory: #F3EFE6;
+  --color-qs-ink: #1F2328;
+  --color-qs-mute: #9A9690;
+  --color-qs-mute-light: #6B6760;
+  --color-qs-paper: #FFFFFF;
+  --color-qs-paper-warm: #F7F5F0;
+  --color-qs-mind: #E3A82B;
+  --color-qs-mind-deep: #B88518;
+  --color-quanta: #5B8CFF;
+  --color-quanta-deep: #588AFF;
+  --color-quantix: #E0703A;
+  --color-quantix-deep: #E0703A;
+  --color-tawreed: #E9AD38;
+  --color-tawreed-deep: #BD8415;
+}

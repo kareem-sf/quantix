@@ -25,11 +25,16 @@ The same values are CSS custom properties in [tokens.css](tokens.css).
 | --- | --- |
 | `logo/` | SVG masters, pure paths: the mark (`quantix-mark-solid-on-dark`, `-on-light`, `-white`, `-black`), the horizontal and stacked lockups, and the endorsed lockup (`quantix-lockup-endorsed-on-dark`, `-on-light`) |
 | `icons/` | App icon (`app-icon.svg`, `app-icon-1024.png`, `icon.ico`, `icon.icns`), favicons, touch and PWA icons, `site.webmanifest` |
+| `png/` | Every logo master rendered as a PNG (lockups 2000 px wide, marks 1024 px) for documents, decks and anywhere SVG can't go |
 | `social/` | `og-image-1200x630.png` for link previews |
 | `founder/` | Kareem Safwat's K mark and signature, on dark and on light |
+| `fonts/` | Urbanist, the brand typeface (variable weight), with its SIL Open Font License |
+| `tokens/` | The QS Mind house's colours and type as CSS custom properties, JSON and a Tailwind theme; `tokens.css` here is Quantix's own |
+| `brand-book.html` | The QS Mind brand book: the house, each product's mark and how they are used together. Open it in a browser |
 
 The desktop icons in `desktop/icons/` are generated from `icons/app-icon-1024.png`, and the interface's favicon is
-`icons/favicon.svg`. The wordmark is set in Urbanist Light and outlined in every master, so no font is needed.
+`icons/favicon.svg`. The wordmark is set in Urbanist Light and outlined in every master, so no font is needed to show
+the logo; `fonts/` is for setting new brand text, such as a deck or a web page.
 
 ## Founder
 
