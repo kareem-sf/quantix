@@ -147,7 +147,7 @@ describe("Overview and decisions", () => {
     expect(await within(card).findByText("18.00 is -40% from the firm's own rates.")).toBeInTheDocument();
     // the Manager's recommended correction comes first, and says so
     const [first, second] = within(card).getAllByRole("button", { pressed: false });
-    expect(first).toHaveTextContent("Price excavation in rock with a breakerRecommended");
+    expect(first).toHaveTextContent("RecommendedPrice excavation in rock with a breaker");
     expect(second).not.toHaveTextContent("Recommended");
 
     await userEvent.click(within(card).getByRole("button", { name: "Answer in your own words" }));
@@ -188,7 +188,7 @@ describe("Office", () => {
     expect(await within(room).findByText("Check the tender security, please.")).toBeInTheDocument();
     expect(within(room).getByText("Rania asked Omar to find the tender security clause")).toBeInTheDocument();
     expect(within(room).getByText("Raised a concern")).toBeInTheDocument();
-    expect(screen.getByTitle("What the team is doing")).toHaveTextContent("Rania: Reviewing Omar's result");
+    expect(screen.getByTitle("Rania: Reviewing Omar's result")).toHaveTextContent("Rania: Reviewing Omar's result");
 
     await userEvent.click(within(room).getByRole("button", { name: "About Omar Haddad" }));
     const profile = await screen.findByRole("complementary", { name: "Omar Haddad" });

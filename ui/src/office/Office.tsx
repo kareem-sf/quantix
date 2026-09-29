@@ -1,7 +1,8 @@
 import { IconArrowRight, IconArrowUp, IconChevronRight, IconHash, IconPlayerStopFilled, IconX } from "@tabler/icons-react";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router";
-import { useShell } from "../app/context";
+import { TEAM_PANEL, useShell } from "../app/context";
+import { Resizer } from "../app/Resizer";
 import { Findings } from "../review/Review";
 import { isChecked, type Checked } from "../review/queries";
 import { useNeedsYou } from "../tenders/needsYou";
@@ -28,9 +29,10 @@ import { Sources } from "./Sources";
 import { TurnLog } from "./TurnLog";
 
 /** The team beside whatever the engineer is doing: the Tender Manager's chat first, then each person's, then the
- * team room. Ctrl+J opens and closes it. */
-export function TeamPanel({ tenderId }: { tenderId: string }) {
-  const { team, showTeam, hideTeam, showPerson } = useShell();
+ * team room. Ctrl+J opens and closes it; its edge drags. In a narrower window it floats over the screen, and in a
+ * small one it takes the whole window. */
+export function TeamPanel({ tenderId, leaving = false }: { tenderId: string; leaving?: boolean }) {
+  const { team, showTeam, hideTeam, showPerson, fit, teamWidth, setTeamWidth } = useShell();
   const office = useOffice(tenderId);
   const decisions = useDecisions(tenderId);
   const stop = useStop(tenderId);
@@ -42,78 +44,100 @@ export function TeamPanel({ tenderId }: { tenderId: string }) {
   const person = staff.find((m) => m.id === team.person);
   const asking = new Set((decisions.data ?? []).filter((d) => d.status === "waiting").map((d) => d.raised_by));
   const working = office.data?.state === "working";
+  const [settled, setSettled] = useState(false); // slid open, so its dragging edge isn't clipped
+
+  const docked = fit === "wide";
+  const whole = fit === "small";
+  const frame = docked
+    ? `relative ${leaving ? "animate-shrink overflow-hidden" : settled ? "" : "animate-grow overflow-hidden"}`
+    : `absolute inset-y-0 right-0 z-30 shadow-[-10px_0_28px_rgb(0_0_0/0.10)] ${whole ? "w-full" : ""} ${leaving ? "animate-to-right" : "animate-from-right"}`;
 
   return (
     <aside
       aria-label="Team"
-      className="relative flex w-[400px] shrink-0 flex-col border-l border-line bg-white max-[1279px]:absolute max-[1279px]:inset-y-0 max-[1279px]:right-0 max-[1279px]:z-20 max-[1279px]:shadow-[-10px_0_28px_rgba(0,0,0,0.10)]"
+      aria-hidden={leaving || undefined}
+      inert={leaving}
+      onAnimationEnd={(e) => e.target === e.currentTarget && setSettled(true)}
+      style={whole ? undefined : { width: teamWidth, maxWidth: "calc(100% - 52px)" }}
+      className={`flex shrink-0 flex-col border-l border-line bg-white ${frame}`}
     >
-      <div className="flex items-center gap-2 px-4 pt-3">
-        <span className="grow font-semibold">Team</span>
-        {working && (
-          <button onClick={() => stop.mutate()} className="flex h-7 items-center gap-1.5 rounded-md px-2 text-ink-2 hover:bg-selected hover:text-ink">
-            <IconPlayerStopFilled className="size-3" />
-            Stop the office
+      {!whole && (
+        <Resizer
+          edge="left"
+          width={teamWidth}
+          label="Team panel width"
+          onWidth={setTeamWidth}
+          onReset={() => setTeamWidth(TEAM_PANEL.usual)}
+        />
+      )}
+      <div className="relative flex min-h-0 grow flex-col" style={docked ? { minWidth: teamWidth } : undefined}>
+        <div className="flex items-center gap-2 px-4 pt-3">
+          <span className="grow font-semibold">Team</span>
+          {working && (
+            <button onClick={() => stop.mutate()} className="flex h-7 items-center gap-1.5 rounded-md px-2 text-ink-2 hover:bg-selected hover:text-ink">
+              <IconPlayerStopFilled className="size-3" />
+              Stop the office
+            </button>
+          )}
+          <button
+            aria-label="Close the team panel"
+            title="Close (Ctrl+J)"
+            onClick={hideTeam}
+            className="flex size-7 items-center justify-center rounded-md text-ink-3 hover:bg-selected hover:text-ink"
+          >
+            <IconX className="size-4" stroke={1.75} />
           </button>
-        )}
-        <button
-          aria-label="Close the team panel"
-          title="Close (Ctrl+J)"
-          onClick={hideTeam}
-          className="flex size-7 items-center justify-center rounded-md text-ink-3 hover:bg-selected hover:text-ink"
-        >
-          <IconX className="size-4" stroke={1.75} />
-        </button>
-      </div>
-      <div role="tablist" aria-label="Conversations" className="flex shrink-0 gap-0.5 overflow-x-auto border-b border-line px-2 pt-2">
-        {active.map((m) => (
-          <Tab key={m.id} on={channel === m.id} label={m.name} onClick={() => showTeam(m.id)}>
-            <span className="relative">
-              <Face id={m.id} size={28} />
-              {asking.has(m.id) ? (
-                <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-attention ring-2 ring-white" />
-              ) : m.now ? (
-                <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-approved ring-2 ring-white" />
-              ) : null}
+        </div>
+        <div role="tablist" aria-label="Conversations" className="flex shrink-0 gap-0.5 overflow-x-auto border-b border-line px-2 pt-2">
+          {active.map((m) => (
+            <Tab key={m.id} on={channel === m.id} label={m.name} onClick={() => showTeam(m.id)}>
+              <span className="relative">
+                <Face id={m.id} size={28} />
+                {asking.has(m.id) ? (
+                  <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-attention ring-2 ring-white" />
+                ) : m.now ? (
+                  <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-approved ring-2 ring-white" />
+                ) : null}
+              </span>
+              {firstName(m)}
+            </Tab>
+          ))}
+          <Tab on={channel === TEAM} label="Team room" onClick={() => showTeam(TEAM)}>
+            <span className="flex size-7 items-center justify-center rounded-full bg-selected text-ink-2">
+              <IconHash className="size-4" stroke={1.75} />
             </span>
-            {firstName(m)}
+            Team room
           </Tab>
-        ))}
-        <Tab on={channel === TEAM} label="Team room" onClick={() => showTeam(TEAM)}>
-          <span className="flex size-7 items-center justify-center rounded-full bg-selected text-ink-2">
-            <IconHash className="size-4" stroke={1.75} />
-          </span>
-          Team room
-        </Tab>
+        </div>
+        {office.data && active.length === 0 && (
+          <p className="px-5 pt-4 leading-normal text-ink-3">
+            The Tender Manager joins when you first write to the office, and hires the team the tender needs.
+          </p>
+        )}
+        <section aria-label="Conversation" className="flex min-h-0 grow flex-col">
+          <Conversation
+            key={channel}
+            tenderId={tenderId}
+            channel={channel}
+            staff={staff}
+            title={channel === TEAM ? "Team room" : (staff.find((m) => m.id === channel)?.name ?? "")}
+            notice={
+              office.data?.state === "paused"
+                ? (office.data.notice ?? "The office is stopped. Send a message to carry on.")
+                : null
+            }
+            onPerson={showPerson}
+          />
+        </section>
+        {person && (
+          <Profile
+            tenderId={tenderId}
+            member={person}
+            onMessage={channel === person.id ? undefined : () => showTeam(person.id)}
+            onClose={() => showPerson(null)}
+          />
+        )}
       </div>
-      {office.data && active.length === 0 && (
-        <p className="px-5 pt-4 leading-normal text-ink-3">
-          The Tender Manager joins when you first write to the office, and hires the team the tender needs.
-        </p>
-      )}
-      <section aria-label="Conversation" className="flex min-h-0 grow flex-col">
-        <Conversation
-          key={channel}
-          tenderId={tenderId}
-          channel={channel}
-          staff={staff}
-          title={channel === TEAM ? "Team room" : (staff.find((m) => m.id === channel)?.name ?? "")}
-          notice={
-            office.data?.state === "paused"
-              ? (office.data.notice ?? "The office is stopped. Send a message to carry on.")
-              : null
-          }
-          onPerson={showPerson}
-        />
-      </section>
-      {person && (
-        <Profile
-          tenderId={tenderId}
-          member={person}
-          onMessage={channel === person.id ? undefined : () => showTeam(person.id)}
-          onClose={() => showPerson(null)}
-        />
-      )}
     </aside>
   );
 }
@@ -241,7 +265,7 @@ export function Conversation(props: {
           <button
             aria-label="Send"
             disabled={!draft.trim() || send.isPending}
-            className="flex size-8 items-center justify-center rounded-lg bg-ink text-white disabled:bg-line-strong"
+            className="flex size-8 items-center justify-center rounded-lg bg-ink text-white hover:bg-ink/85 active:scale-[0.98] disabled:cursor-default disabled:bg-subtle disabled:text-ink-4 disabled:active:scale-100"
           >
             <IconArrowUp className="size-4" stroke={1.75} />
           </button>
@@ -384,7 +408,6 @@ function Said({ message, person }: { message: Message; person?: Staff }) {
   );
 }
 
-/** A question put to the engineer, answered where it was asked: pick an option and send it, or open it in full. */
 /** A question put to the engineer, answered where it was asked: pick an option, or answer in your own words. An
  * escalation shows where the problem shows, what Quantix found, and the Manager's recommended correction first. */
 function Question({ tenderId, decision }: { tenderId: string; decision: Decision }) {
@@ -393,11 +416,22 @@ function Question({ tenderId, decision }: { tenderId: string; decision: Decision
   const [own, setOwn] = useState<string | null>(null); // the engineer's own words, once they chose to write them
   const waiting = decision.status === "waiting";
   const escalated = isChecked(decision.subject_kind) && Boolean(decision.subject_id);
-  const reply = own?.trim() || choice;
+  const reply = own !== null ? own.trim() : choice;
   return (
-    <div className="flex flex-col gap-2.5 rounded-xl border border-line-strong px-4 py-3.5" role="group" aria-label={decision.title}>
-      <span className="text-xs font-semibold text-ink-2">{waiting ? "Needs your decision" : "You decided"}</span>
-      <span className="font-semibold">{decision.title}</span>
+    <div
+      className="flex animate-enter flex-col gap-3 rounded-xl border border-line-strong bg-white p-4"
+      role="group"
+      aria-label={decision.title}
+    >
+      {waiting ? (
+        <span className="flex items-center gap-1.5 text-xs font-medium text-attention">
+          <span className="size-1.5 rounded-full bg-attention" />
+          Needs your decision
+        </span>
+      ) : (
+        <span className="text-xs font-medium text-ink-3">You decided</span>
+      )}
+      <span className="text-[15px] leading-snug font-semibold">{decision.title}</span>
       <Prose text={decision.text} className="text-sm text-[#27272A]" />
       {waiting && decision.sources && decision.sources.length > 0 && (
         <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-ink-3">
@@ -410,19 +444,21 @@ function Question({ tenderId, decision }: { tenderId: string; decision: Decision
         <>
           <div className="flex flex-col gap-1.5">
             {decision.options.map((option, n) => (
-              <button
+              <Choice
                 key={option}
+                on={choice === option && own === null}
                 onClick={() => {
                   setChoice(option);
                   setOwn(null);
                 }}
-                aria-pressed={choice === option && own === null}
-                className={`flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-left text-sm ${choice === option && own === null ? "border-ink bg-rail" : "border-line hover:bg-rail"}`}
               >
+                {n === 0 && escalated && <span className="text-xs font-medium text-approved">Recommended</span>}
                 {option}
-                {n === 0 && escalated && <span className="shrink-0 text-xs font-medium text-approved">Recommended</span>}
-              </button>
+              </Choice>
             ))}
+            <Choice on={own !== null} onClick={() => own === null && setOwn("")}>
+              Answer in your own words
+            </Choice>
             {own !== null && (
               <textarea
                 aria-label="Your answer"
@@ -431,31 +467,44 @@ function Question({ tenderId, decision }: { tenderId: string; decision: Decision
                 value={own}
                 onChange={(e) => setOwn(e.target.value)}
                 placeholder="What the office should do"
-                className="rounded-lg border border-line-strong px-3 py-2 text-sm outline-none focus:border-ink"
+                className="animate-enter rounded-lg border border-line-strong px-3 py-2 text-sm outline-none focus:border-ink"
                 dir="auto"
               />
             )}
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center justify-end gap-3">
+            {answer.isError && <p className="grow text-attention">{answer.error.message}</p>}
             <button
               disabled={!reply || answer.isPending}
               onClick={() => answer.mutate({ id: decision.id, answer: reply })}
-              className="h-8 rounded-lg bg-ink px-3.5 text-sm text-white disabled:bg-line-strong"
+              className="inline-flex h-8 shrink-0 items-center rounded-lg bg-ink px-4 text-sm font-medium whitespace-nowrap text-white hover:bg-ink/85 active:scale-[0.98] disabled:cursor-default disabled:bg-subtle disabled:text-ink-4 disabled:active:scale-100"
             >
-              Send answer
+              {answer.isPending ? "Sending…" : "Send answer"}
             </button>
-            {own === null && (
-              <button onClick={() => setOwn("")} className="text-sm text-ink-2 hover:text-ink">
-                Answer in your own words
-              </button>
-            )}
           </div>
-          {answer.isError && <p className="text-attention">{answer.error.message}</p>}
         </>
       ) : (
         <span className="text-sm text-ink-2">{decision.answer}</span>
       )}
     </div>
+  );
+}
+
+/** One answer to pick, with its radio mark. */
+function Choice(props: { on: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      onClick={props.onClick}
+      aria-pressed={props.on}
+      className={`flex w-full items-start gap-2.5 rounded-lg border px-3 py-2.5 text-left text-sm leading-snug ${props.on ? "border-ink bg-rail shadow-[0_0_0_1px_var(--color-ink)]" : "border-line-strong hover:border-ink-4 hover:bg-rail"}`}
+    >
+      <span
+        className={`mt-px flex size-4 shrink-0 items-center justify-center rounded-full border ${props.on ? "border-ink" : "border-ink-4"}`}
+      >
+        {props.on && <span className="size-2 animate-pop rounded-full bg-ink" />}
+      </span>
+      <span className="flex min-w-0 grow flex-col gap-0.5">{props.children}</span>
+    </button>
   );
 }
 
@@ -506,7 +555,7 @@ function Profile(props: {
   return (
     <aside
       aria-label={member.name}
-      className="absolute inset-0 z-10 flex flex-col gap-5 overflow-y-auto bg-white px-6 pt-6 pb-6"
+      className="absolute inset-0 z-20 flex animate-fade flex-col gap-5 overflow-y-auto bg-white px-6 pt-6 pb-6"
     >
       <div className="flex items-center gap-3.5">
         <Face id={member.id} size={56} />

@@ -242,8 +242,9 @@ export function Takeoff() {
   );
 
   return (
-    <div className="flex h-full w-full">
-      <section aria-label="Drawing" className="flex min-w-0 grow flex-col bg-subtle px-6 py-5">
+    // on a narrow screen the measurements sit under the drawing, which keeps the whole width
+    <div className="flex h-full w-full @max-3xl:flex-col">
+      <section aria-label="Drawing" className="flex min-h-0 min-w-0 grow flex-col bg-subtle px-6 py-5 @max-3xl:overflow-hidden">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pb-3">
           <h1 className="text-[24px] font-semibold tracking-tight">Takeoff</h1>
           <SheetPicker
@@ -380,7 +381,10 @@ export function Takeoff() {
           </p>
         )}
       </section>
-      <aside aria-label="Measurements" className="flex w-[320px] shrink-0 flex-col gap-3 overflow-y-auto border-l border-line px-5 pt-7 pb-5">
+      <aside
+        aria-label="Measurements"
+        className="flex w-[320px] shrink-0 flex-col gap-3 overflow-y-auto border-l border-line px-5 pt-7 pb-5 @max-3xl:h-[38%] @max-3xl:w-full @max-3xl:border-t @max-3xl:border-l-0 @max-3xl:pt-4"
+      >
         {vector && sheet.data && copy.data && chosen.length > 0 ? (
           <ObjectsForm
             tenderId={tenderId}

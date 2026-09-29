@@ -35,7 +35,7 @@ export function Desk() {
       </h1>
       <Figures tenders={desk.data} active={active} />
 
-      <div className="mt-8 grid grid-cols-[minmax(0,1fr)_280px] gap-10 max-xl:grid-cols-1">
+      <div className="mt-8 grid grid-cols-[minmax(0,1fr)_280px] gap-10 @max-5xl:grid-cols-1">
         <section aria-label="Needs you" className="flex flex-col">
           <h2 className="pb-2 font-semibold text-ink-2">Needs you</h2>
           {waiting.length === 0 && <p className="text-ink-3">Every tender is with the team.</p>}
@@ -96,9 +96,9 @@ function Figures({ tenders, active }: { tenders: TenderGlance[]; active: TenderG
     ["Won", won + lost ? `${Math.round((100 * won) / (won + lost))}%` : "–", `${won} won of ${won + lost} decided`],
   ];
   return (
-    <div className="mt-6 grid grid-cols-4 border-y border-line max-lg:grid-cols-2">
+    <div className="mt-6 grid grid-cols-4 border-y border-line @max-3xl:grid-cols-2">
       {figures.map(([label, value, note], n) => (
-        <div key={label} className={`flex flex-col py-3 ${n % 4 ? "border-l border-line pl-4" : ""} max-lg:[&:nth-child(3)]:border-l-0 max-lg:[&:nth-child(3)]:pl-0`}>
+        <div key={label} className={`flex flex-col py-3 ${n % 4 ? "border-l border-line pl-4" : ""} @max-3xl:[&:nth-child(3)]:border-l-0 @max-3xl:[&:nth-child(3)]:pl-0`}>
           <span className="text-xs text-ink-3">{label}</span>
           <span className="text-[20px] font-semibold tracking-tight">{value}</span>
           <span className="text-xs text-ink-3">{note}</span>
@@ -215,59 +215,62 @@ function Working({ tenders }: { tenders: TenderGlance[] }) {
   );
 }
 
-/** Tenders as rows: where each stands, its total and what waits; a row opens the tender where the engineer left it. */
+/** Tenders as rows: where each stands, its total and what waits; a row opens the tender where the engineer left it.
+ * On a narrow screen "where it stands" gives way, and the table scrolls sideways rather than the screen. */
 export function Register({ tenders, closed = false }: { tenders: TenderGlance[]; closed?: boolean }) {
   const navigate = useNavigate();
   if (tenders.length === 0) return <p className="border-t border-line py-3 text-ink-3">None.</p>;
   return (
-    <table className="w-full border-collapse">
-      <thead>
-        <tr className="border-b border-line-strong text-left text-xs text-ink-3">
-          <th className="py-2 pr-3 font-normal">Tender</th>
-          <th className="py-2 pr-3 font-normal">{closed ? "Outcome" : "Closes"}</th>
-          <th className="py-2 pr-3 font-normal">{closed ? "Stage reached" : "Where it stands"}</th>
-          <th className="py-2 pr-3 text-right font-normal">Tender total excl. VAT</th>
-          <th className="py-2 text-right font-normal">Needs you</th>
-        </tr>
-      </thead>
-      <tbody>
-        {tenders.map((t) => (
-          <tr
-            key={t.id}
-            onClick={() => navigate(placeIn(t.id))}
-            className="cursor-pointer border-b border-line hover:bg-rail"
-          >
-            <td className="py-2.5 pr-3">
-              <span className="flex items-center gap-2 font-medium">
-                {t.team === "working" && (
-                  <span title="The team is working" className="size-[7px] shrink-0 rounded-full bg-approved" />
-                )}
-                <Link to={placeIn(t.id)} onClick={(e) => e.stopPropagation()} className="hover:underline">
-                  {t.name}
-                </Link>
-              </span>
-            </td>
-            <td className="py-2.5 pr-3 whitespace-nowrap">{closed ? <Outcome tender={t} /> : <Due tender={t} />}</td>
-            <td className="py-2.5 pr-3">
-              <span className="flex items-center gap-2.5 text-ink-2">
-                <Pips tender={t} />
-                {standing(t)}
-              </span>
-            </td>
-            <td className="py-2.5 pr-3 text-right whitespace-nowrap">
-              {t.total !== null ? `${t.currency} ${money(t.total)}` : <span className="text-ink-4">–</span>}
-            </td>
-            <td className="py-2.5 text-right">
-              {t.waiting > 0 ? (
-                <span className="rounded-full bg-attention px-2 py-px text-xs font-medium text-white">{t.waiting}</span>
-              ) : (
-                <span className="text-ink-4">–</span>
-              )}
-            </td>
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[520px] border-collapse">
+        <thead>
+          <tr className="border-b border-line-strong text-left text-xs text-ink-3">
+            <th className="py-2 pr-3 font-normal">Tender</th>
+            <th className="py-2 pr-3 font-normal">{closed ? "Outcome" : "Closes"}</th>
+            <th className="py-2 pr-3 font-normal @max-3xl:hidden">{closed ? "Stage reached" : "Where it stands"}</th>
+            <th className="py-2 pr-3 text-right font-normal">Tender total excl. VAT</th>
+            <th className="py-2 text-right font-normal">Needs you</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {tenders.map((t) => (
+            <tr
+              key={t.id}
+              onClick={() => navigate(placeIn(t.id))}
+              className="cursor-pointer border-b border-line hover:bg-rail"
+            >
+              <td className="py-2.5 pr-3">
+                <span className="flex items-center gap-2 font-medium">
+                  {t.team === "working" && (
+                    <span title="The team is working" className="size-[7px] shrink-0 rounded-full bg-approved" />
+                  )}
+                  <Link to={placeIn(t.id)} onClick={(e) => e.stopPropagation()} className="hover:underline">
+                    {t.name}
+                  </Link>
+                </span>
+              </td>
+              <td className="py-2.5 pr-3 whitespace-nowrap">{closed ? <Outcome tender={t} /> : <Due tender={t} />}</td>
+              <td className="py-2.5 pr-3 @max-3xl:hidden">
+                <span className="flex items-center gap-2.5 text-ink-2">
+                  <Pips tender={t} />
+                  {standing(t)}
+                </span>
+              </td>
+              <td className="py-2.5 pr-3 text-right whitespace-nowrap">
+                {t.total !== null ? `${t.currency} ${money(t.total)}` : <span className="text-ink-4">–</span>}
+              </td>
+              <td className="py-2.5 text-right">
+                {t.waiting > 0 ? (
+                  <span className="rounded-full bg-attention px-2 py-px text-xs font-medium text-white">{t.waiting}</span>
+                ) : (
+                  <span className="text-ink-4">–</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

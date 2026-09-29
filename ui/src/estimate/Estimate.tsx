@@ -117,7 +117,7 @@ export function Estimate() {
                   if (waitingRates) approveRates.mutate();
                 }}
                 disabled={approveItems.isPending || approveRates.isPending}
-                className="h-[34px] rounded-lg bg-ink px-3.5 text-[13px] whitespace-nowrap text-white disabled:bg-line-strong"
+                className="h-[34px] rounded-lg bg-ink px-3.5 text-[13px] whitespace-nowrap text-white hover:bg-ink/85 active:scale-[0.98] disabled:cursor-default disabled:bg-subtle disabled:text-ink-4 disabled:active:scale-100"
               >
                 Approve all {waiting}
               </button>
@@ -219,7 +219,7 @@ export function Estimate() {
                 ["Profit", summary.profit],
               ] as const
             ).map(([label, value]) => (
-              <span key={label} className="text-ink-3 max-lg:hidden">
+              <span key={label} className="text-ink-3 @max-3xl:hidden">
                 {label} <span className="text-ink-2">{money(value)}</span>
               </span>
             ))}
@@ -347,7 +347,7 @@ function ItemPanel(props: { tenderId: string; item: BoqItem; priced?: Priced; pe
   const pricedBy = rate ? props.people.get(rate.proposed_by) : undefined;
 
   return (
-    <aside aria-label={`Item ${item.item}`} className="flex w-[380px] shrink-0 flex-col gap-[18px] overflow-y-auto border-l border-line bg-white px-6 pt-7 pb-5 max-xl:absolute max-xl:inset-y-0 max-xl:right-0 max-xl:z-10 max-xl:bg-white max-xl:shadow-[-8px_0_24px_rgba(0,0,0,0.08)]">
+    <aside aria-label={`Item ${item.item}`} className="flex w-[380px] shrink-0 flex-col gap-[18px] overflow-y-auto border-l border-line bg-white px-6 pt-7 pb-5 @max-5xl:absolute @max-5xl:inset-y-0 @max-5xl:right-0 @max-5xl:z-10 @max-5xl:bg-white @max-5xl:shadow-[-8px_0_24px_rgba(0,0,0,0.08)]">
       <Close />
       <div className="flex flex-col gap-1">
         <span className="text-ink-3">
@@ -500,7 +500,7 @@ function SummaryPanel(props: {
     ["Adjustment", summary.adjustment],
   ];
   return (
-    <aside aria-label="Price summary" className="flex w-[380px] shrink-0 flex-col gap-4 overflow-y-auto border-l border-line bg-white px-6 pt-7 pb-5 max-xl:absolute max-xl:inset-y-0 max-xl:right-0 max-xl:z-10 max-xl:bg-white max-xl:shadow-[-8px_0_24px_rgba(0,0,0,0.08)]">
+    <aside aria-label="Price summary" className="flex w-[380px] shrink-0 flex-col gap-4 overflow-y-auto border-l border-line bg-white px-6 pt-7 pb-5 @max-5xl:absolute @max-5xl:inset-y-0 @max-5xl:right-0 @max-5xl:z-10 @max-5xl:bg-white @max-5xl:shadow-[-8px_0_24px_rgba(0,0,0,0.08)]">
       <Close />
       <h2 className="text-[17px] font-semibold">Price summary</h2>
       <div className="flex flex-col">

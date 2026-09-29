@@ -1,4 +1,5 @@
 import {
+  IconChevronLeft,
   IconFile,
   IconFileSpreadsheet,
   IconFileTypePdf,
@@ -49,8 +50,12 @@ export function Documents() {
   }
 
   return (
+    // on a small screen, the list or the open document: not both
     <div className="flex h-full w-full">
-      <section aria-label="Documents" className="flex w-[280px] shrink-0 xl:w-[320px] flex-col border-r border-line pt-6">
+      <section
+        aria-label="Documents"
+        className={`flex w-[280px] shrink-0 @5xl:w-[320px] flex-col border-r border-line pt-6 ${selected ? "@max-2xl:hidden" : "@max-2xl:w-full"}`}
+      >
         <div className="px-4">
           <h1 className="text-[24px] font-semibold tracking-tight">Documents</h1>
           <p className="pt-1 pb-3.5 text-ink-3">
@@ -90,7 +95,16 @@ export function Documents() {
           <AddDocuments tenderId={tenderId} />
         </div>
       </section>
-      <section aria-label="Viewer" className="flex min-w-0 grow flex-col bg-subtle">
+      <section aria-label="Viewer" className={`flex min-w-0 grow flex-col bg-subtle ${selected ? "" : "@max-2xl:hidden"}`}>
+        {selected && (
+          <button
+            onClick={() => setParams(query ? { q: query } : {})}
+            className="flex h-9 shrink-0 items-center gap-1.5 border-b border-line bg-white px-3 text-ink-2 hover:text-ink @2xl:hidden"
+          >
+            <IconChevronLeft className="size-4" stroke={1.75} />
+            All documents
+          </button>
+        )}
         {selected ? (
           <Viewer document={selected} page={page} query={query} onPage={(n) => open(selected.id, n, true)} />
         ) : (

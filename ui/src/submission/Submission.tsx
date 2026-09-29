@@ -185,7 +185,7 @@ function BuildBar(props: { tenderId: string; columns: { document_name: string; s
           <button
             onClick={() => build.mutate(spread)}
             disabled={build.isPending}
-            className="h-[38px] rounded-lg bg-ink px-4 text-sm whitespace-nowrap text-white disabled:bg-line-strong"
+            className="h-[38px] rounded-lg bg-ink px-4 text-sm whitespace-nowrap text-white hover:bg-ink/85 active:scale-[0.98] disabled:cursor-default disabled:bg-subtle disabled:text-ink-4 disabled:active:scale-100"
           >
             Build package{blockers > 0 && ` · ${blockers} not ready`}
           </button>
@@ -239,7 +239,7 @@ function RequirementPanel(props: { tenderId: string; requirement: Requirement; p
   return (
     <aside
       aria-label={r.title}
-      className="flex w-[400px] shrink-0 flex-col gap-[18px] overflow-y-auto border-l border-line bg-white px-6 pt-7 pb-5 max-xl:absolute max-xl:inset-y-0 max-xl:right-0 max-xl:z-10 max-xl:shadow-[-8px_0_24px_rgba(0,0,0,0.08)]"
+      className="flex w-[400px] shrink-0 flex-col gap-[18px] overflow-y-auto border-l border-line bg-white px-6 pt-7 pb-5 @max-5xl:absolute @max-5xl:inset-y-0 @max-5xl:right-0 @max-5xl:z-10 @max-5xl:shadow-[-8px_0_24px_rgba(0,0,0,0.08)]"
     >
       <button aria-label="Close" onClick={() => setParams({})} className="-mt-3 -mr-2 self-end text-ink-3 hover:text-ink">
         <IconX className="size-[18px]" stroke={1.75} />

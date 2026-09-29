@@ -1145,3 +1145,23 @@ copy of the real database (23 rules added, nothing else changed).
   page scrolls; screens show quiet placeholder rows while they open.
 - **Not done:** Windows 11 snap layouts on Quantix's own maximise button. It worked (a hover sending Win+Z), but
   the engineer didn't want it; Win+Z still offers them.
+
+## 29 September 2026: motion, sliding edges and every window width
+
+- **Motion:** one set of short eased timings (`styles.css`): controls ease their hover and press, screens rise in
+  as they open, popovers and the profile fade in, the sidebar folds smoothly, and the team panel slides in and
+  out (`usePresence` in `app/layout.ts` keeps it on screen while it closes). Windows' "reduce animations" turns
+  it all off. Thin scrollbars and a keyboard focus ring everywhere.
+- **Sliding edges:** drag the sidebar's and the team panel's edges (`app/Resizer.tsx`); the widths are
+  remembered, a double-click brings back the usual width, and dragging the sidebar well past its narrowest folds it.
+- **Every width:** the window now goes down to 480 × 560, so it snaps to half a screen. Wide: sidebar and team beside
+  the screen. Below 1280: the team floats over it. Below 1024: the sidebar shows its icons and opens over the screen
+  as a drawer that closes once it has taken the engineer somewhere. Below 640: the sidebar is a drawer and the team
+  takes the whole window. The title bar folds search to an icon and the team's status to its dot. Screens lay
+  themselves out on the room they have, not the window's width (`<main>` is a size container), so the Desk,
+  Estimate, Subcontract and Submission reflow when the team opens or the sidebar widens; the tenders table and the
+  rate library drop minor columns, Documents shows the list or the document, and Takeoff puts its measurements under
+  the drawing.
+- **Decisions and buttons:** the question card's answers are radio choices with "Recommended" above the Manager's,
+  "Answer in your own words" is one of them, and Send never wraps; Quantix's checks show as a list with a mark per
+  check. Every primary button has one readable disabled look, a hover and a light press.

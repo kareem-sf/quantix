@@ -52,7 +52,7 @@ export function NewTender() {
       <button
         type="submit"
         disabled={create.isPending || !name.trim()}
-        className="h-10 self-start rounded-lg bg-ink px-5 text-sm font-medium text-white disabled:bg-line-strong disabled:text-ink-3"
+        className="h-10 self-start rounded-lg bg-ink px-5 text-sm font-medium text-white hover:bg-ink/85 active:scale-[0.98] disabled:cursor-default disabled:bg-subtle disabled:text-ink-4 disabled:active:scale-100"
       >
         {create.isPending ? "Creating…" : "Start tender"}
       </button>

@@ -8,7 +8,10 @@ const KINDS: [LibraryEntry["kind"], string][] = [
   ["subcontract", "Subcontract"],
   ["unit_rate", "Unit rate"],
 ];
-const COLUMNS = "grid grid-cols-[96px_minmax(0,1fr)_56px_110px_96px_minmax(0,0.8fr)_64px] gap-3";
+// on a narrow screen the kind, date and source step aside for the name, unit and rate
+const COLUMNS =
+  "grid grid-cols-[96px_minmax(0,1fr)_56px_110px_96px_minmax(0,0.8fr)_64px] gap-3 @max-2xl:grid-cols-[minmax(0,1fr)_56px_110px_64px]";
+const NARROW_HIDDEN = "@max-2xl:hidden";
 
 export function Library() {
   const [query, setQuery] = useState("");
@@ -32,12 +35,12 @@ export function Library() {
         />
       </div>
       <div className={`${COLUMNS} mt-5 border-b border-line-strong px-2 pb-2 text-xs text-ink-3`}>
-        <span>Kind</span>
+        <span className={NARROW_HIDDEN}>Kind</span>
         <span>Name</span>
         <span>Unit</span>
         <span className="text-right">Rate</span>
-        <span>Dated</span>
-        <span>Source</span>
+        <span className={NARROW_HIDDEN}>Dated</span>
+        <span className={NARROW_HIDDEN}>Source</span>
         <span />
       </div>
       {rows.length === 0 && (
@@ -47,7 +50,7 @@ export function Library() {
       )}
       {rows.map((r) => (
         <div key={r.id} className={`${COLUMNS} items-center border-b border-subtle px-2 py-2.5`}>
-          <span className="text-ink-3">{KINDS.find(([k]) => k === r.kind)?.[1]}</span>
+          <span className={`text-ink-3 ${NARROW_HIDDEN}`}>{KINDS.find(([k]) => k === r.kind)?.[1]}</span>
           <span className="min-w-0 truncate" dir="auto">
             {r.name}
           </span>
@@ -57,8 +60,8 @@ export function Library() {
           <span className="text-right">
             {money(r.rate)} {r.currency}
           </span>
-          <span className="text-ink-3">{r.dated}</span>
-          <span className="min-w-0 truncate text-ink-3">{r.source}</span>
+          <span className={`text-ink-3 ${NARROW_HIDDEN}`}>{r.dated}</span>
+          <span className={`min-w-0 truncate text-ink-3 ${NARROW_HIDDEN}`}>{r.source}</span>
           <button onClick={() => remove.mutate(r.id)} className="text-right text-ink-3 hover:text-ink">
             Remove
           </button>

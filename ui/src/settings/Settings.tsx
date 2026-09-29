@@ -22,7 +22,8 @@ import {
 
 const input = "h-9 rounded-lg border border-line-strong px-3 text-[13px] outline-none focus:border-ink";
 const secondary = "h-9 rounded-lg border border-line-strong bg-white px-3 text-[13px] disabled:text-ink-4";
-const primary = "h-9 rounded-lg bg-ink px-4 text-[13px] text-white disabled:bg-line-strong disabled:text-ink-3";
+const primary =
+  "h-9 rounded-lg bg-ink px-4 text-[13px] text-white hover:bg-ink/85 active:scale-[0.98] disabled:cursor-default disabled:bg-subtle disabled:text-ink-4 disabled:active:scale-100";
 
 const SECTIONS = [
   ["office", "Office", () => <OfficeMode />],

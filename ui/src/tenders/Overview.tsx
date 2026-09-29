@@ -227,7 +227,7 @@ function Standing(props: { to: string; label: string; text: string; done: number
   return (
     <Link
       to={props.to}
-      className="grid grid-cols-[140px_minmax(0,1fr)_160px] items-center gap-4 px-1 py-2 hover:bg-rail"
+      className="grid grid-cols-[140px_minmax(0,1fr)_160px] items-center gap-4 px-1 py-2 hover:bg-rail @max-xl:grid-cols-[96px_minmax(0,1fr)_64px] @max-xl:gap-3"
     >
       <span className="font-medium">{props.label}</span>
       <span className="min-w-0 text-ink-2">{props.text}</span>
