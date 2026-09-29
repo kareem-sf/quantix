@@ -48,6 +48,7 @@ fn main() {
                 })
                 .build()?;
             quiet(&window);
+            taskbar_icon(&window);
             register(app.handle());
             Ok(())
         })
@@ -96,6 +97,38 @@ fn quiet(window: &WebviewWindow) {
 
 #[cfg(not(windows))]
 fn quiet(_: &WebviewWindow) {}
+
+/// The taskbar shows a window's large icon. Tauri gives its windows only the small one, so the taskbar fell back to
+/// a picture of the program Windows had cached, the old icon. Give the window the program's own icon at that size.
+#[cfg(windows)]
+fn taskbar_icon(window: &WebviewWindow) {
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, ICON_BIG, IMAGE_ICON, LR_DEFAULTCOLOR, LoadImageW, SM_CXICON, SM_CYICON, SendMessageW,
+        WM_SETICON,
+    };
+    use windows_core::PCWSTR;
+
+    const APP_ICON: u16 = 32512; // where Tauri's build puts the app icon
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+    unsafe {
+        let Ok(module) = GetModuleHandleW(None) else {
+            return;
+        };
+        let (width, height) = (GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON));
+        let name = PCWSTR(APP_ICON as usize as *const u16);
+        if let Ok(icon) = LoadImageW(Some(module.into()), name, IMAGE_ICON, width, height, LR_DEFAULTCOLOR) {
+            let hwnd = HWND(hwnd.0 as _);
+            SendMessageW(hwnd, WM_SETICON, Some(WPARAM(ICON_BIG as usize)), Some(LPARAM(icon.0 as isize)));
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn taskbar_icon(_: &WebviewWindow) {}
 
 /// Windows shows a notification only for an app in the Start menu under the id the notification carries, and names
 /// the sender from that entry. The installer gives Quantix its entry; a development build adds its own once, from a
