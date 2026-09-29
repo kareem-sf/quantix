@@ -14,6 +14,7 @@ export type Shell = {
   folded: boolean;
   toggleSidebar: () => void;
   openPalette: () => void;
+  openShortcuts: () => void;
   fit: Fit;
   /** In a narrow window the sidebar opens over the screen, as a drawer. */
   drawer: boolean;

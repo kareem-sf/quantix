@@ -21,3 +21,8 @@ tender-packages/
 desktop/gen/
 *.dwg
 *.dxf
+
+# the engineer's own work kept beside the code: research reports and their notes, the app teaser video project
+reports/
+research_notes/
+app-teaser/

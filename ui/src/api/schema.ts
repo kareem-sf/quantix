@@ -2926,6 +2926,11 @@ export interface components {
             office_ai: components["schemas"]["OfficeAI"] | null;
             /** Tender Allowance */
             tender_allowance: number | null;
+            /**
+             * Notifications
+             * @enum {string}
+             */
+            notifications: "all" | "decisions" | "off";
         };
         /** SettingsUpdate */
         SettingsUpdate: {
@@ -2934,6 +2939,8 @@ export interface components {
             office_ai?: components["schemas"]["OfficeAI"] | null;
             /** Tender Allowance */
             tender_allowance?: number | null;
+            /** Notifications */
+            notifications?: ("all" | "decisions" | "off") | null;
         };
         /** Sheet */
         Sheet: {

@@ -9752,13 +9752,23 @@
               }
             ],
             "title": "Tender Allowance"
+          },
+          "notifications": {
+            "type": "string",
+            "enum": [
+              "all",
+              "decisions",
+              "off"
+            ],
+            "title": "Notifications"
           }
         },
         "type": "object",
         "required": [
           "office_mode",
           "office_ai",
-          "tender_allowance"
+          "tender_allowance",
+          "notifications"
         ],
         "title": "Settings"
       },
@@ -9800,6 +9810,22 @@
               }
             ],
             "title": "Tender Allowance"
+          },
+          "notifications": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "all",
+                  "decisions",
+                  "off"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notifications"
           }
         },
         "type": "object",

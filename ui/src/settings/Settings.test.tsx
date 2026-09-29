@@ -96,6 +96,14 @@ describe("Settings", () => {
     await userEvent.click(await screen.findByRole("radio", { name: /Fully autonomous/ }));
     await waitFor(() => expect(service.state.settings.office_mode).toBe("autonomous"));
   });
+
+  it("keeps Windows notifications to decisions", async () => {
+    const service = fakeService();
+    openApp("/settings");
+
+    await userEvent.click(await screen.findByRole("radio", { name: /Decisions only/ }));
+    await waitFor(() => expect(service.state.settings.notifications).toBe("decisions"));
+  });
 });
 
 describe("The office's AI use", () => {

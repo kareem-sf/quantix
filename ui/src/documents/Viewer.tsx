@@ -78,13 +78,13 @@ export function Viewer(props: {
             {busy && " · Quantix is still reading it"}
           </span>
         </span>
-        <span className="flex shrink-0 items-center gap-3">
-          <span ref={setToolbar} className="flex items-center gap-2" />
+        <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+          <span ref={setToolbar} className="flex flex-wrap items-center gap-2" />
           <button
             onClick={() => open.mutate(document.id)}
             disabled={open.isPending}
             title="Opens in the app your computer uses for this type of file. Quantix keeps the file as supplied."
-            className="h-[30px] rounded-md border border-line-strong bg-white px-3 hover:bg-subtle disabled:text-ink-4"
+            className="h-[30px] rounded-md border border-line-strong bg-white px-3 whitespace-nowrap hover:bg-subtle disabled:text-ink-4"
           >
             Open original
           </button>

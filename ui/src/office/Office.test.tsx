@@ -47,7 +47,12 @@ const question: Decision = {
   answer: null,
   created_at: at,
 };
-const ready = { office_mode: "engineer" as const, office_ai: { connection_id: "c1", model: "m" }, tender_allowance: null };
+const ready = {
+  office_mode: "engineer" as const,
+  office_ai: { connection_id: "c1", model: "m" },
+  tender_allowance: null,
+  notifications: "all" as const,
+};
 
 describe("Overview and decisions", () => {
   it("asks for the office's AI before the team can start", async () => {

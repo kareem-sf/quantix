@@ -1165,3 +1165,32 @@ copy of the real database (23 rules added, nothing else changed).
 - **Decisions and buttons:** the question card's answers are radio choices with "Recommended" above the Manager's,
   "Answer in your own words" is one of them, and Send never wraps; Quantix's checks show as a list with a mark per
   check. Every primary button has one readable disabled look, a hover and a light press.
+
+## 29 September 2026: proving the numbers
+
+Tested against sources Quantix didn't produce (scripts read the real database read-only):
+
+- **DWG geometry:** all 1,240 dimensions in the four GAC drawings measure, from their own points, what AutoCAD
+  stored in the file (within 0.5 mm). Areas of about 1,500 closed outlines, recomputed here from the raw points, match
+  Quantix's to the square millimetre. The per-drawing checks found exactly the five hand-written "270" dimensions
+  that measure 277 on the elevations, and rightly left the "VAR." ones.
+- **BOQ:** all 26 items match the client's two Rev01 spreadsheets cell by cell (code, description, unit, the Rev.01
+  quantity, never Rev.00); zero-quantity lines and the unnumbered wheel stopper are kept; nothing missing or doubled.
+- **Estimate:** every extension, the net SAR 2,668,871.00, each preliminary, overheads, profit, VAT and the total
+  recompute exactly, as do all ten rate build-ups line by line.
+- **The AI's judgement:** the markups' one-month carry on a 72-working-day programme was an AI error that Quantix's
+  check caught. Not caught: the backfill build-ups price a field density test at SAR 8 where the subbase's prices it
+  at 150; on C.1.2 that is about SAR 83,000 short. Profit at 40% was the engineer's own instruction.
+- **Live takeoff (GAC, GPT-5.4 mini):** asked for WC pans, mirrors, soap dispensers, toilet doors and the columns, the
+  Tender Manager first refused ("cannot count from the page text") without giving it to his CAD staff: view_page's
+  refusal pointed him to read_page. Fixed: a CAD drawing's words and its refusal now say its quantities come from its
+  objects, and tell the Manager to give the takeoff to his team; his duties say drawing takeoff is staff work. Asked
+  again, he gave it to Omar, who counted 4, 4, 4, 4 and 14 columns (3.699 m²), all right. One slip passed his
+  review: a second "columns" measurement on the WC drawing (the one column that shows there). 8 turns, 647k input
+  tokens (86% cached).
+- **Still open:** the title block's lines are reported as drawn twice in every paper layout (16 near-identical
+  warnings on the elevations); no check compares one resource's price across build-ups.
+
+Also: a keyboard-shortcut list (Ctrl+/ and the Ctrl+K list), the choice of Windows notifications in Settings
+(decisions and finished work, decisions only, or none), the document viewer's toolbar wraps in a narrow window, the
+Ctrl+K list fits one, and git ignores the local research and teaser folders.

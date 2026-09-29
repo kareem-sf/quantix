@@ -6,6 +6,7 @@ import { useNotifications } from "./notify";
 import { lastTender, remember, store, stored } from "./place";
 import { Palette } from "./Palette";
 import { Rail } from "./Rail";
+import { Shortcuts } from "./Shortcuts";
 import { TENDER_SCREENS } from "./screens";
 import { SIDEBAR, ShellContext, TEAM_PANEL, type Shell as ShellState, type Team } from "./context";
 import { useFit, usePresence } from "./layout";
@@ -25,6 +26,7 @@ export function Shell() {
   const [folded, setFolded] = useState(() => stored("folded", false));
   const [unfolded, setUnfolded] = useState(false); // on Takeoff the sidebar folds for the drawing, unless opened there
   const [palette, setPalette] = useState(false);
+  const [shortcuts, setShortcuts] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(() => stored("sidebarWidth", SIDEBAR.usual));
   const [teamWidth, setTeamWidth] = useState(() => stored("teamWidth", TEAM_PANEL.usual));
@@ -54,6 +56,7 @@ export function Shell() {
     folded: docked ? (onTakeoff ? !unfolded : folded) : !drawer,
     toggleSidebar: () => (!docked ? setDrawer(!drawer) : onTakeoff ? setUnfolded(!unfolded) : setFolded(!folded)),
     openPalette: () => setPalette(true),
+    openShortcuts: () => setShortcuts(true),
     fit,
     drawer,
     closeDrawer: () => setDrawer(false),
@@ -74,6 +77,7 @@ export function Shell() {
       const key = e.code.replace(/^(Key|Digit)/, "").toLowerCase();
       if (e.ctrlKey && !e.shiftKey && !e.altKey) {
         if (key === "k") setPalette((open) => !open);
+        else if (key === "slash") setShortcuts((open) => !open);
         else if (key === "j") setTeam((t) => ({ ...t, open: !t.open, person: null }));
         else if (key === "b") (!docked ? setDrawer : onTakeoff ? setUnfolded : setFolded)((f) => !f);
         else if (tender && /^[1-7]$/.test(key)) navigate(`/tenders/${tender.id}${TENDER_SCREENS[Number(key) - 1][1]}`);
@@ -104,6 +108,7 @@ export function Shell() {
         </div>
       </div>
       {palette && <Palette tender={tender} onClose={() => setPalette(false)} />}
+      {shortcuts && <Shortcuts onClose={() => setShortcuts(false)} />}
     </ShellContext.Provider>
   );
 }

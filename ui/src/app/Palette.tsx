@@ -1,4 +1,12 @@
-import { IconMessageCircle, IconPlayerStopFilled, IconPlus, IconSearch, IconSettings, type Icon } from "@tabler/icons-react";
+import {
+  IconKeyboard,
+  IconMessageCircle,
+  IconPlayerStopFilled,
+  IconPlus,
+  IconSearch,
+  IconSettings,
+  type Icon,
+} from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import type { Tender } from "../api/client";
@@ -55,6 +63,7 @@ export function Palette({ tender, onClose }: { tender?: Tender; onClose: () => v
       ? [{ group: "Actions", label: "Stop the office", icon: IconPlayerStopFilled, run: () => stop.mutate() }]
       : []),
     { group: "Actions", label: "Settings", icon: IconSettings, run: go("/settings") },
+    { group: "Actions", label: "Keyboard shortcuts", hint: "Ctrl /", icon: IconKeyboard, run: shell.openShortcuts },
   ];
   const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const shown = entries.filter((e) => words.every((w) => `${e.label} ${e.hint ?? ""} ${e.group}`.toLowerCase().includes(w)));
@@ -67,12 +76,12 @@ export function Palette({ tender, onClose }: { tender?: Tender; onClose: () => v
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-center bg-ink/15 pt-[12vh]" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-50 flex animate-fade justify-center bg-ink/15 px-4 pt-[12vh]" onMouseDown={onClose}>
       <div
         role="dialog"
         aria-label="Search or jump to"
         onMouseDown={(e) => e.stopPropagation()}
-        className="flex h-fit max-h-[70vh] w-[580px] flex-col overflow-hidden rounded-xl border border-line-strong bg-white shadow-[0_24px_64px_rgb(0_0_0/0.18)]"
+        className="flex h-fit max-h-[70vh] w-[580px] max-w-full animate-pop flex-col overflow-hidden rounded-xl border border-line-strong bg-white shadow-[0_24px_64px_rgb(0_0_0/0.18)]"
       >
         <div className="flex items-center gap-2.5 border-b border-line px-4">
           <IconSearch className="size-4 text-ink-3" stroke={1.75} />

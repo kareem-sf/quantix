@@ -12,6 +12,9 @@ DEFAULTS: dict[str, Any] = {
     "office_ai": None,
     # The most AI tokens one tender's office may use; it pauses there. None for no limit.
     "tender_allowance": None,
+    # Windows notifications while Quantix isn't in front. "all": new decisions and a team that finished;
+    # "decisions": new decisions only; "off": none.
+    "notifications": "all",
 }
 
 
