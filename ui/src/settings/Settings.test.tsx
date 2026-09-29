@@ -104,6 +104,17 @@ describe("Settings", () => {
     await userEvent.click(await screen.findByRole("radio", { name: /Decisions only/ }));
     await waitFor(() => expect(service.state.settings.notifications).toBe("decisions"));
   });
+
+  it("credits the founder, linking to his site", async () => {
+    fakeService();
+    openApp("/settings");
+
+    expect(await screen.findByText("Your tendering office, on your desktop. Part of QS Mind.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Founded & developed by Kareem Safwat" })).toHaveAttribute(
+      "href",
+      "https://kareemsafwat.com",
+    );
+  });
 });
 
 describe("The office's AI use", () => {

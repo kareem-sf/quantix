@@ -1,0 +1,9 @@
+/* Quantix tokens — import after brand/tokens/tokens.css, or use standalone. */
+:root {
+  --brand: #E0703A;
+  --brand-deep: #E0703A;          /* use on light backgrounds */
+  --brand-ivory: #F3EFE6;
+  --brand-ink: #1F2328;
+  --brand-stage: #0E1013;
+  --font-brand: 'Urbanist', 'Segoe UI', system-ui, sans-serif;
+}

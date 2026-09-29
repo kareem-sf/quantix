@@ -1194,3 +1194,16 @@ Tested against sources Quantix didn't produce (scripts read the real database re
 Also: a keyboard-shortcut list (Ctrl+/ and the Ctrl+K list), the choice of Windows notifications in Settings
 (decisions and finished work, decisions only, or none), the document viewer's toolbar wraps in a narrow window, the
 Ctrl+K list fits one, and git ignores the local research and teaser folders.
+
+## 28 September 2026: the Quantix brand
+
+Quantix takes its identity from the QS Mind house, whose tender stage it is.
+
+- **Mark.** Weave: an X whose second stroke passes under the first, a copper ribbon with one ink or ivory accent
+  piece. The kit is in `brand/`: SVG masters, icons, colours, the guidelines and the founder's signature.
+- **Desktop and browser.** Every desktop icon is regenerated from `brand/icons/app-icon-1024.png` at its old sizes,
+  and the interface has the favicon.
+- **Interface.** The sidebar draws the mark beside the name in the text colour, so the one warm accent still means
+  "needs you". Settings ends with About Quantix: the mark in its colours, "Part of QS Mind", and "Founded & developed
+  by Kareem Safwat" with his K, linking to kareemsafwat.com.
+- **Checks:** 1 new interface test; 80 interface tests and typecheck pass.

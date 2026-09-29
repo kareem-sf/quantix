@@ -1,3 +1,11 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/logo/quantix-lockup-endorsed-on-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="brand/logo/quantix-lockup-endorsed-on-light.svg">
+    <img alt="Quantix, by QS Mind" src="brand/logo/quantix-lockup-endorsed-on-light.svg" width="320">
+  </picture>
+</p>
+
 # Quantix
 
 Quantix is a tendering office on your desktop. A Tender Manager leads AI staff who read the tender, take off
@@ -45,3 +53,15 @@ the desktop window. Set `QUANTIX_HOME` to use another data folder, for example a
 | `npm run bindings` | Regenerate the interface's API types from the service |
 
 CI runs all of these on every pull request and fails if the API types are out of date.
+
+---
+
+<a href="https://kareemsafwat.com">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/founder/signature-on-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="brand/founder/signature-on-light.svg">
+    <img alt="Founded and developed by Kareem Safwat" src="brand/founder/signature-on-light.svg" width="175">
+  </picture>
+</a>
+
+Founded and developed by [Kareem Safwat](https://kareemsafwat.com).
