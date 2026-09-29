@@ -1,6 +1,7 @@
 import { IconX } from "@tabler/icons-react";
 import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
+import { useEscape } from "../app/keys";
 import { Face } from "../office/Face";
 import { firstName, useOffice, type Staff } from "../office/queries";
 import { APPROVE, Findings, Reopen, ReviewNote, SendBack, WITH_MANAGER } from "../review/Review";
@@ -244,6 +245,7 @@ export function Estimate() {
 function Close() {
   const [params, setParams] = useSearchParams();
   const show = params.get("show");
+  useEscape(() => setParams(show ? { show } : {}));
   return (
     <button
       aria-label="Close"

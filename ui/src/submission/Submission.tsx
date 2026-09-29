@@ -1,6 +1,7 @@
 import { IconX } from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
+import { useEscape } from "../app/keys";
 import { money } from "../estimate/queries";
 import { Face } from "../office/Face";
 import { firstName, useOffice, type Staff } from "../office/queries";
@@ -228,6 +229,7 @@ function RequirementPanel(props: { tenderId: string; requirement: Requirement; p
   const ready = useMarkReady(tenderId);
   const attach = useAttach(tenderId);
   const remove = useRemoveRequirement(tenderId);
+  useEscape(() => setParams({}));
   const [removing, setRemoving] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
