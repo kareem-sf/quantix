@@ -8,10 +8,10 @@ use tauri_plugin_window_state::StateFlags;
 
 fn main() {
     #[cfg(all(windows, debug_assertions))]
-    if let [_, flag, entry, id] = &std::env::args().collect::<Vec<_>>()[..]
+    if let [_, flag, entry, id, icon] = &std::env::args().collect::<Vec<_>>()[..]
         && flag == START_MENU_ENTRY
     {
-        start_menu_entry(entry, id);
+        start_menu_entry(entry, id, icon);
         return;
     }
     tauri::Builder::default()
@@ -131,19 +131,41 @@ fn taskbar_icon(window: &WebviewWindow) {
 fn taskbar_icon(_: &WebviewWindow) {}
 
 /// Windows shows a notification only for an app in the Start menu under the id the notification carries, and names
-/// the sender from that entry. The installer gives Quantix its entry; a development build adds its own once, from a
-/// second Quantix process: made inside the window's process, the shortcut corrupts its memory.
+/// the sender from that entry. The installer gives Quantix its entry; a development build adds its own, from a second
+/// Quantix process: made inside the window's process, the shortcut corrupts its memory.
+///
+/// The taskbar draws the window with that entry's icon, and Windows keeps an icon cached by its file's path however
+/// often the file changes. So the entry takes its icon from a copy named after the icon's contents, and is made again
+/// whenever the icon changes.
 #[cfg(all(windows, debug_assertions))]
 fn register(app: &AppHandle) {
-    let (Ok(exe), Ok(roaming)) = (std::env::current_exe(), app.path().data_dir()) else {
+    const ICON: &[u8] = include_bytes!("../icons/icon.ico");
+    let (Ok(exe), Ok(roaming), Ok(local)) =
+        (std::env::current_exe(), app.path().data_dir(), app.path().app_local_data_dir())
+    else {
         return;
     };
     let entry = roaming.join(r"Microsoft\Windows\Start Menu\Programs\Quantix (development).lnk");
-    if !entry.exists() {
+    // FNV-1a: a name that changes with the icon
+    let hash = ICON.iter().fold(0xcbf29ce484222325_u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x100000001b3));
+    let icon = local.join(format!("start-menu-icon-{hash:016x}.ico"));
+    let new_icon = !icon.exists();
+    if new_icon {
+        if let Ok(old) = std::fs::read_dir(&local) {
+            for file in old.flatten().filter(|f| f.file_name().to_string_lossy().starts_with("start-menu-icon-")) {
+                let _ = std::fs::remove_file(file.path());
+            }
+        }
+        if std::fs::create_dir_all(&local).and_then(|()| std::fs::write(&icon, ICON)).is_err() {
+            return;
+        }
+    }
+    if new_icon || !entry.exists() {
         let _ = std::process::Command::new(exe)
             .arg(START_MENU_ENTRY)
             .arg(entry)
             .arg(&app.config().identifier)
+            .arg(icon)
             .spawn();
     }
 }
@@ -151,9 +173,9 @@ fn register(app: &AppHandle) {
 #[cfg(all(windows, debug_assertions))]
 const START_MENU_ENTRY: &str = "--start-menu-entry";
 
-/// A Start-menu shortcut to this program at `entry`, carrying the app id `id`.
+/// A Start-menu shortcut to this program at `entry`, carrying the app id `id` and drawn with the icon file `icon`.
 #[cfg(all(windows, debug_assertions))]
-fn start_menu_entry(entry: &str, id: &str) {
+fn start_menu_entry(entry: &str, id: &str, icon: &str) {
     use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
     use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
     use windows::Win32::System::Com::{
@@ -176,9 +198,6 @@ fn start_menu_entry(entry: &str, id: &str) {
         let mut value = PROPVARIANT::default();
         (*value.Anonymous.Anonymous).vt = VT_LPWSTR;
         (*value.Anonymous.Anonymous).Anonymous.pwszVal = PWSTR(id.as_mut_ptr());
-        // the taskbar draws a window matched to this entry with the entry's icon: take it from the icon file, not the
-        // program, whose picture Windows keeps cached by its path however often the icon changes
-        let icon = concat!(env!("CARGO_MANIFEST_DIR"), r"\icons\icon.ico");
         let _ = link
             .SetPath(&HSTRING::from(exe.as_os_str()))
             .and_then(|()| link.SetIconLocation(&HSTRING::from(icon), 0))

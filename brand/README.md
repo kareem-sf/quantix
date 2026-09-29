@@ -24,7 +24,7 @@ The same values are CSS custom properties in [tokens.css](tokens.css).
 | Folder | What's in it |
 | --- | --- |
 | `logo/` | SVG masters, pure paths: the mark (`quantix-mark-solid-on-dark`, `-on-light`, `-white`, `-black`), the horizontal and stacked lockups, and the endorsed lockup (`quantix-lockup-endorsed-on-dark`, `-on-light`) |
-| `icons/` | App icon (`app-icon.svg`, `app-icon-1024.png`, `icon.ico`, `icon.icns`), favicons, touch and PWA icons, `site.webmanifest` |
+| `icons/` | App icon (`app-icon.svg`, `app-icon-1024.png`, `icon.ico`, `icon.icns`), favicons, touch and PWA icons, `site.webmanifest`. No tile: the mark in its on-light colours on a transparent square. Only the maskable icon keeps its tile, since Android cuts it to a shape |
 | `png/` | Every logo master rendered as a PNG (lockups 2000 px wide, marks 1024 px) for documents, decks and anywhere SVG can't go |
 | `social/` | `og-image-1200x630.png` for link previews |
 | `founder/` | Kareem Safwat's K mark and signature, on dark and on light |
