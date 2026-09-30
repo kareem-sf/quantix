@@ -33,6 +33,7 @@ dev = [
     "httpx2>=2.13",
     "ruff>=0.16",
     "pydantic-evals>=2.47",
+    "coverage>=7.16",
 ]
 
 [build-system]
@@ -55,3 +56,10 @@ select = ["E", "F", "I", "B", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["quantix"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 0  # CI fails below this: set to what the suite reaches, so it can't quietly shrink

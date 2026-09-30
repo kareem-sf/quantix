@@ -257,4 +257,88 @@ describe("Documents", () => {
     expect(router.state.location.search).not.toContain("q=");
     expect(router.state.location.search).toContain("doc=d1");
   });
+
+  it("clears a search with Escape, says when nothing is found, and goes back to all documents", async () => {
+    fakeService({ tenders: [tender], documents: [doc("d1", "Conditions.pdf", { kind: "pdf", page_count: 46 })] });
+    const router = openApp("/tenders/t1/documents?doc=d1&page=abc");
+
+    expect(await screen.findByText(/at page 1 marking/)).toBeInTheDocument(); // no such page: the first
+    const field = screen.getByLabelText("Search the documents");
+    await userEvent.type(field, "bid bond{Enter}");
+    expect(await screen.findByText("Nothing found for “bid bond”.")).toBeInTheDocument();
+    expect(router.state.location.search).toContain("doc=d1"); // the open file stays open
+    await userEvent.type(field, "{Escape}");
+    expect(field).toHaveValue("");
+    expect(router.state.location.search).not.toContain("q=");
+
+    await userEvent.type(field, "bond{Enter}");
+    await userEvent.click(screen.getByRole("button", { name: "All documents" })); // on a narrow screen
+    expect(router.state.location.search).toBe("?q=bond");
+    expect(screen.getByText("Choose a document to see it here.")).toBeInTheDocument();
+  });
+
+  it("follows the reading as it happens", async () => {
+    const service = fakeService({
+      tenders: [tender],
+      documents: [doc("d1", "ITT.docx", { status: "reading" }), doc("d2", "Spec.docx", { status: "waiting" })],
+    });
+    openApp("/tenders/t1/documents");
+
+    const list = await screen.findByRole("region", { name: "Documents" });
+    expect(await within(list).findByText("2 files · reading 2")).toBeInTheDocument();
+    expect(within(list).getByText("Reading…")).toBeInTheDocument();
+    expect(within(list).getByText("Waiting to be read")).toBeInTheDocument();
+
+    for (const d of service.state.documents) d.status = "read";
+    expect(await within(list).findByText("2 files", {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(within(list).queryByText("Reading…")).not.toBeInTheDocument();
+  });
+
+  it("says what each file is and how much of it there is, and why part of it can't be read", async () => {
+    fakeService({
+      tenders: [tender],
+      documents: [
+        doc("d1", "Addendum.pdf", { kind: "pdf", page_count: null }),
+        doc("d2", "Rates.xlsx", { kind: "spreadsheet", page_count: 1 }),
+        doc("d3", "Survey.pdf", { kind: "pdf", page_count: 3, status: "failed", note: "Page 2 is damaged and couldn’t be read." }),
+      ],
+    });
+    openApp("/tenders/t1/documents?doc=d1");
+    const list = await screen.findByRole("region", { name: "Documents" });
+    const viewer = screen.getByRole("region", { name: "Viewer" });
+
+    expect(await within(viewer).findByText("PDF")).toBeInTheDocument();
+    await userEvent.click(within(list).getByText("Rates.xlsx"));
+    expect(await within(viewer).findByText("Workbook · 1 sheet")).toBeInTheDocument();
+    await userEvent.click(within(list).getByText("Survey.pdf"));
+    expect(await within(viewer).findByText("PDF · 3 pages")).toBeInTheDocument();
+    expect(within(viewer).getByText("Page 2 is damaged and couldn’t be read.")).toBeInTheDocument();
+    expect(await within(viewer).findByText(/PDF .*\/api\/documents\/d3\/file at page 1/)).toBeInTheDocument(); // shown all the same
+  });
+
+  it("adds files from a browser, and says why they couldn't be added", async () => {
+    const service = fakeService({ tenders: [tender] });
+    openApp("/tenders/t1/documents");
+
+    const picker = await screen.findByLabelText("Tender files");
+    const opened = vi.fn();
+    picker.addEventListener("click", opened);
+    await userEvent.click(screen.getByRole("button", { name: "Add files" }));
+    expect(opened).toHaveBeenCalled(); // the browser's file picker
+
+    await userEvent.upload(picker, [new File(["%PDF"], "ITT.pdf"), new File(["%PDF"], "Drawings.pdf")]);
+    expect(await screen.findByText("2 files added.")).toBeInTheDocument();
+    expect(service.state.documents.map((d) => d.path)).toEqual(["ITT.pdf", "Drawings.pdf"]);
+
+    service.state.fail["/tenders/t1/documents"] = "A file over 500 MB can’t be added.";
+    await userEvent.upload(picker, new File(["%PDF"], "Survey.pdf"));
+    expect(await screen.findByText("A file over 500 MB can’t be added.")).toBeInTheDocument();
+  });
+
+  it("says when a drawing can't be drawn", async () => {
+    fakeService({ tenders: [tender], documents: [doc("d1", "Drawings/A-201.dwg", { kind: "cad" })], drawing: drawingInfo });
+    openApp("/tenders/t1/documents?doc=d1&page=1");
+
+    expect(await screen.findByText("Quantix couldn’t load this drawing.")).toBeInTheDocument();
+  });
 });

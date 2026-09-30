@@ -28,6 +28,8 @@ export interface FakeState {
   models: string[];
   documents: TenderDocument[];
   pages: Record<string, string>;
+  /** The supplied files, by document id, as a viewer fetches them. */
+  files: Record<string, string>;
   /** A workbook's sheets as the Documents screen shows them, by sheet number; and the files opened in their apps. */
   workbook: Record<number, WorkbookSheet>;
   opened: string[];
@@ -58,6 +60,8 @@ export interface FakeState {
   requirements: Requirement[];
   columns: unknown[];
   exports: { spread_markups: boolean }[];
+  /** The built packages the engineer opened in Explorer. */
+  folders: string[];
   decided: { id: string; approve: boolean; save_to_library?: boolean }[];
   reopened: { kind: string; id: string; reason: string }[];
   /** What the checks find, by record id. */
@@ -95,6 +99,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     models: ["model-b", "model-a"],
     documents: [],
     pages: {},
+    files: {},
     workbook: {},
     opened: [],
     imported: [],
@@ -121,6 +126,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     requirements: [],
     columns: [],
     exports: [],
+    folders: [],
     decided: [],
     reopened: [],
     findings: {},
@@ -187,6 +193,8 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     if (path.match(/^\/tenders\/\w+\/search$/)) return json(state.hits);
     const page = path.match(/^\/documents\/(\w+)\/pages\/(\d+)$/);
     if (page) return json({ number: Number(page[2]), text: state.pages[page[1]] ?? "", has_text: true });
+    const file = path.match(/^\/documents\/(\w+)\/file$/);
+    if (file) return file[1] in state.files ? new Response(state.files[file[1]]) : json({ detail: "Document not found." }, 404);
     const workbook = path.match(/^\/documents\/\w+\/sheets\/(\d+)$/);
     if (workbook) {
       const hidden = new URL(request.url).searchParams.get("hidden") === "true";
@@ -280,6 +288,7 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     const draftDecision = path.match(/^\/drafts\/(\w+)\/decision$/);
     if (draftDecision) {
       const r = state.requirements.find((x) => x.draft?.id === draftDecision[1])!;
+      state.decided.push({ id: draftDecision[1], ...body });
       r.draft!.status = body.approve ? "approved" : "rejected";
       r.state = body.approve ? "ready" : "missing";
       return json(null);
@@ -294,6 +303,25 @@ export function fakeService(initial: Partial<FakeState> = {}) {
       const r = state.requirements.find((x) => x.id === readied[1])!;
       Object.assign(r, { ready_note: body.ready ? body.note : null, state: body.ready ? "ready" : "missing" });
       return json(null);
+    }
+    if (path.match(/^\/tenders\/\w+\/requirements$/) && method === "POST") {
+      state.requirements.push({
+        id: `rq${state.requirements.length + 1}`, section: body.section, title: body.title, document_id: null,
+        document_name: null, page: null, quote: null, added_by: "engineer", reviewed_by: null, state: "missing", draft: null,
+        ready_note: null, file_name: null,
+      });
+      return json(null, 201);
+    }
+    const attached = path.match(/^\/requirements\/(\w+)\/file$/);
+    if (attached) {
+      const file = (await request.formData()).get("file") as File;
+      Object.assign(state.requirements.find((r) => r.id === attached[1])!, { file_name: file.name, state: "ready" });
+      return json(null);
+    }
+    const folder = path.match(/^\/exports\/([^/]+)\/open$/);
+    if (folder) {
+      state.folders.push(decodeURIComponent(folder[1]));
+      return new Response(null, { status: 204 });
     }
     if (path.match(/^\/tenders\/\w+\/export$/)) {
       state.exports.push(body);
@@ -425,6 +453,10 @@ export function fakeService(initial: Partial<FakeState> = {}) {
     if (path === "/company" && method === "PUT") {
       state.company = { ...body, has_logo: state.company.has_logo };
       return json(state.company);
+    }
+    if (path === "/company/logo" && method !== "GET") {
+      state.company = { ...state.company, has_logo: method === "PUT" };
+      return new Response(null, { status: 204 });
     }
     if (path === "/rules" && method === "GET") return json(state.rules);
     if (path === "/rules" && method === "POST") {

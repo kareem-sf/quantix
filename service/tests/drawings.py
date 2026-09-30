@@ -4,7 +4,10 @@ committed.
 PLAN is a two-room flat in millimetres: walls 200 thick around 10 × 8 m, a fire-rated wall between the rooms 100
 thick with a 900 mm door in it, three windows (two of type W1, one W2), a floor hatch over the bedroom with a 1 × 1 m
 island, a hand-written dimension that says 9800 where the drawing measures 10000, a pipe through the fire-rated
-wall, a line drawn twice, and a layout with the title block's words."""
+wall, a line drawn twice, and a layout with the title block's words.
+
+What the sample can't write (layers switched off or frozen, objects the reader skips) is added to a DXF it wrote,
+as CAD would save it."""
 
 import json
 import subprocess
@@ -20,6 +23,22 @@ def make_drawing(spec: dict, suffix: str = ".dwg") -> bytes:
         spec_path.write_text(json.dumps(spec), encoding="utf-8")
         subprocess.run([str(cad.reader()), "sample", str(spec_path), str(out)], check=True, capture_output=True)
         return out.read_bytes()
+
+
+def saved_by_cad(
+    dxf: bytes, off: tuple[str, ...] = (), frozen: tuple[str, ...] = (), entities: tuple[str, ...] = ()
+) -> bytes:
+    """A DXF qx-dwg sample wrote, as CAD saves it with layers switched off (a negative colour) or frozen (flag 1),
+    and with objects the sample can't write added to model space, given as their DXF group codes and values."""
+    text = dxf.decode("utf-8")
+    for name in (*off, *frozen):
+        record = f"{name}\r\n 70\r\n     0\r\n 62\r\n     7\r\n"
+        assert record in text
+        flag, colour = "1" if name in frozen else "0", "-7" if name in off else "7"
+        text = text.replace(record, f"{name}\r\n 70\r\n{flag:>6}\r\n 62\r\n{colour:>6}\r\n")
+    end = "  0\r\nENDSEC\r\n  0\r\nSECTION\r\n  2\r\nOBJECTS"  # the end of the entities
+    assert end in text
+    return text.replace(end, "".join(f"{line}\r\n" for line in entities) + end).encode("utf-8")
 
 
 def _line(layer: str, a: list[float], b: list[float]) -> dict:

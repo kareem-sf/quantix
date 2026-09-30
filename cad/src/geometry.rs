@@ -916,6 +916,7 @@ fn loops(pieces: Vec<Segment>) -> Vec<Vec<[f64; 2]>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f64::consts::{FRAC_PI_2, PI};
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-6 * b.abs().max(1.0)
@@ -980,11 +981,11 @@ mod tests {
     fn a_clip_cuts_a_line_where_it_leaves() {
         let clip = Clip::new(square(0.0, 0.0, 10.0)).unwrap();
         let cut = line([-5.0, 5.0], [15.0, 5.0])
-            .clipped(&[clip.clone()])
+            .clipped(std::slice::from_ref(&clip))
             .unwrap();
         assert!(close(cut.length, 10.0));
         assert!(line([20.0, 0.0], [30.0, 0.0])
-            .clipped(&[clip.clone()])
+            .clipped(std::slice::from_ref(&clip))
             .is_none());
         let along = line([0.0, 0.0], [10.0, 0.0]).clipped(&[clip]).unwrap();
         assert!(close(along.length, 10.0));
@@ -1045,5 +1046,371 @@ mod tests {
             circle([5.0e5, 5.0e5], 2.0).area,
             std::f64::consts::PI * 4.0
         ));
+    }
+
+    fn straight(points: Vec<[f64; 2]>) -> Vec<([f64; 2], f64)> {
+        points.into_iter().map(|p| (p, 0.0)).collect()
+    }
+
+    fn ends(points: &[[f64; 2]]) -> ([f64; 2], [f64; 2]) {
+        (points[0], points[points.len() - 1])
+    }
+
+    fn at(p: [f64; 2], x: f64, y: f64) -> bool {
+        close(p[0], x) && close(p[1], y)
+    }
+
+    #[test]
+    fn a_zero_length_line_measures_nothing_but_keeps_its_place() {
+        let dot = line([3.0, 4.0], [3.0, 4.0]);
+        assert_eq!((dot.length, dot.area), (0.0, 0.0));
+        assert_eq!(dot.bbox(), Some([3.0, 4.0, 3.0, 4.0]));
+    }
+
+    #[test]
+    fn a_polyline_of_one_point_or_none_measures_nothing() {
+        let none = polyline(&[], false);
+        assert!(none.parts.is_empty() && none.bbox().is_none());
+        let one = polyline(&[([2.0, 2.0], 0.0)], true);
+        assert_eq!((one.length, one.area), (0.0, 0.0));
+        assert_eq!(one.parts, vec![vec![[2.0, 2.0]]]);
+    }
+
+    #[test]
+    fn a_closed_polyline_of_collinear_points_encloses_nothing() {
+        let flat = polyline(&straight(vec![[0.0, 0.0], [5.0, 0.0], [10.0, 0.0]]), true);
+        assert!(close(flat.area, 0.0));
+        assert!(close(flat.length, 20.0)); // out along the line and back
+    }
+
+    #[test]
+    fn a_closed_polyline_that_repeats_its_first_point_is_measured_once() {
+        let mut points = square(0.0, 0.0, 10.0);
+        points.push([0.0, 0.0]);
+        let shape = polyline(&straight(points), true);
+        assert!(close(shape.length, 40.0) && close(shape.area, 100.0));
+    }
+
+    #[test]
+    fn a_bulge_on_a_zero_length_segment_adds_nothing() {
+        let shape = polyline(
+            &[([0.0, 0.0], 1.0), ([0.0, 0.0], 0.0), ([10.0, 0.0], 0.0)],
+            false,
+        );
+        assert!(close(shape.length, 10.0) && !shape.curved);
+        assert!(shape.parts[0].iter().flatten().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn an_arc_across_zero_degrees_runs_counter_clockwise() {
+        let half = arc([0.0, 0.0], 2.0, 1.5 * PI, 0.5 * PI);
+        assert!(close(half.length, 2.0 * PI));
+        let (first, last) = ends(&half.parts[0]);
+        assert!(at(first, 0.0, -2.0) && at(last, 0.0, 2.0));
+        assert!(half.parts[0].iter().all(|p| p[0] > -1e-9)); // round by (2, 0), not (-2, 0)
+    }
+
+    #[test]
+    fn an_arc_that_ends_where_it_starts_is_a_whole_circle() {
+        let whole = arc([0.0, 0.0], 2.0, 1.0, 1.0);
+        let (first, last) = ends(&whole.parts[0]);
+        assert!(at(first, last[0], last[1])); // drawn all the way round
+        assert!(close(whole.length, 4.0 * PI));
+    }
+
+    #[test]
+    fn a_ring_measures_the_same_either_way_round_and_needs_three_points() {
+        let anticlockwise = square(0.0, 0.0, 10.0);
+        let clockwise: Vec<[f64; 2]> = anticlockwise.iter().rev().copied().collect();
+        assert!(close(ring_area(&anticlockwise), 100.0) && close(ring_area(&clockwise), 100.0));
+        assert!(signed_area(&anticlockwise) > 0.0 && signed_area(&clockwise) < 0.0);
+        assert_eq!(ring_area(&[[0.0, 0.0], [10.0, 10.0]]), 0.0);
+    }
+
+    #[test]
+    fn survey_coordinates_keep_their_digits() {
+        // a 100 mm square five thousand kilometres out, in metres
+        let ring = square(5.0e6, 3.0e6, 0.1);
+        assert!((ring_area(&ring) - 0.01).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_point_is_inside_a_ring_only_within_it() {
+        let l = l_clip().ring;
+        assert!(inside(&l, [2.0, 2.0]) && inside(&l, [2.0, 8.0]) && inside(&l, [8.0, 2.0]));
+        assert!(!inside(&l, [7.0, 7.0])); // the L's notch
+        assert!(!inside(&l, [-1.0, 2.0]) && !inside(&l, [11.0, 2.0]));
+    }
+
+    #[test]
+    fn an_island_within_an_island_counts_again() {
+        let shape = rings(
+            vec![
+                square(0.0, 0.0, 10.0),
+                square(2.0, 2.0, 6.0),
+                square(4.0, 4.0, 2.0),
+            ],
+            false,
+        );
+        assert!(close(shape.area, 100.0 - 36.0 + 4.0));
+        assert!(close(shape.length, 40.0 + 24.0 + 8.0));
+        assert!(shape.closed && !shape.approximate);
+    }
+
+    #[test]
+    fn a_ring_of_fewer_than_three_points_is_dropped() {
+        let shape = rings(
+            vec![vec![[0.0, 0.0], [10.0, 10.0]], square(0.0, 0.0, 1.0)],
+            false,
+        );
+        assert_eq!(shape.parts.len(), 1);
+        assert!(close(shape.area, 1.0) && close(shape.length, 4.0));
+    }
+
+    #[test]
+    fn then_applies_the_inner_transform_first() {
+        let shift = Affine::translate(10.0, 0.0);
+        let turn = Affine::placed(0.0, 0.0, FRAC_PI_2, 1.0, 1.0);
+        assert!(at(turn.then(&shift).apply([1.0, 0.0]), 0.0, 11.0));
+        assert!(at(shift.then(&turn).apply([1.0, 0.0]), 10.0, 1.0));
+    }
+
+    #[test]
+    fn a_mirrored_block_keeps_its_exact_length_and_a_positive_area() {
+        let bulged = polyline(
+            &[
+                ([0.0, 0.0], 0.0),
+                ([10.0, 0.0], 0.0),
+                ([10.0, 10.0], 1.0),
+                ([0.0, 10.0], 0.0),
+            ],
+            true,
+        );
+        let (area, length) = (100.0 + PI * 12.5, 30.0 + PI * 5.0);
+        let mirror = Affine::placed(0.0, 0.0, 0.0, -1.0, 1.0);
+        assert!(mirror.det() < 0.0 && mirror.uniform() == Some(1.0));
+        let mirrored = bulged.clone().transformed(&mirror);
+        assert!(close(mirrored.area, area) && close(mirrored.length, length));
+        assert!(!mirrored.approximate);
+        assert!(at(mirrored.parts[0][1], -10.0, 0.0));
+        let doubled = bulged.transformed(&Affine::placed(5.0, 5.0, 1.0, -2.0, 2.0));
+        assert!(close(doubled.area, 4.0 * area) && close(doubled.length, 2.0 * length));
+    }
+
+    #[test]
+    fn a_stretched_circle_is_measured_from_its_points() {
+        let stretch = Affine::placed(0.0, 0.0, 0.0, 2.0, 1.0);
+        assert_eq!(stretch.uniform(), None);
+        let stretched = circle([0.0, 0.0], 1.0).transformed(&stretch);
+        assert!(close(stretched.area, 2.0 * PI)); // areas scale exactly
+                                                  // the 2 × 1 ellipse's perimeter (Ramanujan), which its chords fall just short of
+        let perimeter = PI * (9.0 - 35f64.sqrt());
+        assert!(stretched.approximate);
+        assert!(stretched.length < perimeter && stretched.length > perimeter * 0.999);
+    }
+
+    #[test]
+    fn a_stretched_or_sheared_straight_shape_stays_exact() {
+        let unit = || polyline(&straight(square(0.0, 0.0, 1.0)), true);
+        let stretched = unit().transformed(&Affine::placed(0.0, 0.0, 0.0, 2.0, 3.0));
+        assert!(close(stretched.length, 10.0) && close(stretched.area, 6.0));
+        assert!(!stretched.approximate);
+        let shear = Affine {
+            b: 1.0,
+            ..Affine::IDENTITY
+        };
+        assert_eq!(shear.uniform(), None);
+        let sheared = unit().transformed(&shear);
+        assert!(close(sheared.length, 2.0 + 2.0 * 2f64.sqrt()) && close(sheared.area, 1.0));
+        assert!(!sheared.approximate);
+    }
+
+    #[test]
+    fn an_object_facing_down_is_mirrored_into_the_world() {
+        assert_eq!(Affine::ocs(Vector3::new(0.0, 0.0, 1.0)), Affine::IDENTITY);
+        let down = Affine::ocs(Vector3::new(0.0, 0.0, -1.0));
+        assert!(at(down.apply([5.0, 2.0]), -5.0, 2.0));
+    }
+
+    #[test]
+    fn a_clip_needs_an_area() {
+        assert!(Clip::new(vec![]).is_none());
+        assert!(Clip::new(vec![[0.0, 0.0], [10.0, 0.0]]).is_none());
+        assert!(Clip::new(vec![[0.0, 0.0], [5.0, 0.0], [10.0, 0.0]]).is_none());
+        // the same two points over and over
+        assert!(Clip::new(vec![
+            [0.0, 0.0],
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [10.0, 0.0],
+            [0.0, 0.0]
+        ])
+        .is_none());
+    }
+
+    #[test]
+    fn a_clip_drawn_clockwise_or_closed_cuts_the_same() {
+        let clockwise: Vec<[f64; 2]> = square(0.0, 0.0, 10.0).into_iter().rev().collect();
+        let mut closed = square(0.0, 0.0, 10.0);
+        closed.push([0.0, 0.0]);
+        for ring in [clockwise, closed] {
+            let clip = [Clip::new(ring).unwrap()];
+            let cut = line([-5.0, 5.0], [15.0, 5.0]).clipped(&clip).unwrap();
+            assert!(close(cut.length, 10.0));
+            let corner = rings(vec![square(5.0, 5.0, 10.0)], false)
+                .clipped(&clip)
+                .unwrap();
+            assert!(close(corner.area, 25.0) && close(corner.length, 10.0));
+        }
+    }
+
+    #[test]
+    fn a_point_shows_only_inside_or_on_a_clip() {
+        let point = |p: [f64; 2]| Shape {
+            parts: vec![vec![p]],
+            ..Shape::default()
+        };
+        let clip = [l_clip()];
+        assert!(point([2.0, 2.0]).clipped(&clip).is_some());
+        assert!(point([10.0, 2.0]).clipped(&clip).is_some()); // on its edge
+        assert!(point([7.0, 7.0]).clipped(&clip).is_none()); // in the notch
+        assert!(point([15.0, 2.0]).clipped(&clip).is_none());
+        assert!(point([15.0, 2.0]).clipped(&[]).is_some()); // nothing clips it
+    }
+
+    #[test]
+    fn only_what_shows_through_every_clip_is_kept() {
+        let clips = [
+            Clip::new(square(0.0, 0.0, 10.0)).unwrap(),
+            Clip::new(square(5.0, 0.0, 10.0)).unwrap(),
+        ];
+        let cut = line([-5.0, 5.0], [20.0, 5.0]).clipped(&clips).unwrap();
+        assert!(close(cut.length, 5.0));
+        assert!(shows(&clips, [7.0, 5.0]));
+        assert!(!shows(&clips, [2.0, 5.0]) && !shows(&clips, [12.0, 5.0]));
+    }
+
+    #[test]
+    fn a_line_along_or_through_a_clips_corners_is_cut_there() {
+        let clip = [Clip::new(square(0.0, 0.0, 10.0)).unwrap()];
+        // along the bottom edge and on past both corners
+        let along = line([-5.0, 0.0], [15.0, 0.0]).clipped(&clip).unwrap();
+        assert!(close(along.length, 10.0));
+        // corner to corner and beyond
+        let diagonal = line([-5.0, -5.0], [15.0, 15.0]).clipped(&clip).unwrap();
+        assert!(close(diagonal.length, 200f64.sqrt()));
+        assert!(at(diagonal.parts[0][0], 0.0, 0.0) && at(diagonal.parts[0][1], 10.0, 10.0));
+        // only touching a corner from outside shows nothing
+        assert!(line([10.0, 10.0], [20.0, 20.0]).clipped(&clip).is_none());
+    }
+
+    #[test]
+    fn a_clipped_circle_keeps_the_half_inside() {
+        let clip =
+            [Clip::new(vec![[0.0, -10.0], [10.0, -10.0], [10.0, 10.0], [0.0, 10.0]]).unwrap()];
+        let half = circle([0.0, 0.0], 5.0).clipped(&clip).unwrap();
+        // from its chords, which fall a little inside the curve
+        assert!((half.area / (PI * 12.5) - 1.0).abs() < 0.002);
+        assert!((half.length / (PI * 5.0) - 1.0).abs() < 0.002);
+        assert!(half.closed && half.approximate);
+        assert!(half.parts.iter().flatten().all(|p| p[0] >= -1e-9));
+    }
+
+    #[test]
+    fn pieces_meeting_end_to_start_join_into_loops() {
+        let pieces = vec![
+            [[10.0, 10.0], [0.0, 10.0]],
+            [[0.0, 0.0], [10.0, 0.0]],
+            [[20.0, 0.0], [21.0, 0.0]],
+            [[0.0, 10.0], [0.0, 0.0]],
+            [[21.0, 0.0], [20.0, 1.0]],
+            [[10.0, 0.0], [10.0, 10.0]],
+            [[20.0, 1.0], [20.0, 0.0]],
+        ];
+        let found = loops(pieces);
+        assert_eq!(found.iter().map(Vec::len).collect::<Vec<_>>(), [4, 3]);
+        assert!(close(ring_area(&found[0]), 100.0) && close(ring_area(&found[1]), 0.5));
+    }
+
+    #[test]
+    fn separate_edges_join_into_separate_rings() {
+        let edges = vec![
+            vec![[20.0, 0.0], [22.0, 0.0]],
+            arc_points([0.0, 0.0], 5.0, 0.0, PI), // (5, 0) round to (-5, 0)
+            vec![[22.0, 2.0], [20.0, 2.0], [20.0, 0.0]],
+            vec![[5.0, 0.0], [-5.0, 0.0]], // the diameter, the other way round
+            vec![[22.0, 0.0], [22.0, 2.0]],
+            vec![[1.0, 1.0]],
+        ];
+        let mut areas: Vec<f64> = rings_of(edges).iter().map(|r| ring_area(r)).collect();
+        areas.sort_by(f64::total_cmp);
+        assert_eq!(areas.len(), 2);
+        assert!(close(areas[0], 4.0));
+        assert!((areas[1] / (PI * 12.5) - 1.0).abs() < 0.002);
+        assert!(rings_of(vec![vec![[1.0, 1.0]]]).is_empty() && rings_of(vec![]).is_empty());
+    }
+
+    #[test]
+    fn a_full_ellipse_encloses_pi_a_b() {
+        let whole = ellipse([0.0, 0.0], [4.0, 0.0], 0.5, 0.0, TAU, false);
+        assert!(whole.closed && whole.approximate && close(whole.area, 8.0 * PI));
+        let perimeter = PI * (18.0 - 140f64.sqrt()); // Ramanujan's, for 4 × 2
+        assert!((whole.length / perimeter - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn an_elliptical_arc_turns_the_way_its_normal_faces() {
+        let quarter = |down| ellipse([0.0, 0.0], [2.0, 0.0], 0.5, 0.0, FRAC_PI_2, down);
+        let up = quarter(false);
+        assert!(!up.closed && up.area == 0.0);
+        assert!(at(ends(&up.parts[0]).1, 0.0, 1.0));
+        assert!(at(ends(&quarter(true).parts[0]).1, 0.0, -1.0));
+    }
+
+    #[test]
+    fn a_straight_spline_measures_its_control_polygon() {
+        let open = spline(
+            1,
+            &[[0.0, 0.0], [3.0, 4.0], [6.0, 0.0]],
+            &[0.0, 0.0, 1.0, 2.0, 2.0],
+            &[],
+            &[],
+            false,
+        );
+        assert!(close(open.length, 10.0) && open.area == 0.0 && open.approximate);
+        let mut control = square(0.0, 0.0, 10.0);
+        control.push([0.0, 0.0]);
+        let closed = spline(
+            1,
+            &control,
+            &[0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0],
+            &[],
+            &[],
+            true,
+        );
+        assert!(close(closed.length, 40.0) && close(closed.area, 100.0));
+    }
+
+    #[test]
+    fn a_spline_without_control_points_runs_through_its_fit_points() {
+        let fit = [[0.0, 0.0], [3.0, 4.0], [6.0, 0.0]];
+        let shape = spline(3, &[], &[], &[], &fit, false);
+        assert_eq!(shape.parts, vec![fit.to_vec()]);
+        assert!(close(shape.length, 10.0) && shape.approximate);
+    }
+
+    #[test]
+    fn a_hatch_edge_runs_the_way_it_turns() {
+        let anticlockwise = arc_edge([0.0, 0.0], 1.0, 0.0, FRAC_PI_2, true);
+        let (first, last) = ends(&anticlockwise);
+        assert!(at(first, 1.0, 0.0) && at(last, 0.0, 1.0));
+        // a clockwise edge keeps its angles as seen from below
+        let clockwise = arc_edge([0.0, 0.0], 1.0, 0.0, FRAC_PI_2, false);
+        let (first, last) = ends(&clockwise);
+        assert!(at(first, 1.0, 0.0) && at(last, 0.0, -1.0));
+        assert!(anticlockwise
+            .iter()
+            .chain(&clockwise)
+            .all(|p| close(p[0].hypot(p[1]), 1.0)));
     }
 }

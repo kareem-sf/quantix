@@ -1,5 +1,7 @@
+import io
 from decimal import Decimal
 
+import openpyxl
 import pytest
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 from test_documents import PDF, make_xlsx, read_all, upload
@@ -282,3 +284,85 @@ def test_staff_withdraw_their_own_undecided_lines(client, package, qs):
     assert client.get(f"/tenders/{tender_id}/boq").json()["items"] == []
     assert client.get(f"/tenders/{tender_id}/gates").json()["boq"] == 0
     assert propose(client, tender_id, qs, [line(bill, section="8485 · Earthwork")]).startswith("Saved 1")
+
+
+def figures() -> bytes:
+    """A bill whose quantities are written as a client might: with separators, in Arabic digits, nought and less."""
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    for row in (
+        ["Item", "Description", "Unit", "Qty"],
+        ["3.1", "Excavation", "m3", "1,240.00"],
+        ["4.2", "خرسانة", "م3", "٣١٢٫٤"],
+        ["5.1", "Blinding", "m2", 0],
+        ["3.9", "Omit existing kerbs", "m", -50],
+    ):
+        sheet.append(row)
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def test_a_quantity_is_read_however_the_client_wrote_it(client, package, qs):
+    tender_id = package[0]
+    upload(client, tender_id, {"Figures.xlsx": figures()})
+    bill = read_all(client, tender_id)["Figures.xlsx"]["id"]
+    report = propose(
+        client,
+        tender_id,
+        qs,
+        [
+            line(bill, quote="A2=3.1 | B2=Excavation | C2=m3 | D2=1,240.00"),
+            line(
+                bill,
+                item="4.2",
+                quantity="312.4",
+                quote="A3=4.2 | B3=خرسانة | C3=م3 | D3=٣١٢٫٤",
+                unit="م3",
+                description="خرسانة",
+            ),
+            line(bill, item="5.1", quantity="0", quote="A4=5.1 | B4=Blinding | C4=m2 | D4=0", unit="m2"),
+            line(bill, item="3.2", quote="A2=3.1 | B2=Excavation | C2=m3 | D2=1,240.00"),
+        ],
+    )
+    assert report == (
+        "Saved 3 BOQ items for the Tender Manager's review.\n"
+        "Not saved: item 3.2: the item number 3.2 is not in the quote"
+    )
+    items = client.get(f"/tenders/{tender_id}/boq").json()["items"]
+    assert [(i["item"], i["quantity"]) for i in items] == [("3.1", "1240.0000"), ("4.2", "312.4000"), ("5.1", "0.0000")]
+
+
+@pytest.mark.xfail(
+    strict=True, reason="Bug: numbers_in drops a minus sign, so a negative quantity is never in its quote"
+)
+def test_a_negative_quantity_printed_in_the_bill_is_taken_as_printed(client, package, qs):
+    tender_id = package[0]
+    upload(client, tender_id, {"Figures.xlsx": figures()})
+    bill = read_all(client, tender_id)["Figures.xlsx"]["id"]
+    omission = line(bill, item="3.9", quantity="-50", quote="A5=3.9 | B5=Omit existing kerbs | C5=m | D5=-50", unit="m")
+    assert propose(client, tender_id, qs, [omission]) == "Saved 1 BOQ items for the Tender Manager's review."
+
+
+def test_approving_a_fact_tells_the_manager_and_unknown_records_are_not_found(client, package, qs):
+    tender_id, _, conditions = package
+    with client.app.state.sessions() as session:
+        from quantix.office.models import Staff
+
+        manager = office.hire(session, tender_id, "Rania Farouk", "Tender Manager", {}, is_manager=True)
+        omar = session.get(Staff, qs)
+        with pytest.raises(ValueError, match="Facts can be: method_of_measurement, currency, vat, contract_type"):
+            records.propose_fact(session, tender_id, omar, "discount", "5%", conditions, 1, "Tender security")
+        fact = records.propose_fact(
+            session, tender_id, omar, "contract_type", " Lump sum ", conditions, 1, "Conditions of Contract"
+        )
+        session.commit()
+        manager_id, fact_id = manager.id, fact.id
+    assert client.post(f"/facts/{fact_id}/decision", json={"approve": True}).status_code == 200
+    to_rania = client.get(f"/tenders/{tender_id}/messages", params={"channel": manager_id}).json()
+    assert to_rania[-1]["text"] == "I approved the contract type: Lump sum."
+    assert client.get("/tenders/nope/boq").status_code == 404
+    assert client.get("/tenders/nope/gates").status_code == 404
+    assert client.post("/tenders/nope/boq/approve-all").status_code == 404
+    assert client.post("/boq/nope/decision", json={"approve": True}).status_code == 404
+    assert client.post("/facts/nope/decision", json={"approve": True}).status_code == 404

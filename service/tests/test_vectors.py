@@ -16,6 +16,7 @@ from test_revisions import newer
 from quantix import settings
 from quantix.documents import cad, library, vectors
 from quantix.documents.models import Document
+from quantix.documents.readers import Unreadable
 from quantix.office import records as office
 from quantix.office.models import ENGINEER
 from quantix.review import checks
@@ -78,15 +79,37 @@ def layered_page() -> str:
     )
 
 
+def details_page() -> str:
+    """Details as CAD prints them."""
+    ops = [
+        # a slab with an opening and a column filled in the opening: three outlines in one fill
+        "0 0 0 rg 100 100 m 300 100 l 300 300 l 100 300 l h 150 150 m 250 150 l 250 250 l 150 250 l h "
+        "180 180 m 220 180 l 220 220 l 180 220 l h f*",
+        "0 0 0 RG 1 w 400 100 m 500 100 l 450 200 l h S",  # a closed outline, drawn in one stroke
+        "/Artifact BMC 0 0 0 RG 0 w 400 300 m 500 300 l S EMC",  # a hairline, marked as an artifact, not a layer
+        "1 0 0 RG 1 w 600 100 m 600 100 l S",  # a dot
+        "q 2 0 0 2 600 300 cm /X1 Do Q",  # the form, placed at twice its size
+        "q 10 0 0 10 700 100 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \xff EI Q",  # a picture
+        # hatch lines cut to a U-shaped boundary: one crosses both its arms, one runs below it
+        "q 100 400 m 300 400 l 300 500 l 250 500 l 250 420 l 150 420 l 150 500 l 100 500 l h W n",
+        "0 1 1 RG 0.25 w 50 450 m 350 450 l S 50 380 m 350 380 l S Q",
+        # and one cut to a round boundary
+        f"q {_circle(650, 480, 40).removesuffix('S')}W n 0.5 0 0.5 RG 0.25 w 600 430 m 700 530 l S Q",
+    ]
+    return "\n".join(ops)
+
+
 def make_vector_pdf(pages: list[str]) -> bytes:
     """A PDF whose pages draw the given content streams, with the two layers (C-ROAD and C-KERB) the second page
-    uses; an empty page stands in for a scan."""
+    uses and a form (X1: a blue line 50 long) a page may place; an empty page stands in for a scan."""
+    form = "0 0 1 RG 1 w 10 10 m 60 10 l S"
     objects = [
         "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [4 0 R 5 0 R] /D << /Order [4 0 R 5 0 R] >> >> >>",
         "",
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
         "<< /Type /OCG /Name (C-ROAD) >>",
         "<< /Type /OCG /Name (C-KERB) >>",
+        f"<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Length {len(form)} >>\nstream\n{form}\nendstream",
     ]
     kids = []
     for stream in pages:
@@ -94,7 +117,7 @@ def make_vector_pdf(pages: list[str]) -> bytes:
         content = len(objects)
         objects.append(
             f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {WIDTH} {HEIGHT}] /Resources << /Font << /F1 3 0 R >> "
-            f"/Properties << /L1 4 0 R /L2 5 0 R >> >> /Contents {content} 0 R >>"
+            f"/Properties << /L1 4 0 R /L2 5 0 R >> /XObject << /X1 6 0 R >> >> /Contents {content} 0 R >>"
         )
         kids.append(f"{len(objects)} 0 R")
     objects[1] = f"<< /Type /Pages /Kids [{' '.join(kids)}] /Count {len(kids)} >>"
@@ -380,3 +403,72 @@ def test_staff_take_off_a_pdf_drawing_through_their_tools(client, site, tmp_path
     assert "Scale: about 1:142 (approved)" in seen[0] and "- green 00CC00 · 0.18 mm: 1 Polyline" in seen[0]
     assert "length 450.000 drawing units = 22.500 m" in seen[1]
     assert seen[2] == "Measured Road edge: 1 objects, 22.500 m (Quantix's figure)."
+
+
+def test_a_pdf_drawings_fills_forms_dots_and_cut_lines_are_read(tmp_path):
+    files = tmp_path / "files"
+    files.mkdir()
+    stored = files / "details.pdf"
+    stored.write_bytes(make_vector_pdf([details_page()]))
+    assert vectors.line_count(stored, 1) == 8  # the form's stroke among them
+    d = vectors.page_drawing(stored, 1)
+
+    (slab,) = _by_type(d, 1, "Hatch")
+    assert d.area(slab) == pytest.approx(200 * 200 - 100 * 100 + 40 * 40)  # the opening cut out, the column in it kept
+    (outline,) = _find(d, "black 000000 · 0.35 mm")
+    assert d.flags(outline) & cad.CLOSED and d.area(outline) == pytest.approx(100 * 100 / 2)
+    assert d.length(outline) == pytest.approx(100 + 2 * math.hypot(50, 100))
+    (hairline,) = _find(d, "black 000000 · hairline")
+    assert d.length(hairline) == pytest.approx(100)
+    (dot,) = _by_type(d, 1, "Point")
+    assert d.layer_of(dot) == "red FF0000 · 0.35 mm" and d.bbox(dot) == pytest.approx((600, 100, 600, 100))
+    (placed,) = _find(d, "blue 0000FF · 0.71 mm")  # its pen twice as heavy too
+    assert d.bbox(placed) == pytest.approx((620, 320, 720, 320))
+    (cut,) = _find(d, "cyan 00FFFF")  # the line below the U is cut away whole
+    assert len(d.parts(cut)) == 2 and d.length(cut) == pytest.approx(100)
+    (round_cut,) = _find(d, "purple")
+    assert d.length(round_cut) == pytest.approx(80, abs=0.05)
+    assert d.info["read"]["not_read"] == {"pictures": 1}
+
+
+def test_a_pdf_that_cant_be_opened_or_hasnt_the_page_is_refused(tmp_path):
+    files = tmp_path / "files"
+    files.mkdir()
+    broken = files / "broken.pdf"
+    broken.write_bytes(b"%PDF-1.5\nhalf a drawing, cut off in the post\n")
+    with pytest.raises(Unreadable, match="This PDF can't be opened."):
+        vectors.page_drawing(broken, 1)
+    stored = files / "site.pdf"
+    stored.write_bytes(SITE)
+    with pytest.raises(ValueError, match="The PDF has pages 1 to 3."):
+        vectors.page_drawing(stored, 4)
+    assert vectors.line_count(stored, 4) == 0
+
+
+def test_a_pdf_page_is_a_drawing_only_where_it_is_drawn(client, site):
+    tender_id, drawing, _ = site
+    beyond = client.get(f"/documents/{drawing}/drawing", params={"page": 4})
+    assert beyond.status_code == 400 and beyond.json()["detail"] == "Site.pdf has pages 1 to 3."
+    upload(client, tender_id, {"Drawings/Broken.pdf": b"%PDF-1.5\nhalf a drawing, cut off in the post\n"})
+    broken = read_all(client, tender_id)["Drawings/Broken.pdf"]["id"]
+    unread = client.get(f"/documents/{broken}/drawing")
+    assert unread.status_code == 400 and unread.json()["detail"].startswith("Broken.pdf couldn't be read:")
+    stamp = client.get(f"/documents/{drawing}/drawing", params={"page": 1}).json()["stamp"]
+    rooms = client.post(
+        f"/documents/{drawing}/pages/1/choose", json={"stamp": stamp, "rule": {"rooms": ["switchroom"]}}
+    )
+    assert rooms.status_code == 400 and rooms.json()["detail"].startswith("Rooms come from a CAD drawing's layer map")
+    units = client.post(f"/tenders/{tender_id}/units", json={"document_id": drawing, "units": "metres"})
+    assert units.status_code == 400 and units.json()["detail"].startswith("Site.pdf isn't a CAD drawing")
+
+
+@pytest.mark.xfail(strict=True, reason="Bug: the checks route reads a PDF drawing page with the CAD reader and fails")
+def test_the_checks_of_a_pdf_drawing_are_refused_as_cads_own(client, site):
+    tender_id, drawing, _ = site
+    assert client.get(f"/tenders/{tender_id}/checks", params={"document_id": drawing}).status_code == 400
+
+
+@pytest.mark.xfail(strict=True, reason="Bug: the rooms route reads a PDF drawing page with the CAD reader and fails")
+def test_the_rooms_of_a_pdf_drawing_are_refused_as_cads_own(client, site):
+    _, drawing, _ = site
+    assert client.get(f"/documents/{drawing}/rooms").status_code == 400

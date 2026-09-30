@@ -6,6 +6,11 @@ service/.venv/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+.coverage
+coverage/
+test-results/
+playwright-report/
+e2e/.home/
 desktop/target/
 cad/target/
 

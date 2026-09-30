@@ -1,7 +1,8 @@
 """The office looks up market facts on the web: searching without a key, falling back when the free service can't
 answer, and pricing only from pages Quantix saved, so every quote can be checked."""
 
-from datetime import datetime
+import json
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 import httpx
@@ -130,4 +131,57 @@ def test_a_web_research_key_is_kept_once_the_service_accepts_it(client, monkeypa
         "tinyfish": "…-key",
     }
     assert client.delete("/web/keys/tinyfish").status_code == 204
+    assert client.get("/web/keys").json() == {"firecrawl": None, "tinyfish": None}
+
+
+def test_a_page_the_free_service_cant_read_is_read_by_tinyfish_once_it_has_a_key(client, monkeypatch):
+    requests = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.host)
+        if request.url.host == "api.firecrawl.dev":  # the site turned the free service away
+            metadata = {"title": ["Access denied"], "sourceURL": URL, "statusCode": 403}
+            return httpx.Response(200, json={"success": True, "data": {"markdown": "", "metadata": metadata}})
+        assert json.loads(request.content) == {"urls": [URL], "format": "markdown"}
+        if request.headers["x-api-key"] != "tf-key":
+            return httpx.Response(401)
+        if "blocked" in URL:
+            return httpx.Response(200, json={"results": [], "errors": [{"url": URL, "error": "blocked"}]})
+        return httpx.Response(200, json={"results": [{"url": URL, "title": "Green Concrete", "text": PAGE}]})
+
+    monkeypatch.setattr(web, "client", httpx.Client(transport=httpx.MockTransport(answer)))
+    home = client.app.state.home
+    with client.app.state.sessions() as session:
+        with pytest.raises(web.Unavailable):
+            web.read(session, home, URL)
+        assert requests == ["api.firecrawl.dev"]  # TinyFish has no keyless use
+
+        connections.set_web_key(home, "tinyfish", "tf-key")
+        page = web.read(session, home, URL)
+        assert (page.url, page.title, page.text) == (URL, "Green Concrete", PAGE)
+        assert requests[-1] == "api.fetch.tinyfish.ai"
+
+        with pytest.raises(ValueError, match="starting with https://"):
+            web.read(session, home, "readymix.example/c35")
+
+
+def test_a_saved_page_is_read_again_after_a_week(client, monkeypatch):
+    services = Web(monkeypatch)
+    home = client.app.state.home
+    with client.app.state.sessions() as session:
+        first = web.read(session, home, URL)
+        assert web.read(session, home, URL) is first and len(services.requests) == 1
+        first.read_at -= web.FRESH + timedelta(minutes=1)
+        again = web.read(session, home, URL)
+        assert again.id != first.id and len(services.requests) == 2
+        assert again.title == "Green Concrete Readymix" and again.text == PAGE
+
+
+def test_a_web_research_key_is_not_kept_when_the_service_cant_be_reached(client, monkeypatch):
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("no route to host", request=request)
+
+    monkeypatch.setattr(web, "client", httpx.Client(transport=httpx.MockTransport(unreachable)))
+    refused = client.put("/web/keys/firecrawl", json={"api_key": "fc-key"})
+    assert (refused.status_code, refused.json()["detail"]) == (502, "The service couldn't be reached. Try again later.")
     assert client.get("/web/keys").json() == {"firecrawl": None, "tinyfish": None}

@@ -11,23 +11,32 @@ from types import SimpleNamespace
 
 import pytest
 import test_estimate
+import test_subcontract
 from PIL import Image
 from pydantic_ai import ModelRetry, ToolReturn
 from pydantic_ai.messages import ModelResponse, RetryPromptPart, TextPart, ToolCallPart, ToolReturnPart
 from test_documents import read_all, upload
 from test_office import scripted, wait_for
+from test_revisions import PLAN, YARD
 
 from quantix import settings
 from quantix.boq import records as boq
+from quantix.boq.models import BoqItem
 from quantix.documents import library
+from quantix.documents.models import WebPage
 from quantix.estimate import records as estimate
 from quantix.office import agents, tools
 from quantix.office import records as office
 from quantix.office.models import Staff, Task
-from quantix.review import lookup
+from quantix.review import activity, lookup
 from quantix.review import records as reviews
+from quantix.subcontract import records as subcontract
+from quantix.subcontract.models import Package
+from quantix.submission import records as submission
+from quantix.takeoff import records as takeoff
 
 tender = test_estimate.tender  # the fixture: a priced school with an estimator
+subcontracted = test_subcontract.tender  # the fixture: the school's groundworks, with two quotes to record
 BUILD_UP = test_estimate.BUILD_UP
 QUESTION = "How did you price the slab reinforcement?"
 LINES = [estimate.LineIn(**line) for line in BUILD_UP]
@@ -413,3 +422,462 @@ def test_a_refused_answer_names_what_it_may_rest_on(client, tender, tmp_path):
     opened = refusal.split("Since the engineer wrote, you opened: ")[1].rstrip(".").split("; ")
     assert f"rate {rate_id[:8]}" in opened and any(o.startswith("boq ") for o in opened)  # the rate and its line
     assert client.get(chat).json()[-1]["text"] == "Built up from a fixing gang."
+
+
+def document_id(client, tender_id, name) -> str:
+    with client.app.state.sessions() as session:
+        return next(d.id for d in library.documents(session, tender_id) if d.name == name)
+
+
+def test_a_boq_line_opens_with_its_rate_its_measurements_and_its_package(client, tender):
+    tender_id, priya_id, quote_id = tender
+    home = client.app.state.home
+    upload(client, tender_id, {"A-102.pdf": PLAN})
+    plan = read_all(client, tender_id)["A-102.pdf"]["id"]
+    body = {"document_id": plan, "page": 1, "line": [[85.04, 141.73], [481.89, 141.73]], "length_m": 40}
+    assert client.post(f"/tenders/{tender_id}/scales", json={**body, "dimension": "40.00"}).status_code == 201
+    patch = [[100, 100], [200, 100], [200, 200]]
+    with client.app.state.sessions() as session:
+        why = "Membrane and labour at current prices."
+        rate = estimate.propose_rate(session, tender_id, priya_id, "6.3", "estimate", why, unit_rate=Decimal(38))
+        roof = takeoff.measure(session, tender_id, priya_id, plan, 1, "area", "Roof", YARD, "m2", None, "6.3")
+        loose = takeoff.measure(
+            session, tender_id, priya_id, quote_id, 1, "area", "Loose patch", patch, "m2", None, None
+        )
+        package = subcontract.create_package(session, tender_id, priya_id, "Waterproofing", "supply", ["6.3"])
+        session.commit()
+        r, m, p = rate.id[:8], roof.id[:8], package.id[:8]
+        loose_ref = f"measurement {loose.id[:8]}"
+
+    with client.app.state.sessions() as session:
+        kind, item = lookup.find(session, tender_id, "6.3")
+        assert lookup.related(session, kind, item) == [("rate", rate.id)]
+        opened = lookup.explain(session, home, tender_id, kind, item).splitlines()
+        assert opened[:6] == [
+            f"boq {item.id[:8]} · approved by the engineer",
+            "6.3: Waterproofing · 980 m2",
+            "From Bill.xlsx, page 1: “A3=6.3 | B3=Waterproofing | C3=m2 | D3=980”",
+            f"Rate: 38.00 per m2 (estimate); 980 m2 is 37,240.00 · rate {r}, with the Manager",
+            f"Measured: “Roof” 800.02 m2 · measurement {m}, with the Manager",
+            "In the Waterproofing package.",
+        ]
+        assert opened[6].startswith("Made by Priya on ") and opened[7].startswith("The engineer approved it on ")
+        assert lookup.explain(session, home, tender_id, "boq", boq.find_item(session, tender_id, "3.1")).splitlines()[
+            3
+        ] == ("Not priced yet.")
+
+        kind, measured = lookup.find(session, tender_id, f"measurement {m}")
+        assert lookup.related(session, kind, measured) == [("boq", item.id)]
+        shown = lookup.explain(session, home, tender_id, kind, measured)  # undecided, so with Quantix's checks
+        assert shown.startswith(f"measurement {m} · with the Tender Manager for review\n")
+        assert " of 4 points on A-102.pdf, page 1: [[85.04, 170.08], " in shown
+        assert shown.endswith(
+            "The BOQ has 980 m2 for 6.3.\n"
+            f"Made by Priya on {measured.created_at:%d %b %Y}.\n"
+            "Quantix's checks:\n- WARNING: The drawings measure 800.02 m2 for 6.3, -18.4% from the BOQ's 980. "
+            "(A-102.pdf, page 1; Bill.xlsx, page 1)"
+        )
+
+        one = lookup.takeoff_view(session, tender_id, "6.3").splitlines()
+        assert one[0] == "6.3 Waterproofing: BOQ 980 m2."
+        assert one[1].startswith(f"- measurement {m} · “Roof” on A-102.pdf, page 1 at about 1:286: ")
+        assert one[1].endswith(" of 4 points = 800.02 m2 · with the Manager")
+        assert one[2] == "Takeoff 800.02 m2, -18.4% against the BOQ (differs)."
+        assert lookup.takeoff_view(session, tender_id, "3.1") == (
+            "3.1 Excavation: BOQ 1,240 m3. Nothing is measured for it yet."
+        )
+        assert lookup.takeoff_view(session, tender_id).splitlines() == [
+            "(no BOQ line) Loose patch: takeoff - m2, BOQ -  → no scale",  # Quote.pdf has no scale
+            "6.3 Waterproofing: takeoff 800.02 m2, BOQ 980 m2 (-18.4%) → differs",
+            "Not measured yet, 2 lines with a quantity: 3.1, 4.3",
+        ]
+        assert lookup.search(session, tender_id, "roof", "measurement") == [
+            f"measurement {m} · “Roof” 800.02 m2 for 6.3 · with the Manager"
+        ]
+        assert lookup.search(session, tender_id, "patch") == [f"{loose_ref} · “Loose patch” - m2 · with the Manager"]
+        assert lookup.search(session, tender_id, "", "package") == [
+            f"package {p} · Waterproofing (supply), 1 items · no quote recommended yet"
+        ]
+        assert lookup.packages_view(session, tender_id) == (
+            f"package {p} · Waterproofing (supply), 1 lines · 0 enquiries, 0 sent · quotes: none yet · no quote "
+            "recommended yet"
+        )
+
+    empty = client.post("/tenders", json={"name": "Nothing yet"}).json()["id"]
+    with client.app.state.sessions() as session:
+        assert lookup.takeoff_view(session, empty) == "Nothing is measured yet, and the BOQ has no quantities."
+        assert lookup.packages_view(session, empty) == (
+            "No packages yet. Group lines to price from outside with create_package."
+        )
+        assert lookup.priced(session, empty) == "The BOQ is empty."
+        with pytest.raises(ValueError, match=f"There is no measurement {m} on this tender"):
+            lookup.find(session, empty, f"measurement {m}")
+
+
+def test_a_record_opens_with_who_decided_it_and_every_version_before_it(client, tender):
+    tender_id, priya_id, _ = tender
+    home = client.app.state.home
+    note = "Excavator output 45 m3 an hour at current plant and labour prices."
+    with client.app.state.sessions() as session:
+        rania = office.hire(session, tender_id, "Rania Farouk", "Tender Manager", {}, is_manager=True)
+        for n in range(10):  # each new proposal replaces the one still waiting, a minute after the last
+            latest = estimate.propose_rate(session, tender_id, priya_id, "3.1", "estimate", note, Decimal(10 + n))
+            latest.created_at += timedelta(minutes=n)
+        waterproofing = boq.find_item(session, tender_id, "6.3")
+        reviews.reopen(session, "boq", waterproofing.id, "Check the quantity against the roof plan.")
+        line = boq.ItemIn(item="6.3", description="Waterproofing", unit="m2", quantity=Decimal(980),
+                          document_id=waterproofing.document_id, page=1, quote=waterproofing.quote)  # fmt: skip
+        boq.propose_items(session, tender_id, session.get(Staff, priya_id), [line])
+        vat = next(f for f in boq.facts(session, tender_id) if f.kind == "vat")
+        reviews.reopen(session, "fact", vat.id, "Quote the whole clause.")
+        clause = "VAT at 15% shall be shown separately"
+        again = boq.propose_fact(session, tender_id, session.get(Staff, priya_id), "vat", "15%", vat.document_id, 1,
+                                 clause)  # fmt: skip
+        verdict = reviews.Verdict(record=f"fact {again.id[:8]}", accept=True, note="Read the whole clause on page 1.")
+        reviews.review(session, home, tender_id, rania, [verdict], autonomous=True)
+        site = [estimate.PreliminaryIn(item="Site office", quantity=3, unit="month", rate=5000)]
+        six, five = Decimal("0.06"), Decimal("0.05")
+        first = estimate.propose_markups(session, tender_id, priya_id, site, six, five, Decimal(0), "Three months.")
+        estimate.propose_markups(session, tender_id, priya_id, site, six, six, Decimal(0), "Three months again.")
+        session.commit()
+
+        rate = lookup.explain(session, home, tender_id, "rate", latest)
+        history = rate.split("\nOther versions of the same work, newest first:\n")[1].splitlines()
+        assert len(history) == 9 and history[-1] == "… and 1 older."  # eight shown
+        assert re.fullmatch(
+            r"- rate \w{8} · \d\d \w{3} \d\d:\d\d · 18\.00 per unit \(estimate\) · replaced by a newer version",
+            history[0],
+        )
+        _, redone = lookup.find(session, tender_id, "6.3")
+        assert re.search(
+            r"\n- boq \w{8} · \d\d \w{3} \d\d:\d\d · 980 m2 · sent back: Check the quantity against the roof plan\.$",
+            lookup.explain(session, home, tender_id, "boq", redone),
+        )
+        sent_back = lookup.explain(session, home, tender_id, "fact", vat)
+        assert f"The engineer sent it back on {vat.decided_at:%d %b %Y}: Quote the whole clause." in sent_back
+        kind, current = lookup.find(session, tender_id, f"fact {again.id[:8]}")
+        shown = lookup.explain(session, home, tender_id, kind, current).splitlines()
+        assert shown[:5] == [
+            f"fact {again.id[:8]} · approved by the office, not reviewed by the engineer",
+            f"From Conditions.pdf, page 1: “{clause}”",
+            f"Made by Priya on {again.created_at:%d %b %Y}.",
+            "Rania accepted it: Read the whole clause on page 1.",
+            f"Approved by the office on {again.decided_at:%d %b %Y}, without the engineer's review.",
+        ]
+        assert re.fullmatch(rf"- fact {vat.id[:8]} · .+ · 15% · sent back: Quote the whole clause\.", shown[-1])
+        kind, markups = lookup.find(session, tender_id, "Markups")
+        assert (
+            lookup.explain(session, home, tender_id, kind, markups).endswith(
+                " · overheads 6.0%, profit 5.0% · replaced by a newer version"
+            )
+            and first.status == "replaced"
+        )
+
+
+def test_a_checklist_item_points_to_its_sent_back_draft_to_correct(client, tender):
+    tender_id, priya_id, _ = tender
+    home = client.app.state.home
+    conditions = document_id(client, tender_id, "Conditions.pdf")
+    clause = "VAT at 15% shall be shown separately"
+    wanted = submission.RequirementIn(
+        section="Commercial", title="VAT shown separately", document_id=conditions, page=1, quote=clause
+    )
+    with client.app.state.sessions() as session:
+        rania = office.hire(session, tender_id, "Rania Farouk", "Tender Manager", {}, is_manager=True)
+        submission.add_requirements(session, tender_id, priya_id, [wanted])
+        requirement = submission.find_requirement(session, tender_id, "VAT shown separately")
+        c = requirement.id[:8]
+        assert lookup.state(session, "checklist", requirement) == "nothing drafted or attached yet"
+        first = submission.draft(session, requirement, priya_id, "VAT statement", "Our price excludes VAT at 15%.")
+        assert lookup.state(session, "checklist", requirement) == "its draft is with the Tender Manager"
+        d = first.id[:8]
+        verdicts = [
+            reviews.Verdict(record=f"checklist {c}", accept=True, note="Checked the clause on page 1."),
+            reviews.Verdict(record=f"draft {d}", accept=False, note="Say the VAT amount as well."),
+        ]
+        reviews.review(session, home, tender_id, rania, verdicts, autonomous=False)
+        session.commit()
+
+        assert lookup.state(session, "checklist", requirement) == (
+            f"its draft was sent back: open draft {d} for the text to correct"
+        )
+        kind, found = lookup.find(session, tender_id, f"requirement {c}")
+        assert (kind, found) == ("checklist", requirement)
+        assert lookup.explain(session, home, tender_id, kind, found) == (
+            f"checklist {c} · its draft was sent back: open draft {d} for the text to correct\n"
+            f"Commercial · VAT shown separately\nRequired by Conditions.pdf, page 1: “{clause}”\n"
+            f"Sent back: draft {d}, “VAT statement”: Say the VAT amount as well.\n"
+            "Open it for its text, correct it and draft it again for this item.\n"
+            f"Made by Priya on {requirement.created_at:%d %b %Y}.\nRania accepted it: Checked the clause on page 1."
+        )
+        assert lookup.search(session, tender_id, "vat statement", "draft") == [
+            f"draft {d} · “VAT statement” for checklist {c} (Commercial · VAT shown separately) · sent back"
+        ]
+        assert lookup.search(session, tender_id, "", "checklist") == [
+            f"checklist {c} · Commercial · VAT shown separately · its draft was sent back: open draft {d} for the "
+            "text to correct"
+        ]
+
+        second = submission.draft(session, requirement, priya_id, "VAT statement", "VAT at 15% is 1,500.00.")
+        session.commit()
+        assert lookup.explain(session, home, tender_id, "checklist", requirement).splitlines()[3] == (
+            f"Current draft: draft {second.id[:8]}, “VAT statement”"
+        )
+        assert re.search(
+            rf"\n- draft {d} · .+ · “VAT statement” · sent back: Say the VAT amount as well\.$",
+            lookup.explain(session, home, tender_id, "draft", second),
+        )
+        for kind, record in (("draft", second), ("checklist", requirement)):
+            office.note_opened(session, tender_id, priya_id, kind, record.id)
+        where = {"document_id": conditions, "page": 1}  # a draft opens the page its checklist item rests on
+        assert lookup.cited(session, tender_id, priya_id, f"draft {second.id[:8]}") == {
+            "label": "The draft “VAT statement”",
+            **where,
+        }
+        assert lookup.cited(session, tender_id, priya_id, f"checklist {c}") == {
+            "label": "The checklist item “VAT shown separately”",
+            **where,
+        }
+        verdict = reviews.Verdict(record=f"draft {second.id[:8]}", accept=True, note="The amount is right now.")
+        reviews.review(session, home, tender_id, rania, [verdict], autonomous=False)
+        assert lookup.state(session, "checklist", requirement) == "its draft is waiting for the engineer"
+        submission.decide(session, second, True)
+        assert lookup.state(session, "checklist", requirement) == "ready"
+
+
+def test_packages_their_enquiries_and_quotes_are_looked_up_like_any_record(client, subcontracted):
+    tender_id, rania_id, omar_id, _, _ = subcontracted
+    home = client.app.state.home
+    package_id = test_subcontract.two_quotes(client, subcontracted)
+    with client.app.state.sessions() as session:
+        package = session.get(Package, package_id)
+        gulf = subcontract.find_company(session, "Gulf Groundworks")
+        enquiry = subcontract.draft_enquiry(session, package, gulf, omar_id, "Groundworks enquiry", "Please price.")
+        najd = subcontract.recommend(
+            session, package, omar_id, subcontract.find_company(session, "Najd Contracting"), "Cheapest."
+        )
+        session.commit()
+        gulf_quote = next(q for q in subcontract.quotes(session, package_id) if q.company_id == gulf.id)
+        p, e, g, n = package_id[:8], enquiry.id[:8], gulf_quote.id[:8], najd.id[:8]
+
+        kind, found = lookup.find(session, tender_id, f"recommendation {p}")
+        assert (kind, found) == ("package", package)
+        assert lookup.explain(session, home, tender_id, kind, found) == (
+            f"package {p} · recommendation with the Manager\nGroundworks (subcontract): 3.1, 6.3\n"
+            f"Enquiry to Gulf Groundworks: a draft · enquiry {e}\n"
+            f"Quote from Gulf Groundworks · quote {g}\nQuote from Najd Contracting · quote {n}\n"
+            "Levelled by Quantix:\n"
+            "1. Najd Contracting: quoted 20460.00, exclusions 0, levelled 57700.00\n"
+            "2. Gulf Groundworks: quoted 55380.00, exclusions 5000, levelled 60380.00\n"
+            "Recommended: Najd Contracting. Cheapest.\n"
+            f"Made by Omar on {package.created_at:%d %b %Y}.\n"
+            "Quantix's checks:\n- WARNING: Najd Contracting left out 6.3; our own rate stands in for them."
+        )
+        assert lookup.explain(session, home, tender_id, *lookup.find(session, tender_id, f"quote {g}")) == (
+            f"quote {g} · recorded\nGulf Groundworks's quote for the Groundworks package, from Gulf.pdf:\n"
+            "- 3.1: 17.00 per m3 (page 1: “3.1 Excavation 17.00”)\n"
+            "- 6.3: 35.00 per m2 (page 1: “6.3 Waterproofing 35.00”)\n"
+            "- Excludes Dewatering, which we put at 5000 (page 1)\n"
+            f"Made by Omar on {gulf_quote.created_at:%d %b %Y}."
+        )
+        assert lookup.search(session, tender_id, "gulf") == [f"quote {g} · Gulf Groundworks for Groundworks, 2 rates"]
+        assert lookup.packages_view(session, tender_id) == (
+            f"package {p} · Groundworks (subcontract), 2 lines · 1 enquiries, 0 sent · quotes: Gulf Groundworks, Najd "
+            "Contracting · recommendation with the Manager"
+        )
+        for kind, record_id in (("quote", gulf_quote.id), ("package", package_id), ("enquiry", enquiry.id)):
+            office.note_opened(session, tender_id, omar_id, kind, record_id)
+        assert [
+            lookup.cited(session, tender_id, omar_id, ref) for ref in (f"quote {g}", f"package {p}", f"enquiry {e}")
+        ] == [
+            {"label": "Gulf Groundworks's quote for Groundworks"},
+            {"label": "The Groundworks package"},
+            {"label": "The enquiry “Groundworks enquiry”"},
+        ]
+
+        rania = session.get(Staff, rania_id)
+        verdicts = [
+            reviews.Verdict(record=f"enquiry {e}", accept=False, note="Name the drawings it prices."),
+            reviews.Verdict(
+                record=f"recommendation {p}",
+                accept=True,
+                note="Checked the levelling.",
+                warnings_reason="Our 6.3 rate is sound.",
+            ),
+        ]
+        assert reviews.review(session, home, tender_id, rania, verdicts, autonomous=False).startswith(
+            "Accepted 1 (waiting for the engineer). Sent back 1."
+        )
+        session.commit()
+        assert lookup.state(session, "package", package) == "recommendation waiting for the engineer"
+        assert lookup.explain(session, home, tender_id, "enquiry", enquiry) == (
+            f"enquiry {e} · sent back\nTo Gulf Groundworks for the Groundworks package.\nSubject: Groundworks "
+            f"enquiry\nPlease price.\nMade by Omar on {enquiry.created_at:%d %b %Y}.\nRania sent it back: Name the "
+            "drawings it prices."
+        )
+    assert client.post(f"/packages/{package_id}/choice", json={"quote_id": najd.id}).status_code == 200
+    with client.app.state.sessions() as session:
+        package = session.get(Package, package_id)
+        assert lookup.state(session, "package", package) == "the engineer chose a quote"
+        assert "\nChosen: Najd Contracting.\n" in lookup.explain(session, home, tender_id, "package", package)
+    elsewhere = client.post("/tenders", json={"name": "Another school"}).json()["id"]
+    with client.app.state.sessions() as session:
+        with pytest.raises(ValueError, match=f"There is no quote {g} on this tender"):
+            lookup.find(session, elsewhere, f"quote {g}")
+
+
+def test_an_answer_rests_on_what_its_sender_opened_since_the_engineer_wrote(client, tender):
+    tender_id, priya_id, _ = tender
+    conditions = document_id(client, tender_id, "Conditions.pdf")
+    url = "https://prices.example/rebar"
+    with client.app.state.sessions() as session:
+        web_page = WebPage(url=url, title="Rebar prices", text="Rebar B500B 2,350 SAR per t")
+        session.add(web_page)
+        session.commit()
+        web_page_id, read_at = web_page.id, web_page.read_at
+        refused = {
+            "priced_boq": "You haven't looked at priced_boq yet: call it first, then give it as a source.",
+            url: f"You haven't read {url}. Read it with read_web_page first.",
+            "Nowhere.pdf, page 1": "No document is called “Nowhere.pdf”. Name it as list_documents shows it.",
+            "Conditions, page 1": "You haven't read Conditions.pdf, page 1. Read it with read_page first.",
+            "rate 0000ffff": "There is no rate 0000ffff on this tender. Use find_records to look it up by words.",
+            "markups": "No markups have been proposed yet.",
+            "the site visit": "“the site visit” is neither a record like “rate 42a9fb15” nor a BOQ line like “C.1.2”",
+        }
+        for source, message in refused.items():
+            with pytest.raises(ValueError, match=re.escape(message)):
+                lookup.cited(session, tender_id, priya_id, source)
+        assert not lookup.promised(session, tender_id, priya_id)  # the engineer hasn't asked anything
+
+    client.post(f"/tenders/{tender_id}/messages", json={"channel": priya_id, "text": "Where does the VAT come from?"})
+    with client.app.state.sessions() as session:
+        vat = next(f for f in boq.facts(session, tender_id) if f.kind == "vat")
+        for kind, ref in (
+            ("summary", "priced_boq"),
+            ("summary", "a summary no longer kept"),
+            ("page", f"{conditions}:1"),
+            ("page", f"{'0' * 32}:1"),  # a document since deleted
+            ("web", web_page_id),
+            ("web", "0" * 32),
+            ("fact", vat.id),
+            ("task", "1234abcd"),  # not a record an answer rests on
+        ):
+            office.note_opened(session, tender_id, priya_id, kind, ref)
+        session.commit()
+        assert set(lookup.citable(session, tender_id, priya_id)) == {
+            "priced_boq",
+            "Conditions.pdf, page 1",
+            url,
+            f"fact {vat.id[:8]}",
+        }
+        assert len(lookup.citable(session, tender_id, priya_id, limit=2)) == 2
+        assert lookup.cited(session, tender_id, priya_id, " Priced_BOQ ") == {"label": "The priced BOQ"}
+        assert lookup.cited(session, tender_id, priya_id, url) == {
+            "label": f"Rebar prices, read {read_at:%d %b %Y}",
+            "url": url,
+        }
+        assert lookup.cited(session, tender_id, priya_id, "“Conditions” page 1") == {
+            "label": "Conditions.pdf, page 1",
+            "document_id": conditions,
+            "page": 1,
+        }
+        assert lookup.cited(session, tender_id, priya_id, f"fact {vat.id[:8]} · VAT: 15%") == {
+            "label": "The vat",
+            "document_id": conditions,
+            "page": 1,
+        }
+
+
+def test_the_priced_boq_by_bill_and_a_page_at_a_time(client, tender, monkeypatch):
+    tender_id, priya_id, _ = tender
+    with client.app.state.sessions() as session:
+        excavation = boq.find_item(session, tender_id, "3.1")
+        session.add(
+            BoqItem(tender_id=tender_id, section="Roads", item="R.1", description="Road markings", unit="item",
+                    quantity=None, document_id=excavation.document_id, page=1, quote=excavation.quote, position=9,
+                    proposed_by=priya_id, status="approved")
+        )  # fmt: skip
+        session.flush()
+        why = "Lump sum for the markings from a specialist's price."
+        markings = estimate.propose_rate(session, tender_id, priya_id, "R.1", "estimate", why, Decimal(5000))
+        session.commit()
+
+        assert lookup.priced(session, tender_id, section="roads").splitlines() == [
+            "1 lines in “roads”, 0 priced, together 0 SAR (Quantix's figures). item | description | quantity | rate | "
+            "amount | basis | state | reference",
+            "Roads / R.1 | Road markings | - item | 5000.00 | - | estimate | with the Manager | "
+            f"rate {markings.id[:8]}",
+            "Lines 1 to 1 of 1.",
+        ]
+        with pytest.raises(
+            ValueError, match="No BOQ section matches “Drainage”. The sections are: \\(no section\\), Roads."
+        ):
+            lookup.priced(session, tender_id, section="Drainage")
+        with pytest.raises(ValueError, match="There are 4 lines; start from 1 to 4."):
+            lookup.priced(session, tender_id, start=5)
+        monkeypatch.setattr(lookup, "PAGE", 2)
+        first, second = lookup.priced(session, tender_id), lookup.priced(session, tender_id, start=3)
+        assert first.splitlines()[-1] == "Lines 1 to 2 of 4. Call again with start=3 for the rest."
+        assert second.splitlines()[1:] == [
+            "6.3 | Waterproofing | 980 m2 | not priced",
+            "Roads / R.1 | Road markings | - item | 5000.00 | - | estimate | with the Manager | "
+            f"rate {markings.id[:8]}",
+            "Lines 3 to 4 of 4.",
+        ]
+        with pytest.raises(ValueError, match="kind is one of boq, fact, checklist, draft, measurement, query"):
+            lookup.search(session, tender_id, "markings", "rate")
+
+
+def test_the_conversation_and_what_changed_show_decisions_tasks_and_answers(client, tender):
+    tender_id, priya_id, _ = tender
+    home = client.app.state.home
+    start = datetime.now(UTC)
+    note = "Excavator output 45 m3 an hour at current plant and labour prices."
+    with client.app.state.sessions() as session:
+        rania = office.hire(session, tender_id, "Rania Farouk", "Tender Manager", {}, is_manager=True)
+        priya = session.get(Staff, priya_id)
+        excavation = estimate.propose_rate(session, tender_id, priya_id, "3.1", "estimate", note, Decimal(18))
+        rebar = estimate.propose_rate(session, tender_id, priya_id, "4.3", "estimate", note, Decimal(3400))
+        verdicts = [
+            reviews.Verdict(record=f"rate {excavation.id[:8]}", accept=True, note="Checked the output and prices."),
+            reviews.Verdict(record=f"rate {rebar.id[:8]}", accept=False, note="Build it up from the steel quote."),
+        ]
+        reviews.review(session, home, tender_id, rania, verdicts, autonomous=False)
+        estimate.decide(session, excavation, True)
+        task = office.assign(
+            session, tender_id, rania, priya, "Check the dewatering allowance", "Read the soil report."
+        )
+        office.complete(session, priya, task.id, "No dewatering: the water table is 6 m down.")
+        question = office.ask(session, tender_id, rania, "Dewatering allowance", "Allow for dewatering?", ["Yes", "No"])
+        office.answer(session, question, "Leave it out")
+        office.ask(session, tender_id, rania, "Rock excavation", "Is there rock below 2 m?", ["Yes", "No"])
+        session.commit()
+
+        assert activity.changed(session, tender_id, start).splitlines() == [
+            f"Since {start:%d %b %H:%M}:",
+            "Filed: Priya 2 rates",
+            "The Tender Manager accepted 1 and sent back 1.",
+            "The engineer approved 1 and sent back 0.",
+            "Tasks finished: Priya: Check the dewatering allowance",
+            "Questions the engineer answered: Dewatering allowance",
+        ]
+        later = datetime.now(UTC) + timedelta(hours=1)
+        assert activity.changed(session, tender_id, later) == f"Nothing has changed since {later:%d %b %H:%M}."
+        found = [line.split(" · ", 1)[1] for line in activity.conversation(session, tender_id, "dewatering")]
+        assert sorted(found) == [
+            "Decision “Dewatering allowance”: Allow for dewatering? The engineer answered: Leave it out",
+            "Priya in the team room: Finished: Check the dewatering allowance. No dewatering: the water table is 6 m "
+            "down.",
+            "Rania in the team room: Rania asked Priya to Check the dewatering allowance",
+            "Task for Priya: Check the dewatering allowance (done). "
+            "Result: No dewatering: the water table is 6 m down.",
+            "The engineer in the chat between Rania and the engineer: About “Dewatering allowance”: Leave it out",
+        ]
+        assert [line.split(" · ", 1)[1] for line in activity.conversation(session, tender_id, "rock")] == [
+            "Decision “Rock excavation”: Is there rock below 2 m? Waiting for the engineer."
+        ]
+        answered = office.messages(session, tender_id, rania.id)[-1]
+        assert activity.since(session, tender_id, None) == answered.created_at  # when the engineer last wrote
+        assert abs(activity.since(session, tender_id, 2) - (datetime.now(UTC) - timedelta(hours=2))) < timedelta(
+            minutes=1
+        )

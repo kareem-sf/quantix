@@ -7,6 +7,8 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
+import test_estimate
+import test_subcontract
 from pydantic_ai.messages import (
     ModelResponse,
     RetryPromptPart,
@@ -16,15 +18,25 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from test_documents import PDF, make_xlsx, read_all, upload
+from test_lookup import fake_turn
 from test_office import scripted, wait_for
+from test_revisions import PLAN, YARD
 
 from quantix import settings
 from quantix.boq import records as boq
+from quantix.company import CompanyRule
+from quantix.documents.models import WebPage
 from quantix.estimate import records as estimate
 from quantix.office import agents, packs, runtime, tools
 from quantix.office import records as office
-from quantix.office.models import Staff, TurnRecord
+from quantix.office.models import Staff, Task, TurnRecord
 from quantix.review import records as reviews
+from quantix.subcontract import records as subcontract
+from quantix.subcontract.models import Package
+from quantix.submission import records as submission
+from quantix.takeoff import records as takeoff
+
+subcontracted = test_subcontract.tender  # the fixture: a school's groundworks, with Rania and Omar
 
 QUOTES = (
     "A2=3.1 | B2=Excavation to reduce levels | C2=m3 | D2=1240",
@@ -515,3 +527,285 @@ def test_settings_show_how_each_ai_has_done_from_the_turns_and_the_reviews(clien
         {"model": "model-old", "turns": 1, "finished": 0, **score, "tokens": 500},
     ]  # fmt: skip
     assert usage["tenders"] == [{"tender_id": tender_id, "name": "Synthetic school", "tokens": 1700}]
+
+
+def test_work_filed_before_any_of_its_makers_turns_counts_for_no_ai(client, office_with_work):
+    tender_id, rania_id, omar_id = office_with_work
+    excavation, _ = client.get(f"/tenders/{tender_id}/boq").json()["items"]
+    with client.app.state.sessions() as session:  # Omar's first recorded turn began after he filed his work
+        later = datetime(2099, 1, 1, tzinfo=UTC)
+        session.add(TurnRecord(tender_id=tender_id, staff_id=omar_id, model="model-a", started_at=later, ended="done",
+                               calls=[], input_tokens=10, output_tokens=5))  # fmt: skip
+        session.commit()
+    decide(client, tender_id, rania_id, excavation["id"], True, "Quantity matches row 2.")
+    [score] = client.get("/ai/usage").json()["models"]
+    assert (score["model"], score["accepted"], score["sent_back"]) == ("model-a", 0, 0)
+
+
+def every_kind(client, tender) -> dict[str, str]:
+    """Omar files one of each kind of work the Manager reviews, besides BOQ lines and facts: a scale and a
+    measurement on the drawing, a quoted rate and a web price, markups, a checklist item and its draft, an enquiry
+    and a quote recommendation. Their references, by kind."""
+    tender_id, _, omar, gulf, _ = tender
+    package_id = test_subcontract.two_quotes(client, tender)
+    upload(client, tender_id, {"A-102.pdf": PLAN, "Conditions.pdf": test_estimate.CONDITIONS})
+    docs = read_all(client, tender_id)
+    plan, conditions = docs["A-102.pdf"]["id"], docs["Conditions.pdf"]["id"]
+    with client.app.state.sessions() as session:
+        web = WebPage(url="https://prices.example/rebar", title="Rebar prices", text="Rebar B500B 2,350 SAR per t")
+        session.add(web)
+        session.flush()
+        scale = takeoff.set_scale(session, tender_id, omar, plan, 1, [[85.04, 141.73], [481.89, 141.73]], 40, "40.00")
+        wall = [YARD[0], YARD[1]]
+        measured = takeoff.measure(
+            session, tender_id, omar, plan, 1, "length", "Boundary wall", wall, "m2", Decimal("1.2"), None
+        )
+        quoted = estimate.propose_rate(
+            session, tender_id, omar, "3.1", "quote", "Gulf's price.", Decimal(17), document_id=gulf, page=1,
+            quote="3.1 Excavation 17.00"
+        )  # fmt: skip
+        priced = "Delivered to site; the supplier's price includes cutting and bending."
+        web_rate = estimate.propose_rate(
+            session, tender_id, omar, "4.3", "web", priced, Decimal(2350), quote=web.text, web_page_id=web.id
+        )
+        site = [estimate.PreliminaryIn(item="Site office", quantity=3, unit="month", rate=5000)]
+        markups = estimate.propose_markups(
+            session, tender_id, omar, site, Decimal("0.06"), Decimal("0.05"), Decimal(0), "Three months on site."
+        )
+        clause = "VAT at 15% shall be shown separately"
+        wanted = submission.RequirementIn(
+            section="Commercial", title="VAT shown separately", document_id=conditions, page=1, quote=clause
+        )
+        submission.add_requirements(session, tender_id, omar, [wanted])
+        requirement = submission.find_requirement(session, tender_id, "VAT shown separately")
+        draft = submission.draft(session, requirement, omar, "VAT statement", "VAT at 15% from [date].")
+        package = session.get(Package, package_id)
+        enquiry = subcontract.draft_enquiry(
+            session, package, subcontract.find_company(session, "Najd Contracting"), omar, "Groundworks enquiry",
+            "Please price 3.1 and 6.3."
+        )  # fmt: skip
+        subcontract.recommend(
+            session, package, omar, subcontract.find_company(session, "Najd Contracting"), "Cheapest."
+        )
+        session.commit()
+        return {
+            "scale": f"scale {scale.id[:8]}",
+            "measurement": f"measurement {measured.id[:8]}",
+            "quoted": f"rate {quoted.id[:8]}",
+            "web": f"rate {web_rate.id[:8]}",
+            "markups": f"markups {markups.id[:8]}",
+            "checklist": f"checklist {requirement.id[:8]}",
+            "draft": f"draft {draft.id[:8]}",
+            "enquiry": f"enquiry {enquiry.id[:8]}",
+            "recommendation": f"recommendation {package_id[:8]}",
+        }
+
+
+def test_every_kind_of_work_comes_to_the_manager_with_what_to_check_it_against(client, subcontracted):
+    tender_id, rania_id = subcontracted[:2]
+    refs = every_kind(client, subcontracted)
+    queue = {w["ref"]: w["line"].split(" · ", 2)[2] for w in client.get(f"/tenders/{tender_id}/review").json()}
+    assert {kind: queue[ref] for kind, ref in refs.items()} == {
+        "scale": "scale of A-102.pdf, page 1: about 1:286",
+        "measurement": "“Boundary wall”: 48 m2 (not linked to a BOQ line)",
+        "quoted": "3.1: 17.00 per m3 (quote, unit rate)",
+        "web": "4.3: 2350.00 per t (web, unit rate)",
+        "markups": "preliminaries 15,000.00 in 1 items, overheads 6.0%, profit 5.0%",
+        "checklist": "“VAT shown separately” (Commercial) from Conditions.pdf, page 1",
+        "draft": "“VAT statement” for “VAT shown separately”",
+        "enquiry": "to Najd Contracting for Groundworks: “Groundworks enquiry”",
+        "recommendation": "Najd Contracting for Groundworks: Cheapest.",
+    }
+    with client.app.state.sessions() as session:
+        shown = {kind: reviews.details(session, reviews.find(session, tender_id, ref)) for kind, ref in refs.items()}
+    assert shown["scale"] == (
+        "Set from “40.00” as 40.0 m between [[85.04, 141.73], [481.89, 141.73]] (page points) on A-102.pdf, page 1. "
+        "Check it against the scale printed in the title block."
+    )
+    assert shown["measurement"].startswith(
+        "A length of 2 points on A-102.pdf, page 1: [[85.04, 170.08], [481.89, 170.08]]. Multiplied by 1.2"
+    )
+    assert shown["quoted"] == (
+        "3.1: Excavation · 1,240 m3. Basis: quote.\nQuoted on Gulf.pdf, page 1: “3.1 Excavation 17.00”\n"
+        "Note: Gulf's price."
+    )
+    assert shown["web"].splitlines()[1] == (
+        f"On the web page Rebar prices (https://prices.example/rebar), read {datetime.now(UTC):%d %b %Y}: “Rebar "
+        "B500B 2,350 SAR per t”"
+    )
+    # net: 1,240 × 17.00 + 28.1 × 2,350.00 + 980 × 38.00 = 21,080.00 + 66,035.00 + 37,240.00
+    assert shown["markups"] == (
+        "On a net cost of 124,355.00:\n- Site office: 3 month × 5000 = 15000.00\nPreliminaries 15,000.00 (12.1% of "
+        "net), overheads 8,361.30, profit 7,385.82, adjustment 0.00; price 155,102.12.\nNote: Three months on site."
+    )
+    assert shown["checklist"] == "Required by Conditions.pdf, page 1: “VAT at 15% shall be shown separately”"
+    assert shown["draft"] == "VAT at 15% from [date]."
+    assert shown["enquiry"] == "Subject: Groundworks enquiry\nPlease price 3.1 and 6.3."
+    assert shown["recommendation"] == (
+        "1. Najd Contracting: quoted 20460.00, exclusions 0, levelled 57700.00\n"
+        "2. Gulf Groundworks: quoted 55380.00, exclusions 5000, levelled 60380.00\nRecommendation: Cheapest."
+    )
+
+    listed = tools.review_queue(fake_turn(client, tender_id, rania_id))
+    lines = {line.split(" · ")[0]: line for line in listed.splitlines()[1:]}
+    assert listed.startswith(f"{len(lines)} waiting for your review:\n")
+    assert lines[refs["draft"]].endswith(" · Quantix found 1 blocker")  # the date still to fill in
+    assert lines[refs["recommendation"]].endswith(" · Quantix found 1 warning")  # Najd left out 6.3
+    assert " · Quantix found" not in lines[refs["enquiry"]]
+
+
+@pytest.mark.xfail(strict=True, reason="Bug: a measurement's multiplier is shown as stored, 1.2000 m")
+def test_the_manager_reads_a_measurements_multiplier_as_it_was_given(client, subcontracted):
+    tender_id = subcontracted[0]
+    refs = every_kind(client, subcontracted)
+    with client.app.state.sessions() as session:
+        shown = reviews.details(session, reviews.find(session, tender_id, refs["measurement"]))
+    assert shown.endswith(". Multiplied by 1.2 m.")
+
+
+def test_the_manager_sends_back_a_checklist_item_an_enquiry_and_a_recommendation_to_their_maker(client, subcontracted):
+    tender_id, rania_id, omar_id = subcontracted[:3]
+    refs = every_kind(client, subcontracted)
+    unit = "Take each checklist item from the clause that requires it, quoted whole."
+    with client.app.state.sessions() as session:
+        session.add(CompanyRule(topic="Subcontract", text="Name the drawings and the BOQ items every enquiry prices."))
+        verdict = reviews.Verdict
+        report = reviews.review(
+            session,
+            client.app.state.home,
+            tender_id,
+            session.get(Staff, rania_id),
+            [
+                verdict(record=refs["checklist"], accept=False, note="Quote the whole clause 4.2.", lesson=unit),
+                verdict(
+                    record=refs["enquiry"],
+                    accept=False,
+                    note="Name the drawings it prices.",
+                    lesson="Name the drawings and the BOQ items each enquiry prices.",
+                ),  # fmt: skip
+                verdict(record=refs["recommendation"], accept=False, note="Level the dewatering first."),
+                verdict(record=refs["markups"], accept=True, note="Checked the site office rate."),
+                verdict(record=refs["scale"], accept=True, note="Checked the 40.00 m dimension.", lesson=unit),
+            ],
+            autonomous=False,
+        )
+        session.commit()
+    assert report.splitlines() == [
+        "Accepted 2 (waiting for the engineer). Sent back 3. Once your review is done, tell the engineer with "
+        "message_engineer what now waits for their approval and where: 1 set of markups on the Estimate screen, "
+        "under Markups and summary; 1 scale on the Takeoff screen.",
+        f"Lesson kept: the whole office follows “{unit}” from now on.",
+        "Lesson not kept: it is already a company rule: “Name the drawings and the BOQ items every enquiry prices.”",
+        f"Lesson not kept for {refs['scale']}: a lesson comes from work that needed correcting. Give it when you send "
+        "something back, or when you accept its corrected version.",
+    ]
+    team = client.get(f"/tenders/{tender_id}/messages", params={"channel": "team"}).json()
+    assert [m["text"] for m in team if m["sender"] == rania_id] == [
+        "Omar, I sent back the checklist item “VAT shown separately”; I removed it: Quote the whole clause 4.2.",
+        "Omar, I sent back the enquiry “Groundworks enquiry”: Name the drawings it prices.",
+        "Omar, I sent back your recommendation for Groundworks: Level the dewatering first.",
+    ]
+    [lesson] = client.get(f"/tenders/{tender_id}/lessons").json()
+    assert (lesson["topic"], lesson["source"]) == ("Submission", "the checklist item “VAT shown separately”")
+    with client.app.state.sessions() as session:
+        assert submission.requirements(session, tender_id) == []
+        [package] = subcontract.packages(session, tender_id)
+        assert (package.recommended_quote_id, package.recommendation, package.recommended_by) == (None, None, None)
+        [enquiry] = subcontract.enquiries(session, package.id)
+        assert (enquiry.status, enquiry.reviewed_by, enquiry.review_note) == (
+            "rejected",
+            rania_id,
+            "Name the drawings it prices.",
+        )
+        waiting = [p.kind for p in reviews.pending(session, tender_id)]
+        assert not {"checklist", "enquiry", "recommendation"} & set(waiting)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Bug: a checklist item, enquiry or recommendation sent back gives its maker no task to redo it",
+)
+def test_work_of_every_kind_sent_back_is_its_makers_task_to_redo(client, subcontracted):
+    """The review tool tells the Manager that what he sends back becomes its maker's task, so not to assign it too:
+    for BOQ lines, rates and the other reviewed records it does."""
+    tender_id, rania_id, omar_id = subcontracted[:3]
+    refs = every_kind(client, subcontracted)
+    with client.app.state.sessions() as session:
+        verdicts = [
+            reviews.Verdict(record=refs[kind], accept=False, note="Correct it as the team room says.")
+            for kind in ("checklist", "enquiry", "recommendation")
+        ]
+        reviews.review(session, client.app.state.home, tender_id, session.get(Staff, rania_id), verdicts, False)
+        session.commit()
+        tasks = [t.title for t in session.query(Task).filter_by(staff_id=omar_id, status="open")]
+    assert len(tasks) == 3
+
+
+def test_what_cannot_be_reopened_escalated_or_found_is_refused_plainly(client, office_with_work):
+    tender_id, rania_id, omar_id = office_with_work
+    excavation, slab = client.get(f"/tenders/{tender_id}/boq").json()["items"]
+    missing = "0" * 32
+    refused = client.post(f"/records/checklist/{excavation['id']}/reopen", json={"reason": "Check it."})
+    assert (refused.status_code, refused.json()["detail"]) == (
+        400,
+        "Only BOQ lines, facts, scales, measurements, layer maps, queries, rates, markups and drafts can be reopened.",
+    )
+    assert client.post(f"/records/boq/{missing}/reopen", json={"reason": "Check it."}).status_code == 404
+    assert client.get(f"/records/boq/{missing}/findings").status_code == 404
+    assert client.get(f"/records/tender/{excavation['id']}/findings").status_code == 404
+    for path in (f"/tenders/{missing}/review", f"/tenders/{missing}/audit", f"/tenders/{missing}/lessons"):
+        assert client.get(path).json() == {"detail": "Tender not found."}
+    assert client.patch(f"/lessons/{missing}", json={"status": "kept"}).status_code == 404
+
+    conditions = read_all(client, tender_id)["Conditions.pdf"]["id"]
+    problem = "The bill measures the excavation net, but the conditions ask for bulked volumes."
+    where = [reviews.Source(document_id=conditions, page=1, what="The measurement clause")]
+    with client.app.state.sessions() as session:
+        rania = session.get(Staff, rania_id)
+        excavation_ref = f"boq {excavation['id'][:8]}"
+        for ref, words, sources, suggestions, message in (
+            ("rate 12345678", problem, where, ["Bulk it"], "nothing with that reference is waiting for your review"),
+            ("checklist 1234", problem, where, ["Bulk it"], "nothing with that reference is waiting for your review"),
+            (
+                excavation_ref,
+                "Wrong volume.",
+                where,
+                ["Bulk it"],
+                "Say what is wrong and why the office can't settle it.",
+            ),
+            (excavation_ref, problem, where, [" "], "Suggest 1 to 4 corrections for the engineer to choose from"),
+            (excavation_ref, problem, where, ["a", "b", "c", "d", "e"], "Suggest 1 to 4 corrections"),
+            (
+                excavation_ref,
+                problem,
+                [reviews.Source(document_id=missing, page=1, what="The clause")],
+                ["Bulk it"],
+                "The clause: no document of this tender has that id; use list_documents",
+            ),
+        ):
+            with pytest.raises(ValueError, match=re.escape(message)):
+                reviews.escalate(session, tender_id, rania, ref, words, sources, suggestions)
+
+        approved = session.get(boq.BoqItem, slab["id"])
+        boq.approve(session, approved)  # the engineer approved it
+        with pytest.raises(ValueError, match=re.escape(
+            "The clause: no document of this tender has that id; use list_documents. For approved work you can "
+            "leave sources out: Quantix's finding says where."
+        )):  # fmt: skip
+            bad = [reviews.Source(document_id=missing, page=1, what="The clause")]
+            reviews.escalate(session, tender_id, rania, f"boq {slab['id'][:8]}", problem, bad, ["Re-measure it"])
+        decision = reviews.escalate(session, tender_id, rania, f"boq {slab['id'][:8]}", problem, [], ["Re-measure it"])
+        assert decision.options == ["Re-measure it", reviews.KEEP_APPROVED]
+        session.commit()
+        decision_id = decision.id
+
+    # the engineer reopened the line before answering: their answer doesn't send it back a second time
+    assert (
+        client.post(f"/records/boq/{slab['id']}/reopen", json={"reason": "Use the unit as printed."}).status_code == 204
+    )
+    client.post(f"/decisions/{decision_id}/answer", json={"answer": "Re-measure it"})
+    with client.app.state.sessions() as session:
+        redo = [t for t in office.all_tasks(session, tender_id) if t.staff_id == omar_id]
+        assert [(t.title, t.brief) for t in redo] == [("Redo BOQ item 4.2", "Use the unit as printed.")]
+        assert session.get(boq.BoqItem, slab["id"]).reason == "Use the unit as printed."
+        assert reviews.escalation(session, slab["id"]) is None  # answered

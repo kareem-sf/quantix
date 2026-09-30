@@ -8,20 +8,26 @@ from pathlib import Path
 
 import openpyxl
 import pytest
+import test_subcontract
 from test_documents import make_pdf, read_all, upload
 
 from quantix.boq import records as boq
 from quantix.boq.models import BoqItem, Fact
 from quantix.documents import readers
+from quantix.documents.models import Document
 from quantix.estimate import records as estimate
 from quantix.office import agents
 from quantix.office import records as office
 from quantix.office.models import Staff
 from quantix.review import revisions
+from quantix.subcontract import records as subcontract
+from quantix.subcontract.models import Package, Quote
 from quantix.submission import records as submission
 from quantix.submission.models import Requirement
 from quantix.takeoff import records as takeoff
 from quantix.takeoff.models import Measurement
+
+subcontracted = test_subcontract.tender  # the fixture: a school's groundworks, with Gulf's and Najd's quotes to record
 
 PLAN = (Path(__file__).parent / "fixtures" / "synthetic-plan.pdf").read_bytes()  # a 40 × 20 m yard, 800 m²
 YARD = [[85.04, 170.08], [481.89, 170.08], [481.89, 368.51], [85.04, 368.51]]  # the drawing's own corners
@@ -210,3 +216,128 @@ def test_a_fact_and_a_checklist_item_are_done_again_from_the_newer_conditions(cl
         assert (requirement.document_id, requirement.reviewed_by) == (conditions["id"], None)  # back to the Manager
         assert not revisions.stale(session, tender_id)
     assert audit(client, tender_id) == []
+
+
+def test_work_whose_clause_moved_to_another_page_moves_with_it(client, tender):
+    tender_id, omar_id, docs = tender
+    clause = "12.3 The tenderer shall submit a work programme."
+    with client.app.state.sessions() as session:
+        omar = session.get(Staff, omar_id)
+        vat = boq.propose_fact(session, tender_id, omar, "vat", "15%", docs["Conditions.pdf"], 1, "VAT at fifteen")
+        programme = submission.RequirementIn(section="Technical", title="Work programme",
+                                             document_id=docs["Conditions.pdf"], page=1, quote=clause)  # fmt: skip
+        submission.add_requirements(session, tender_id, omar_id, [programme])
+        session.commit()
+        vat_id = vat.id
+    addendum = make_pdf([["Addendum 1 adds this page."], ["VAT at fifteen percent", clause]])
+    upload(client, tender_id, {"Conditions.pdf": addendum})
+    conditions = newer(client, tender_id, "Conditions.pdf")
+    assert conditions["note"] == (
+        "It replaces an older copy; the 2 pieces of work citing it are unchanged here and now rest on it."
+    )
+    with client.app.state.sessions() as session:
+        fact = session.get(Fact, vat_id)
+        [requirement] = session.query(Requirement).filter_by(tender_id=tender_id).all()
+        assert (fact.document_id, fact.page, fact.status) == (conditions["id"], 2, "proposed")
+        assert (requirement.document_id, requirement.page) == (conditions["id"], 2)
+        assert not revisions.stale(session, tender_id)
+
+
+def test_a_drawing_issued_again_unchanged_keeps_its_takeoff_but_not_on_another_sheet(client, tender):
+    tender_id, omar_id, docs = tender
+    body = {"document_id": docs["A-102.pdf"], "page": 1, "line": [[85.04, 141.73], [481.89, 141.73]], "length_m": 40}
+    assert client.post(f"/tenders/{tender_id}/scales", json={**body, "dimension": "40.00"}).status_code == 201
+    with client.app.state.sessions() as session:
+        yard = takeoff.measure(session, tender_id, omar_id, docs["A-102.pdf"], 1, "area", "Yard", YARD, "m2", None,
+                               "C.2")  # fmt: skip
+        session.commit()
+        yard_id = yard.id
+
+    upload(client, tender_id, {"A-102.pdf": PLAN + b"\n% Issued again for construction\n"})  # the same lines
+    plan = newer(client, tender_id, "A-102.pdf")
+    assert plan["note"] == (
+        "It replaces an older copy; the 2 pieces of work citing it are unchanged here and now rest on it."
+    )
+    with client.app.state.sessions() as session:
+        yard = session.get(Measurement, yard_id)
+        assert yard.document_id == plan["id"] and takeoff.quantity(session, yard) == Decimal("800.020")
+
+    letter = make_pdf([["40.00", "A-102 GROUND FLOOR SLAB, REDRAWN ON A LETTER SHEET"]])  # a different sheet size
+    upload(client, tender_id, {"A-102.pdf": letter})
+    assert newer(client, tender_id, "A-102.pdf")["note"] == (
+        "It replaces an older copy; none of the 2 pieces of work citing it is unchanged here."
+    )
+    why = "The drawing around it has changed in the newer copy of A-102.pdf, page 1: do it again on the newer copy."
+    assert ("blocker", why) in findings(client, "measurement", yard_id)
+
+
+def test_work_on_a_copy_whose_newer_copy_isnt_read_waits_for_it(client, tender):
+    tender_id, omar_id, docs = tender
+    with client.app.state.sessions() as session:
+        vat = boq.propose_fact(
+            session, tender_id, session.get(Staff, omar_id), "vat", "15%", docs["Conditions.pdf"], 1, "VAT at fifteen"
+        )
+        session.commit()
+        vat_id = vat.id
+    upload(client, tender_id, {"Conditions.pdf": b"%PDF-1.4 torn in the post"})
+    conditions = newer(client, tender_id, "Conditions.pdf")
+    assert conditions["status"] in ("unreadable", "failed")
+    assert findings(client, "fact", vat_id)[0] == (
+        "blocker",
+        "It rests on an older copy of Conditions.pdf, and Quantix couldn't read the newer copy.",
+    )
+    with client.app.state.sessions() as session:
+        session.get(Document, conditions["id"]).status = "reading"
+        session.commit()
+    assert findings(client, "fact", vat_id)[0] == (
+        "blocker",
+        "It rests on an older copy of Conditions.pdf. The newer copy is being read, and Quantix moves this onto it if "
+        "what it cites is unchanged there.",
+    )
+    shown = [f["message"] for f in client.get(f"/tenders/{tender_id}/audit").json() if f["severity"] == "blocker"]
+    assert "1 document is still being read: Conditions.pdf" in shown
+
+
+GULF_LINES = ["3.1 Excavation 17.00 SAR per m3", "6.3 Waterproofing 35.00 SAR per m2", "Excludes dewatering"]
+
+
+def test_a_revised_quote_takes_over_the_lines_it_still_prices(client, subcontracted):
+    tender_id, _, omar, _, najd = subcontracted
+    package_id = test_subcontract.two_quotes(client, subcontracted)
+    offer = "Item 3.1 excavation rate 16.50"
+    with client.app.state.sessions() as session:
+        package = session.get(Package, package_id)
+        subcontract.recommend(
+            session, package, omar, subcontract.find_company(session, "Najd Contracting"), "Cheapest."
+        )
+        estimate.propose_rate(session, tender_id, omar, "3.1", "quote", "Najd's offer.", Decimal("16.50"),
+                              document_id=najd, page=1, quote=offer)  # fmt: skip
+        session.commit()
+    upload(
+        client,
+        tender_id,
+        {
+            "Gulf.pdf": make_pdf([["Gulf Groundworks quotation, revision 1", *GULF_LINES]]),
+            "Najd.pdf": make_pdf([["Najd Contracting offer, revised", "Item 3.1 excavation rate 15.75 SAR"]]),
+        },
+    )
+    gulf, najd_now = newer(client, tender_id, "Gulf.pdf"), newer(client, tender_id, "Najd.pdf")
+    assert najd_now["note"] == "It replaces an older copy; none of the 2 pieces of work citing it is unchanged here."
+    with client.app.state.sessions() as session:
+        moved, stayed = session.query(Quote).filter_by(package_id=package_id).order_by(Quote.created_at).all()
+        assert (moved.document_id, [line["quote"] for line in moved.lines]) == (
+            gulf["id"],
+            ["3.1 Excavation 17.00", "6.3 Waterproofing 35.00"],
+        )
+        assert stayed.document_id == najd
+        assert [(s.kind, s.label) for s in revisions.stale(session, tender_id)] == [
+            ("quote", "Najd Contracting's quote for the Groundworks package"),
+            ("rate", "the rate for BOQ item 3.1"),
+        ]
+    why = "Some of what it cites isn't in the newer copy of Najd.pdf: record it again from the newer copy."
+    [older] = [
+        f for f in client.get(f"/records/recommendation/{package_id}/findings").json() if f["severity"] == "blocker"
+    ]
+    assert (older["message"], [r["label"] for r in older["refs"]]) == (why, ["Najd.pdf, page 1"])
+    shown = [f["message"] for f in client.get(f"/tenders/{tender_id}/audit").json()]  # the rate waits for the Manager
+    assert f"Najd Contracting's quote for the Groundworks package: {why}" in shown

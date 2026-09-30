@@ -31,9 +31,27 @@ describe("behaveLikeAnApp", () => {
     expect(click("Quantix")).toBe(false); // Quantix's own pages are left alone
   });
 
+  it("leaves a click on anything but a new-tab link alone", () => {
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+    document.querySelector("button")!.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
   it("leaves Copy on text the engineer selected", () => {
     document.getSelection()!.selectAllChildren(document.querySelector("p")!);
     expect(rightClick(document.querySelector("p")!)).toBe(false);
     document.getSelection()!.removeAllRanges();
+  });
+});
+
+describe("behaveLikeAnApp in the browser preview", () => {
+  it("lets a new-tab link open a tab, as a browser does", () => {
+    const page = document.implementation.createHTMLDocument();
+    page.body.innerHTML = `<a href="https://www.iana.org/prices" target="_blank">Web price</a>`;
+    behaveLikeAnApp(page, false);
+
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+    page.querySelector("a")!.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
   });
 });

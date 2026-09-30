@@ -1,8 +1,10 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { Priced } from "../estimate/queries";
+import type { Message, Staff } from "../office/queries";
 import type { Package } from "../subcontract/queries";
+import type { Requirement } from "../submission/queries";
 import { fakeService, openApp } from "../test/app";
 
 const tender = { id: "t1", name: "Synthetic school", due_date: null, created_at: "2026-09-23T10:00:00Z" };
@@ -170,6 +172,149 @@ describe("Overview", () => {
     await userEvent.click(screen.getByRole("button", { name: "Delete tender" }));
     await waitFor(() => expect(service.state.tenders).toHaveLength(0));
     await waitFor(() => expect(router.state.location.pathname).not.toBe("/tenders/t1"));
+  });
+});
+
+describe("Where the tender stands, on its Overview", () => {
+  const rania: Staff = { id: "s1", name: "Rania Farouk", role: "Tender Manager", is_manager: true, status: "active", now: null, profile: {} };
+  const said = (id: number, sender: string, text: string): Message =>
+    ({ id, sender, channel: "s1", kind: "message", text, sources: null, created_at: `2026-09-23T10:0${id}:00Z` });
+  const ready = { office_mode: "engineer" as const, office_ai: { connection_id: "c1", model: "m" }, tender_allowance: null, notifications: "all" as const };
+  const finding = (severity: string, message: string, reason: string | null = null) => ({
+    severity, message, refs: [], accepted_by: reason ? "Rania" : null, reason,
+  });
+
+  it("says what the office is doing, and how the tender went", async () => {
+    fakeService({ tenders: [{ ...tender, outcome: "won" }], documents: [doc], officeState: "working" });
+    openApp("/tenders/t1");
+    expect(await screen.findByText("The office is working.")).toBeInTheDocument();
+    expect(screen.getByText("Won.")).toBeInTheDocument();
+    cleanup();
+
+    fakeService({ tenders: [{ ...tender, outcome: "submitted" }], documents: [doc], officeState: "paused" });
+    openApp("/tenders/t1");
+    expect(await screen.findByText("The office is paused.")).toBeInTheDocument();
+    expect(screen.getByText("Submitted.")).toBeInTheDocument();
+  });
+
+  it("gives the Tender Manager's latest word, its first paragraph only, or what he is doing", async () => {
+    fakeService({
+      tenders: [tender], documents: [doc], settings: ready, staff: [{ ...rania, now: "Reading the ITT" }],
+      messages: [
+        said(1, "s1", "Earlier note."),
+        said(2, "engineer", "Price the earthworks."),
+        said(3, "s1", "The BOQ is entered: 26 lines.\n\nNext I price the earthworks. — Rania"),
+      ],
+    });
+    openApp("/tenders/t1");
+    expect(await screen.findByText("The BOQ is entered: 26 lines.")).toBeInTheDocument();
+    expect(screen.queryByText(/Next I price/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Earlier note.")).not.toBeInTheDocument();
+    cleanup();
+
+    fakeService({ tenders: [tender], documents: [doc], settings: ready, staff: [{ ...rania, now: "Reading the ITT" }] });
+    openApp("/tenders/t1");
+    expect(await screen.findByText("Reading the ITT")).toBeInTheDocument();
+    cleanup();
+
+    fakeService({ tenders: [tender], documents: [doc], settings: ready, staff: [rania] });
+    openApp("/tenders/t1");
+    expect(await screen.findByText("Getting to know the tender.")).toBeInTheDocument();
+  });
+
+  it("says when one piece of work is with the Tender Manager", async () => {
+    const line = {
+      id: "3.1", section: null, item: "3.1", description: "Excavation", unit: "m3", quantity: "10", status: "proposed",
+      proposed_by: "s2", reason: null, reviewed_by: null, review_note: null,
+      source: { document_id: "d1", document_name: "Bill.xlsx", page: 1, quote: "" },
+    };
+    fakeService({ tenders: [tender], documents: [doc], staff: [rania], items: [line] });
+    openApp("/tenders/t1");
+
+    expect(await screen.findByText("1 piece of work with Rania for review before it comes to you.")).toBeInTheDocument();
+  });
+
+  it("starts the office from the Overview once its AI is chosen", async () => {
+    fakeService({ tenders: [tender], documents: [doc], settings: ready });
+    openApp("/tenders/t1");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Write to the office" }));
+    expect(screen.queryByText(/so the team can start work/)).not.toBeInTheDocument();
+    const panel = await screen.findByRole("complementary", { name: "Team" });
+    expect(within(panel).getByText(/The Tender Manager joins when you first write to the office/)).toBeInTheDocument();
+  });
+
+  it("counts the documents read, being read and unreadable, leaving out those replaced", async () => {
+    const docs = ["read", "reading", "waiting", "unreadable", "replaced"].map((status, n) => ({ ...doc, id: `d${n + 1}`, status }));
+    fakeService({ tenders: [tender], documents: docs });
+    openApp("/tenders/t1");
+
+    const documents = await within(screen.getByRole("main")).findByRole("link", { name: /^Documents/ });
+    expect(documents).toHaveTextContent("1 of 4 read · reading 2 · 1 can’t be read");
+    expect(documents).toHaveAttribute("href", "/tenders/t1/documents");
+  });
+
+  it("shows where the packages and the submission stand, each one click from its screen", async () => {
+    const pkg = (id: string, chosen: string | null) =>
+      ({ id, name: id, kind: "subcontract", items: [], enquiries: [], quotes: [], selected_quote_id: chosen }) as unknown as Package;
+    const requirement = (id: string, state: string) => ({ id, section: "Commercial", title: id, state }) as unknown as Requirement;
+    fakeService({
+      tenders: [tender], documents: [doc],
+      packages: [pkg("p1", "q1"), pkg("p2", null)],
+      requirements: [requirement("r1", "ready"), requirement("r2", "missing"), requirement("r3", "review")],
+    });
+    openApp("/tenders/t1");
+
+    const main = within(screen.getByRole("main"));
+    expect(await main.findByRole("link", { name: /^Subcontract/ })).toHaveTextContent("1 of 2 packages chosen");
+    expect(main.getByRole("link", { name: /^Subcontract/ })).toHaveAttribute("href", "/tenders/t1/subcontract");
+    expect(await main.findByRole("link", { name: /^Submission/ })).toHaveTextContent("1 of 3 ready");
+  });
+
+  it("says the audit is clear, with the way to build the package", async () => {
+    fakeService({ tenders: [tender], documents: [doc], priced: [priced("3.1", "approved", "100.00")] });
+    openApp("/tenders/t1");
+
+    expect(await screen.findByText(/Quantix’s audit is clear: nothing keeps the tender from release\./)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Build the package" })).toHaveAttribute("href", "/tenders/t1/submission");
+  });
+
+  it("counts what must be fixed and what needs checking, and folds away what the office accepted", async () => {
+    fakeService({
+      tenders: [tender], documents: [doc], priced: [priced("3.1", "approved", "100.00")],
+      audit: [
+        finding("blocker", "VAT isn't recorded."),
+        finding("warning", "2 rates are older than 30 days."),
+        finding("warning", "A quote excludes delivery."),
+        finding("warning", "Site.kmz can't be read.", "It only shows where the site is."),
+        finding("warning", "One prime cost sum.", "The client names it."),
+      ],
+    });
+    openApp("/tenders/t1");
+
+    expect(await screen.findByText(/1 thing must be fixed and 2 need checking before the tender can go\./)).toBeInTheDocument();
+    const accepted = screen.getByText("2 warnings accepted by the office, with the reason").closest("details");
+    expect(accepted).not.toHaveAttribute("open");
+    expect(accepted).toHaveTextContent("Accepted by Rania: The client names it.");
+  });
+
+  it("changes the due date, clears it, or leaves it as it was", async () => {
+    const service = fakeService({ tenders: [{ ...tender, due_date: "2026-10-14" }], documents: [doc] });
+    openApp("/tenders/t1");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Change" }));
+    await userEvent.clear(screen.getByLabelText("Due date"));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByText(/Due 14 October/)).toBeInTheDocument();
+    expect(service.state.tenders[0].due_date).toBe("2026-10-14");
+
+    await userEvent.click(screen.getByRole("button", { name: "Change" }));
+    expect(screen.getByLabelText("Due date")).toHaveValue("2026-10-14");
+    await userEvent.clear(screen.getByLabelText("Due date"));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(service.state.tenders[0].due_date).toBeNull());
+    expect(await screen.findByRole("button", { name: "Set the due date" })).toBeInTheDocument();
+    expect(screen.getByText(/No due date yet\./)).toBeInTheDocument();
   });
 });
 

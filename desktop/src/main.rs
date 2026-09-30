@@ -180,3 +180,64 @@ fn notify(app: AppHandle, title: String, body: String, open: String) {
 #[cfg(not(windows))]
 #[tauri::command]
 fn notify(_: String, _: String, _: String) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opens_outside(url: &str) -> bool {
+        outside(&Url::parse(url).unwrap())
+    }
+
+    #[test]
+    fn the_apps_own_pages_stay_in_the_window() {
+        for url in [
+            "http://localhost:1420/tenders/3", // the Vite server in development
+            "HTTP://LOCALHOST:1420/",
+            "http://127.0.0.1:8765/documents/1/file", // the local service
+            "http://tauri.localhost/",                // the built app on Windows
+            "https://tauri.localhost/index.html",
+            "tauri://localhost/", // the built app on macOS and Linux
+        ] {
+            assert!(!opens_outside(url), "{url}");
+        }
+    }
+
+    #[test]
+    fn the_development_server_the_config_names_stays_in_the_window() {
+        let config = tauri::utils::config::parse::parse_json(
+            include_str!("../tauri.conf.json"),
+            std::path::Path::new("tauri.conf.json"),
+        )
+        .unwrap();
+        assert!(!outside(&config.build.dev_url.unwrap()));
+    }
+
+    #[test]
+    fn web_pages_and_email_open_in_the_engineers_own_programs() {
+        for url in [
+            "https://www.example.com/specification.pdf",
+            "http://example.com:8080/",
+            "mailto:tenders@example.com?subject=Clarification",
+            // addresses dressed up as the app's own
+            "https://localhost.example.com/",
+            "http://localhost@example.com/",
+            "http://tauri.localhost.example.com/",
+            "http://127.0.0.2/",
+        ] {
+            assert!(opens_outside(url), "{url}");
+        }
+    }
+
+    #[test]
+    fn blank_pages_previews_and_app_files_stay_in_the_window() {
+        for url in [
+            "about:blank",
+            "data:text/html,<p>preview</p>",
+            "blob:http://localhost:1420/5b0e8a8e-2f7a-4c1e-9d55-0d6a3c1b2f00",
+            "asset://localhost/C%3A/Tenders/drawing.png",
+        ] {
+            assert!(!opens_outside(url), "{url}");
+        }
+    }
+}

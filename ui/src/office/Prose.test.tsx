@@ -24,4 +24,24 @@ describe("Prose", () => {
     expect(screen.getAllByRole("listitem").map((li) => li.textContent)).toEqual(["Rashid's figures", "Nora's limits"]);
     expect(document.querySelector("img")).toBeNull();
   });
+
+  it("lays out headings, numbered points, codes, links and tables without making the chat a document", () => {
+    const text = [
+      "## Rates to check",
+      "1. Excavation\n2. Blinding",
+      "See `C35/20` on [the datasheet](https://readymix.example/c35).",
+      "| Item | Rate |\n| --- | --- |\n| 3.1 | 18.50 |",
+    ].join("\n\n");
+    render(<Prose text={text} />);
+
+    expect(screen.queryByRole("heading")).not.toBeInTheDocument();
+    expect(screen.getByText("Rates to check").tagName).toBe("P");
+    expect(screen.getByRole("list").tagName).toBe("OL");
+    expect(screen.getByText("C35/20").tagName).toBe("CODE");
+    const link = screen.getByRole("link", { name: "the datasheet" });
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noreferrer");
+    expect(screen.getAllByRole("columnheader").map((c) => c.textContent)).toEqual(["Item", "Rate"]);
+    expect(screen.getAllByRole("cell").map((c) => c.textContent)).toEqual(["3.1", "18.50"]);
+  });
 });

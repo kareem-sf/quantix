@@ -336,3 +336,101 @@ fn build(item: &Value) -> Result<EntityType, Failure> {
     }
     Ok(entity)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-9 * b.abs().max(1.0)
+    }
+
+    /// Writes a spec and a drawing from it under the system's temporary folder, and gives back the drawing's bytes.
+    fn written(test: &str, spec: &str, drawing: &str) -> Result<Vec<u8>, String> {
+        let folder =
+            std::env::temp_dir().join(format!("qx-dwg-sample-{}-{test}", std::process::id()));
+        fs::create_dir_all(&folder).unwrap();
+        let (spec_path, out) = (folder.join("spec.json"), folder.join(drawing));
+        fs::write(&spec_path, spec).unwrap();
+        let result = run(&spec_path.to_string_lossy(), &out.to_string_lossy());
+        let bytes = fs::read(&out);
+        let _ = fs::remove_dir_all(&folder);
+        match result {
+            Ok(()) => Ok(bytes.unwrap()),
+            Err(Failure::Other(message) | Failure::Unreadable(message)) => Err(message),
+            Err(Failure::Usage) => Err("usage".into()),
+        }
+    }
+
+    const PLAN: &str = r#"{"insunits": 4, "layers": ["A-WALL"],
+        "entities": [{"type": "line", "layer": "A-WALL", "from": [0, 0], "to": [1000, 0]}]}"#;
+
+    #[test]
+    fn the_file_name_chooses_dwg_or_dxf() {
+        let dwg = written("dwg", PLAN, "plan.dwg").unwrap();
+        assert!(dwg.starts_with(b"AC1024")); // AutoCAD 2010
+        let dxf = String::from_utf8(written("dxf", PLAN, "plan.DXF").unwrap()).unwrap();
+        let header: Vec<&str> = dxf.lines().map(str::trim).take(8).collect();
+        assert_eq!(
+            header,
+            ["0", "SECTION", "2", "HEADER", "9", "$ACADVER", "1", "AC1024"]
+        );
+        assert!(dxf.contains("A-WALL"));
+    }
+
+    #[test]
+    fn a_spec_that_is_wrong_is_refused_with_the_reason() {
+        let not_json = written("not-json", "{\"entities\": [", "plan.dwg").unwrap_err();
+        assert!(not_json.starts_with("Bad spec"), "{not_json}");
+        let unknown = r#"{"entities": [{"type": "spline", "points": [[0, 0], [1, 1]]}]}"#;
+        let unknown = written("unknown", unknown, "plan.dwg").unwrap_err();
+        assert_eq!(unknown, "Unknown sample entity \"spline\"");
+    }
+
+    #[test]
+    fn a_clip_takes_the_world_back_into_the_block() {
+        let mut doc = CadDocument::with_version(DxfVersion::AC1024);
+        let mut record = BlockRecord::new("B");
+        record.handle = doc.allocate_handle();
+        record.base_point = Vector3::new(100.0, 50.0, 0.0);
+        doc.block_records.add(record).unwrap();
+        let item = json!({"type": "insert", "block": "B", "at": [1000, 500], "rotation": 90, "scale": 2,
+            "clip": [[0, 0], [10, 0], [10, 10]]});
+        let Ok(entity) = build(&item) else {
+            panic!("an insert is a sample entity")
+        };
+        let insert = doc.add_entity(entity).unwrap();
+        clip(&mut doc, insert, &item);
+        let filter = doc
+            .objects
+            .values()
+            .find_map(|o| match o {
+                ObjectType::SpatialFilter(f) => Some(f),
+                _ => None,
+            })
+            .unwrap();
+        let back = |p: [f64; 2]| {
+            let m = filter.inverse_block_transform.m;
+            [
+                m[0][0] * p[0] + m[0][1] * p[1] + m[0][3],
+                m[1][0] * p[0] + m[1][1] * p[1] + m[1][3],
+            ]
+        };
+        // the insertion point is the block's base point; 10 along the block is 20 up the world, and 10 up it 20 left
+        for (world, block) in [
+            ([1000.0, 500.0], [100.0, 50.0]),
+            ([1000.0, 520.0], [110.0, 50.0]),
+            ([980.0, 500.0], [100.0, 60.0]),
+        ] {
+            let found = back(world);
+            assert!(
+                close(found[0], block[0]) && close(found[1], block[1]),
+                "{found:?}"
+            );
+        }
+        assert_eq!(filter.boundary_points.len(), 3);
+        let own = doc.get_entity(insert).unwrap().common().xdictionary_handle;
+        assert!(own.is_some()); // where CAD looks for the reference's clip
+    }
+}

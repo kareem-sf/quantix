@@ -365,3 +365,154 @@ def test_the_engineer_merges_a_firm_entered_twice(client, tender):
     najd = next(c for c in client.get("/directory").json() if c["name"] == "Najd Contracting")
     refused = client.post(f"/directory/{najd['id']}/merge", json={"into": gulf["id"]})
     assert refused.json()["detail"] == "Both have a quote for Groundworks: a firm has one quote per package."
+
+
+STEEL = make_pdf([["Emirates Steel and Civil offer", "3.1 Excavation 16.00 per m3", "4.3 Rebar fixed 3,400.00 per t"]])
+FREE = make_pdf([["Red Sea Contracting offer", "3.1 Excavation 15.00 per m3", "6.3 Waterproofing included 0.00"]])
+
+
+def test_a_gap_no_rate_of_ours_can_fill_leaves_the_quote_out_of_the_ranking(client, tender):
+    tender_id, _, omar, gulf, _ = tender
+    upload(client, tender_id, {"Steel.pdf": STEEL})
+    steel = read_all(client, tender_id)["Steel.pdf"]["id"]
+    with client.app.state.sessions() as session:
+        package = subcontract.create_package(session, tender_id, omar, "Steel and dig", "subcontract", ["4.3", "3.1"])
+        gulf_co = subcontract.add_company(session, omar, "Gulf Groundworks", "subcontractor", "Earthworks")
+        emirates = subcontract.add_company(session, omar, "Emirates Steel and Civil", "subcontractor", "Rebar")
+        excavation = [quoted("3.1", "17.00", "3.1 Excavation 17.00")]
+        subcontract.record_quote(session, package, gulf_co, omar, gulf, excavation, [])
+        both = [quoted("3.1", "16.00", "3.1 Excavation 16.00"), quoted("4.3", "3400.00", "4.3 Rebar fixed 3,400.00")]
+        subcontract.record_quote(session, package, emirates, omar, steel, both, [])
+        session.commit()
+    [package] = client.get(f"/tenders/{tender_id}/packages").json()
+    slab = package["items"][0]["id"]
+    assert [i["our_rate"] for i in package["items"]] == [None, "18.50"]  # we haven't priced 4.3
+    gulf_quote, emirates_quote = package["quotes"]
+    assert gulf_quote["cells"][slab] == {"rate": None, "amount": None, "plugged": True, "page": None, "quote": None}
+    assert (gulf_quote["quoted_total"], gulf_quote["levelled_total"], gulf_quote["rank"]) == ("21080.00", None, None)
+    # 1,240 × 16.00 + 28.1 × 3,400.00 = 19,840.00 + 95,540.00
+    assert (emirates_quote["quoted_total"], emirates_quote["levelled_total"], emirates_quote["rank"]) == (
+        "115380.00",
+        "115380.00",
+        1,
+    )
+
+
+def test_a_choice_whose_rates_cannot_enter_the_estimate_changes_nothing(client, tender):
+    tender_id, _, omar, _, _ = tender
+    upload(client, tender_id, {"RedSea.pdf": FREE})
+    document = read_all(client, tender_id)["RedSea.pdf"]["id"]
+    with client.app.state.sessions() as session:
+        firm = subcontract.add_company(session, omar, "Red Sea Contracting", "subcontractor", "Earthworks")
+        package = subcontract.create_package(session, tender_id, omar, "Groundworks", "subcontract", ["3.1", "6.3"])
+        lines = [
+            quoted("3.1", "15.00", "3.1 Excavation 15.00"),
+            quoted("6.3", "0.00", "6.3 Waterproofing included 0.00"),
+        ]
+        quote = subcontract.record_quote(session, package, firm, omar, document, lines, [])
+        session.commit()
+        package_id, quote_id = package.id, quote.id
+    [levelled] = client.get(f"/tenders/{tender_id}/packages").json()[0]["quotes"]
+    assert (levelled["quoted_total"], levelled["levelled_total"]) == ("18600.00", "18600.00")  # 1,240 × 15.00 + 0
+    refused = client.post(f"/packages/{package_id}/choice", json={"quote_id": quote_id})
+    assert refused.status_code == 400 and refused.json()["detail"].startswith("A rate must be more than zero.")
+    assert client.get(f"/tenders/{tender_id}/packages").json()[0]["selected_quote_id"] is None
+    rows = {i["item"]: i["rate"] for i in client.get(f"/tenders/{tender_id}/estimate").json()["items"]}
+    assert [(rows[i]["basis"], rows[i]["rate"]) for i in ("3.1", "6.3")] == [
+        ("estimate", "18.50"),
+        ("estimate", "38.00"),
+    ]
+
+
+def test_choosing_a_quote_that_left_a_line_out_keeps_our_rate_on_it(client, tender):
+    tender_id, manager, _, _, _ = tender
+    package_id = two_quotes(client, tender)
+    najd = client.get(f"/tenders/{tender_id}/packages").json()[0]["quotes"][1]["id"]
+    assert client.post(f"/packages/{package_id}/choice", json={"quote_id": najd}).status_code == 200
+    rows = {i["item"]: i for i in client.get(f"/tenders/{tender_id}/estimate").json()["items"]}
+    assert [(rows[i]["rate"]["basis"], rows[i]["amount"]) for i in ("3.1", "6.3")] == [
+        ("quote", "20460.00"),  # 1,240 × 16.50
+        ("estimate", "37240.00"),  # 980 × our 38.00
+    ]
+    chat = client.get(f"/tenders/{tender_id}/messages", params={"channel": manager}).json()
+    assert chat[-1]["text"] == "I chose Najd Contracting for Groundworks. Their rates are now in the estimate."
+
+
+def test_packages_and_firms_are_checked_before_they_are_kept(client, tender):
+    tender_id, _, omar, _, _ = tender
+    package_id = two_quotes(client, tender)
+    with client.app.state.sessions() as session:
+        with pytest.raises(ValueError, match="A company is a subcontractor or a supplier."):
+            subcontract.add_company(session, omar, "Hail Plant Hire", "consultant", "Plant")
+        with pytest.raises(ValueError, match="“Co. W.L.L.” is not a firm's name."):
+            subcontract.add_company(session, omar, "Co. W.L.L.", "supplier", "Plant")
+        with pytest.raises(ValueError, match="A package is a subcontract or a supply package."):
+            subcontract.create_package(session, tender_id, omar, "Steel", "labour", ["4.3"])
+        with pytest.raises(ValueError, match="There is already a package called groundworks."):
+            subcontract.create_package(session, tender_id, omar, "groundworks", "supply", ["4.3"])
+        with pytest.raises(ValueError, match="A package needs at least one BOQ item."):
+            subcontract.create_package(session, tender_id, omar, "Steel", "supply", [])
+        with pytest.raises(ValueError, match="There is no package called Roofing."):
+            subcontract.find_package(session, tender_id, "Roofing")
+        package = session.get(subcontract.Package, package_id)
+        hail = subcontract.add_company(session, omar, "Hail Plant Hire", "subcontractor", "Earthworks")
+        with pytest.raises(
+            ValueError, match="There is no quote from Hail Plant Hire for Groundworks. Record it first."
+        ):
+            subcontract.recommend(session, package, omar, hail, "Cheapest.")
+        with pytest.raises(ValueError, match="Choose another firm to merge it into."):
+            subcontract.merge(session, hail, hail)
+
+
+def test_unknown_packages_quotes_enquiries_and_firms_are_not_found(client, tender):
+    package_id = two_quotes(client, tender)
+    assert client.get("/tenders/nope/packages").status_code == 404
+    assert client.post("/enquiries/nope/sent").status_code == 404
+    assert client.post("/packages/nope/choice", json={"quote_id": "nope"}).status_code == 404
+    other = client.post(f"/packages/{package_id}/choice", json={"quote_id": "nope"})
+    assert (other.status_code, other.json()["detail"]) == (404, "That quote is not in this package.")
+    najd = next(c for c in client.get("/directory").json() if c["name"] == "Najd Contracting")
+    assert client.post(f"/directory/{najd['id']}/merge", json={"into": "nope"}).status_code == 404
+    assert client.delete("/directory/nope").status_code == 404
+    refused = client.post("/directory", json={"name": "LLC", "kind": "supplier", "trades": "Aggregates"})
+    assert (refused.status_code, refused.json()["detail"]) == (400, "“LLC” is not a firm's name.")
+
+
+HAIL = make_pdf([["Hail Earthworks offer", "3.1 Excavation 15.00 per m3", "Excludes dewatering and disposal off site"]])
+
+
+def hail_and_gulf(client, tender, dewatering: str):
+    """Excavation alone: Hail cheaper at 15.00 but leaving out dewatering, Gulf at 17.00 with everything in."""
+    tender_id, _, omar, gulf, _ = tender
+    upload(client, tender_id, {"Hail.pdf": HAIL})
+    hail_document = read_all(client, tender_id)["Hail.pdf"]["id"]
+    with client.app.state.sessions() as session:
+        package = subcontract.create_package(session, tender_id, omar, "Excavation", "subcontract", ["3.1"])
+        hail = subcontract.add_company(session, omar, "Hail Earthworks", "subcontractor", "Earthworks")
+        gulf_co = subcontract.add_company(session, omar, "Gulf Groundworks", "subcontractor", "Earthworks")
+        left_out = subcontract.Exclusion(
+            description="Dewatering", amount=Decimal(dewatering), page=1, quote="Excludes dewatering"
+        )
+        subcontract.record_quote(
+            session, package, hail, omar, hail_document, [quoted("3.1", "15.00", "3.1 Excavation 15.00")], [left_out]
+        )
+        subcontract.record_quote(
+            session, package, gulf_co, omar, gulf, [quoted("3.1", "17.00", "3.1 Excavation 17.00")], []
+        )
+        session.commit()
+    return client.get(f"/tenders/{tender_id}/packages").json()[0]["quotes"]
+
+
+def test_what_a_quote_leaves_out_is_priced_back_in_before_the_quotes_are_ranked(client, tender):
+    hail, gulf = hail_and_gulf(client, tender, "4000")
+    # Hail: 1,240 × 15.00 = 18,600.00, with dewatering 22,600.00; Gulf: 1,240 × 17.00 = 21,080.00, nothing left out
+    assert [(q["company"], q["quoted_total"], q["levelled_total"], q["rank"]) for q in (hail, gulf)] == [
+        ("Hail Earthworks", "18600.00", "22600.00", 2),
+        ("Gulf Groundworks", "21080.00", "21080.00", 1),
+    ]
+
+
+@pytest.mark.xfail(strict=True, reason="Bug: an exclusion's amount isn't checked, so a negative one lowers the total")
+def test_an_exclusion_cannot_make_a_quote_cheaper(client, tender):
+    with pytest.raises(ValueError):  # what a quote leaves out only ever adds to it
+        hail_and_gulf(client, tender, "-4000")

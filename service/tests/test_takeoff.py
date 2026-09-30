@@ -4,12 +4,15 @@ from decimal import Decimal
 import openpyxl
 import pytest
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
+from sqlalchemy import select
 from test_documents import make_pdf, read_all, upload
 from test_office import scripted, wait_for
+from test_revisions import newer
 
 from quantix import settings
 from quantix.boq import records as boq
 from quantix.office import records as office
+from quantix.office.models import Staff, Task
 
 DRAWING = make_pdf([["A-101 GROUND FLOOR PLAN", "Grid A to E 40.00", "Scale 1:250"]])  # a 612 x 792 point page
 
@@ -296,3 +299,155 @@ def test_sloppy_points_snap_onto_the_drawing(client):
     corners = snap([[88, 173], [479, 167], [484, 371], [82, 366]], tuple(map(tuple, vertices)))
     slab = measure(client, tender_id, drawing, kind="area", label="Slab", unit="m2", points=corners).json()
     assert slab["quantity"] == "800.020"  # the PDF stores 2-decimal coordinates: 40.000 m by 20.0005 m
+
+
+def test_the_engineer_decides_the_office_scales_and_measurements(client, sheet):
+    from quantix.takeoff import records as takeoff
+
+    tender_id, drawing, qs_id = sheet
+    with client.app.state.sessions() as session:
+        good = takeoff.set_scale(session, tender_id, qs_id, drawing, 1, [[100, 100], [500, 100]], 40, "40.00")
+        off = takeoff.set_scale(session, tender_id, qs_id, drawing, 1, [[100, 100], [490, 100]], 40, "40.00")
+        wall = takeoff.measure(
+            session, tender_id, qs_id, drawing, 1, "length", "External wall", [[100, 200], [500, 200]], "m", None, "5.1"
+        )
+        doors = takeoff.measure(
+            session, tender_id, qs_id, drawing, 1, "count", "Doors", [[1, 1], [2, 2]], "nr", None, "7.1"
+        )
+        session.commit()
+        good_id, off_id, wall_id, doors_id = good.id, off.id, wall.id, doors.id
+    to_scale = "Take the scale off the 40.00 dimension line itself."
+    assert client.post(f"/scales/{off_id}/decision", json={"approve": False, "reason": to_scale}).status_code == 200
+    assert client.post(f"/scales/{good_id}/decision", json={"approve": True}).status_code == 200
+    assert client.post(f"/measurements/{wall_id}/decision", json={"approve": True}).status_code == 200
+    to_count = "Count the doors on the door schedule."
+    assert (
+        client.post(f"/measurements/{doors_id}/decision", json={"approve": False, "reason": to_count}).status_code
+        == 200
+    )
+
+    view = client.get(f"/tenders/{tender_id}/takeoff").json()
+    assert [(m["label"], m["status"], m["quantity"]) for m in view["measurements"]] == [
+        ("External wall", "approved", "40.000")
+    ]
+    assert (view["sheets"][0]["scale"]["id"], view["sheets"][0]["scale"]["status"]) == (good_id, "approved")
+    again = client.post(f"/measurements/{wall_id}/decision", json={"approve": False})
+    assert again.status_code == 400 and again.json()["detail"] == "This has already been decided."
+    assert client.post(f"/scales/{good_id}/decision", json={"approve": True}).status_code == 400
+    assert client.post("/measurements/nope/decision", json={"approve": True}).status_code == 404
+    assert client.post("/scales/nope/decision", json={"approve": True}).status_code == 404
+    with client.app.state.sessions() as session:
+        redo = {t.title: t.brief for t in session.scalars(select(Task).where(Task.staff_id == qs_id))}
+    assert redo == {
+        "Redo the scale of A-101.pdf, page 1": to_scale,
+        "Redo the measurement “Doors” on A-101.pdf, page 1": to_count,
+    }
+
+    reason = "The wall runs round the stair core too."
+    assert client.post(f"/records/measurement/{wall_id}/reopen", json={"reason": reason}).status_code == 204
+    assert client.get(f"/tenders/{tender_id}/takeoff").json()["measurements"] == []  # back with the office to redo
+
+
+def test_the_office_is_told_what_a_scale_or_a_measurement_needs(client, sheet):
+    from quantix.takeoff import records as takeoff
+
+    tender_id, drawing, qs_id = sheet
+    line = [[100, 100], [500, 100]]
+    with client.app.state.sessions() as session:
+        with pytest.raises(ValueError, match="A scale needs the two ends of the dimension line and its real length"):
+            takeoff.set_scale(session, tender_id, qs_id, drawing, 1, line[:1], 40, "40.00")
+        with pytest.raises(ValueError, match="A scale needs the two ends of the dimension line and its real length"):
+            takeoff.set_scale(session, tender_id, qs_id, drawing, 1, line, 0, "40.00")
+        with pytest.raises(ValueError, match="The two points are too close together"):
+            takeoff.set_scale(session, tender_id, qs_id, drawing, 1, [[100, 100], [105, 100]], 40, "40.00")
+
+        def measured(kind, points, unit, document=drawing, page=1):
+            return takeoff.measure(session, tender_id, qs_id, document, page, kind, "x", points, unit, None, None)
+
+        with pytest.raises(ValueError, match="A length needs at least 2 points."):
+            measured("length", [[1, 1]], "m")
+        with pytest.raises(ValueError, match="A measurement is a length, an area, a volume or a count."):
+            measured("weight", [[1, 1]], "kg")
+        with pytest.raises(ValueError, match="A length is measured in m or m2."):
+            measured("length", [[1, 1], [2, 2]], "m3")
+        with pytest.raises(ValueError, match="A volume is taken only from a CAD drawing's 3D solids."):
+            measured("volume", [[1, 1], [2, 2], [2, 1]], "m3")
+        with pytest.raises(ValueError, match="Takeoff works on PDF drawings"):
+            measured("count", [[1, 1]], "nr", document="nope")
+        with pytest.raises(ValueError, match="A-101.pdf has no page 2."):
+            measured("count", [[1, 1]], "nr", page=2)
+    bill = read_all(client, tender_id)["Bill.xlsx"]["id"]
+    assert client.get(f"/documents/{drawing}/pages/2/sheet").status_code == 404
+    assert client.get(f"/documents/{bill}/pages/1/vertices").status_code == 404
+    assert client.get("/tenders/nope/takeoff").status_code == 404
+
+
+def test_the_comparison_says_why_a_line_cant_be_compared(client, sheet):
+    tender_id, drawing, qs_id = sheet
+    workbook = openpyxl.Workbook()
+    workbook.active.append(["9.1", "Floor screed", "m2"])  # the bill leaves its quantity blank
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    upload(client, tender_id, {"Screed.xlsx": buffer.getvalue()})
+    screed = read_all(client, tender_id)["Screed.xlsx"]["id"]
+    with client.app.state.sessions() as session:
+        line = boq.ItemIn(
+            item="9.1",
+            description="Floor screed",
+            unit="m2",
+            document_id=screed,
+            page=1,
+            quote="A1=9.1 | B1=Floor screed",
+        )
+        assert boq.propose_items(session, tender_id, session.get(Staff, qs_id), [line]).startswith("Saved 1")
+        session.commit()
+    slab = [[100, 500], [200, 500], [200, 550], [100, 550]]
+    measure(client, tender_id, drawing, kind="length", label="Slab edge", unit="m", points=slab[:2], boq_item="6.1")
+    measure(client, tender_id, drawing, kind="area", label="Screed", unit="m2", points=slab, boq_item="9.1")
+
+    def results():
+        return {r["item"]: r["result"] for r in client.get(f"/tenders/{tender_id}/takeoff").json()["comparison"]}
+
+    assert results() == {"6.1": "no_scale", "9.1": "no_scale"}
+    scale(client, tender_id, drawing)
+    assert results() == {"6.1": "unit_differs", "9.1": "no_boq_quantity"}  # metres against square metres
+
+
+def test_work_on_a_newer_copy_replaces_the_same_work_on_the_older_copy(client, sheet):
+    tender_id, drawing, _ = sheet
+    scale(client, tender_id, drawing)
+    measure(
+        client,
+        tender_id,
+        drawing,
+        kind="length",
+        label="Wall",
+        unit="m",
+        points=[[100, 200], [500, 200]],
+        boq_item="5.1",
+    )
+    measure(client, tender_id, drawing, kind="count", label="Doors", unit="nr", points=[[1, 1]])
+    upload(client, tender_id, {"A-101.pdf": DRAWING + b"\n% Addendum 1: two doors\n"})
+    reissued = newer(client, tender_id, "A-101.pdf")["id"]
+    kept = client.get(f"/tenders/{tender_id}/takeoff").json()["measurements"]
+    assert {m["document_id"] for m in kept} == {drawing}  # a sheet of words has no lines to show the work unchanged
+
+    scale(client, tender_id, reissued)
+    measure(
+        client,
+        tender_id,
+        reissued,
+        kind="length",
+        label="Wall",
+        unit="m",
+        points=[[100, 200], [300, 200]],
+        boq_item="5.1",
+    )
+    measure(client, tender_id, reissued, kind="count", label="Doors", unit="nr", points=[[1, 1], [2, 2]])
+    view = client.get(f"/tenders/{tender_id}/takeoff").json()
+    assert [(m["document_id"], m["label"], m["quantity"]) for m in view["measurements"]] == [
+        (reissued, "Wall", "20.000"),
+        (reissued, "Doors", "2"),
+    ]
+    assert [s["document_id"] for s in view["sheets"]] == [reissued]
+    assert [(r["item"], r["takeoff"]) for r in view["comparison"]] == [(None, "2"), ("5.1", "20.000")]

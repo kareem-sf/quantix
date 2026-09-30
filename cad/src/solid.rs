@@ -80,3 +80,80 @@ pub fn measure(data: &AcisData) -> Option<Measured> {
     }
     Some(measured)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use opencadcodec::entities::acis::{primitives, SatDocument, SatWriter};
+    use std::f64::consts::PI;
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-6 * b.abs().max(1.0)
+    }
+
+    fn measured(sat: SatDocument) -> Measured {
+        measure(&AcisData::from_sat(&SatWriter::write(&sat))).expect("a solid Quantix can measure")
+    }
+
+    /// The extent of the edges seen from above.
+    fn plan(m: &Measured) -> [f64; 4] {
+        let mut b = [
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        ];
+        for p in m.edges.iter().flatten() {
+            b = [
+                b[0].min(p[0]),
+                b[1].min(p[1]),
+                b[2].max(p[0]),
+                b[3].max(p[1]),
+            ];
+        }
+        b
+    }
+
+    #[test]
+    fn a_cube_holds_its_side_cubed() {
+        let cube = measured(primitives::build_box([0.0, 0.0, 0.0], 2.0, 2.0, 2.0));
+        assert!(close(cube.volume, 8.0) && close(cube.area, 24.0));
+        let [left, bottom, right, top] = plan(&cube);
+        assert!(close(left, -1.0) && close(bottom, -1.0) && close(right, 1.0) && close(top, 1.0));
+    }
+
+    #[test]
+    fn a_triangular_prism_holds_half_its_box() {
+        // legs 3 and 4 (so a hypotenuse of 5), 5 high
+        let wedge = measured(primitives::build_wedge([0.0, 0.0, 0.0], 3.0, 4.0, 5.0));
+        assert!(close(wedge.volume, 0.5 * 3.0 * 4.0 * 5.0));
+        assert!(close(wedge.area, 2.0 * 6.0 + (3.0 + 4.0 + 5.0) * 5.0));
+    }
+
+    #[test]
+    fn a_pyramid_holds_a_third_of_its_box() {
+        // a 6 × 6 base 4 high: each sloping face 5 high
+        let pyramid = measured(primitives::build_pyramid([0.0, 0.0, 0.0], 6.0, 4.0));
+        assert!(close(pyramid.volume, 36.0 * 4.0 / 3.0));
+        assert!(close(pyramid.area, 36.0 + 4.0 * 0.5 * 6.0 * 5.0));
+    }
+
+    #[test]
+    fn a_cylinder_and_a_sphere_are_measured_exactly() {
+        let bar = measured(primitives::build_cylinder([0.0, 0.0, 0.0], 10.0, 500.0));
+        assert!(close(bar.volume, PI * 100.0 * 500.0));
+        // its faces' area comes from the mesh, a little inside the curve
+        let skin = 2.0 * PI * 10.0 * 500.0 + 2.0 * PI * 100.0;
+        assert!(bar.area < skin && bar.area > skin * 0.99);
+        let ball = measured(primitives::build_sphere([0.0, 0.0, 0.0], 3.0));
+        assert!(close(ball.volume, 4.0 / 3.0 * PI * 27.0));
+    }
+
+    #[test]
+    fn data_that_is_not_a_solid_is_not_measured() {
+        assert!(measure(&AcisData::from_sat("not a solid at all")).is_none());
+        assert!(measure(&AcisData::from_sat("")).is_none());
+        assert!(measure(&AcisData::from_sab(b"ACIS BinaryFile garbage".to_vec())).is_none());
+        assert!(measure(&AcisData::from_sab(vec![])).is_none());
+    }
+}

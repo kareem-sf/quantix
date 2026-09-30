@@ -1,5 +1,6 @@
 import hashlib
 import io
+import re
 from decimal import Decimal
 
 import docx
@@ -7,18 +8,25 @@ import openpyxl
 import pptx
 import pypdfium2 as pdfium
 import pytest
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
+from PIL import Image
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 from test_documents import make_pdf, read_all, upload
+from test_estimate import CONDITIONS
 from test_office import manager_accepts, scripted, wait_for
 
 from quantix import settings
 from quantix.boq import records as boq
+from quantix.core import calculate
 from quantix.documents import library
 from quantix.documents.models import Document
 from quantix.estimate import records as estimate
 from quantix.office import records as office
+from quantix.office.models import ENGINEER, Staff
 from quantix.review import lookup
-from quantix.submission import export
+from quantix.subcontract import records as subcontract
+from quantix.submission import export, package
 from quantix.submission import records as submission
 
 ITT = make_pdf(
@@ -546,4 +554,323 @@ def test_a_draft_that_opens_with_its_own_title_does_not_repeat_it():
     assert blocks[:2] == [
         Paragraph([Run("Project: "), Run("SEC 8485", bold=True)]),
         Paragraph([Run("Please clarify.")]),
+    ]
+
+
+def worked_out(sheet, ref: str) -> Decimal:
+    """A cell of the priced workbook as Excel works it out, here with Quantix's own calculator."""
+    value = sheet[ref].value
+    if not (isinstance(value, str) and value.startswith("=")):
+        return Decimal(str(value or 0))
+    formula = re.sub(
+        r"SUM\(G(\d+):G(\d+)\)",
+        lambda m: "(" + "+".join(f"G{r}" for r in range(int(m[1]), int(m[2]) + 1)) + ")",
+        value[1:],
+    )
+    rounded = re.fullmatch(r"ROUND\((.+),2\)", formula)
+    names = {name: worked_out(sheet, name) for name in re.findall(r"\b[A-Z]{1,3}\d+\b", formula)}
+    result = calculate.evaluate(rounded[1] if rounded else formula, names)
+    return estimate.money(result) if rounded else result
+
+
+def summary_of(sheet) -> dict[str, Decimal]:
+    """The priced workbook's summary lines, each as Excel works it out."""
+    start = next(r for r in range(1, sheet.max_row + 1) if sheet[f"A{r}"].value == "Summary")
+    return {sheet[f"C{r}"].value: worked_out(sheet, f"G{r}") for r in range(start + 1, sheet.max_row + 1)}
+
+
+def slide(deck, title):
+    return next(s for s in deck.slides if any(sh.has_text_frame and sh.text_frame.text == title for sh in s.shapes))
+
+
+def texts(found) -> list[str]:
+    return [shape.text_frame.text for shape in found.shapes if shape.has_text_frame]
+
+
+def table(found) -> list[list[str]]:
+    [shape] = [shape for shape in found.shapes if shape.has_table]
+    return [[cell.text for cell in row.cells] for row in shape.table.rows]
+
+
+def price_facts(client, tender_id, layla):
+    """SAR and VAT at 15% from the conditions, and the engineer's markups: site costs, 5% overheads, 7% profit and
+    500 off."""
+    upload(client, tender_id, {"Conditions.pdf": CONDITIONS})
+    conditions = read_all(client, tender_id)["Conditions.pdf"]["id"]
+    with client.app.state.sessions() as session:
+        staff = session.get(Staff, layla)
+        for kind, value, quote in (("currency", "SAR", "Saudi Riyals (SAR)"), ("vat", "15%", "VAT at 15%")):
+            boq.decide(session, boq.propose_fact(session, tender_id, staff, kind, value, conditions, 1, quote), True)
+        markups = (Decimal("0.05"), Decimal("0.07"), Decimal(-500))
+        estimate.propose_markups(session, tender_id, ENGINEER, [SITE_COSTS], *markups, "Rules", status="approved")
+        session.commit()
+
+
+def test_the_priced_boq_workbook_pdf_and_deck_carry_quantix_total_with_vat(client, tender, tmp_path):
+    tender_id, layla, _, _ = tender
+    price_facts(client, tender_id, layla)
+    with client.app.state.sessions() as session:
+        subcontract.create_package(session, tender_id, layla, "Groundworks", "subcontract", ["3.1"])
+        session.commit()
+    built = client.post(f"/tenders/{tender_id}/export", json={"spread_markups": False}).json()
+    # Net 22,940.00 + 98,012.80 = 120,952.80; site costs 12,095.28; overheads 5% of 133,048.08 = 6,652.40; profit
+    # 7% of 139,700.48 = 9,779.03; less 500: 148,979.51. VAT 15% of that is 22,346.93.
+    assert (Decimal(built["factor"]), built["summary_total"], built["priced_total"]) == (1, "148979.51", "120952.80")
+    folder = tmp_path / "exports" / built["folder"]
+
+    sheet = openpyxl.load_workbook(folder / "Priced BOQ.xlsx").active
+    assert summary_of(sheet) == {
+        "Bill": Decimal("120952.80"),
+        "Preliminaries, overheads and profit": Decimal("28026.71"),
+        "Total before VAT": Decimal("148979.51"),
+        "VAT 15%": Decimal("22346.93"),
+        "Total with VAT": Decimal("171326.44"),
+    }
+    priced = "".join(pdf_text(folder / "Priced BOQ.pdf"))
+    for figure in ("Rates and amounts in SAR.", "28,026.71", "148,979.51", "VAT 15%", "22,346.93", "171,326.44"):
+        assert figure in priced
+
+    deck = pptx.Presentation(folder / "Internal" / "Tender summary.pptx")
+    price = slide(deck, "The price")
+    for figure in ("Total before VAT, SAR", "148,979.51", "VAT", "22,346.93", "Total with VAT", "171,326.44"):
+        assert figure in texts(price)
+    assert table(price) == [
+        ["Build-up", "SAR", "Share"],
+        ["Net cost of the work", "120,952.80", "81.2%"],
+        ["Preliminaries", "12,095.28", "8.1%"],
+        ["Overheads, 5.0%", "6,652.40", "4.5%"],
+        ["Profit, 7.0%", "9,779.03", "6.6%"],
+        ["Adjustment", "-500.00", "-0.3%"],
+        ["Total before VAT", "148,979.51", "100%"],
+    ]
+    assert table(slide(deck, "Subcontract and supply")) == [
+        ["Package", "Kind", "Quotes", "Choice"],
+        ["Groundworks", "Subcontract", "0", "Priced at our own rates"],
+    ]
+
+
+def test_spread_rates_carry_the_markups_and_vat_is_worked_out_on_what_the_bill_adds_up_to(client, tender, tmp_path):
+    tender_id, layla, _, _ = tender
+    price_facts(client, tender_id, layla)
+    built = client.post(f"/tenders/{tender_id}/export", json={"spread_markups": True}).json()
+    # each rate × 148,979.51 ÷ 120,952.80: 18.50 → 22.79 and 3,488.00 → 4,296.23. The amounts 28,259.60 and
+    # 120,724.06 add up to 148,983.66, 4.15 more than the summary from rounding each rate to the cent.
+    assert (built["summary_total"], built["priced_total"]) == ("148979.51", "148983.66")
+    folder = tmp_path / "exports" / built["folder"]
+    sheet = openpyxl.load_workbook(folder / "Priced BOQ.xlsx").active
+    rates = {sheet[f"B{r}"].value: sheet[f"F{r}"].value for r in range(8, 11)}
+    assert rates == {"3.1": 22.79, "4.3": 4296.23, "6.3": None}
+    assert summary_of(sheet) == {  # no separate markups: they are in the rates
+        "Bill": Decimal("148983.66"),
+        "Total before VAT": Decimal("148983.66"),
+        "VAT 15%": Decimal("22347.55"),
+        "Total with VAT": Decimal("171331.21"),
+    }
+    priced = "".join(pdf_text(folder / "Priced BOQ.pdf"))
+    for figure in ("including preliminaries, overheads and profit.", "4,296.23", "148,983.66", "171,331.21"):
+        assert figure in priced
+
+
+EXTERNAL = make_pdf([["Bill 2 External works", "9.1 Chain link fencing m 200"]])
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Bug: with one bill in the client's workbook, Priced BOQ.xlsx adds the whole tender's markups to the "
+    "other bills alone and calls that the Total",
+)
+def test_the_priced_boq_workbook_totals_the_tender_when_one_bill_is_in_the_client_format(client, tender, tmp_path):
+    tender_id, layla, bill, _ = tender
+    upload(client, tender_id, {"External.pdf": EXTERNAL})
+    external = read_all(client, tender_id)["External.pdf"]["id"]
+    with client.app.state.sessions() as session:
+        fencing = boq.ItemIn(item="9.1", description="Chain link fencing", unit="m", quantity=Decimal(200),
+                             document_id=external, page=1, quote="9.1 Chain link fencing m 200")  # fmt: skip
+        boq.propose_items(session, tender_id, session.get(Staff, layla), [fencing])
+        boq.approve(session, boq.find_item(session, tender_id, "9.1"))
+        note = "Own rate from outputs and current prices."
+        estimate.propose_rate(session, tender_id, layla, "9.1", "estimate", note, Decimal(45), status="approved")
+        submission.set_pricing_columns(session, tender_id, layla, bill, 1, "E", "F", "E1=Rate | F1=Amount")
+        session.commit()
+    built = client.post(f"/tenders/{tender_id}/export", json={"spread_markups": False}).json()
+    # 1,240 × 18.50 + 28.1 × 3,488.00 in the client's workbook, 200 × 45.00 in Quantix's, and 12,095.28 site costs
+    assert built["summary_total"] == "142048.08"
+    sheet = openpyxl.load_workbook(tmp_path / "exports" / built["folder"] / "Priced BOQ.xlsx").active
+    assert summary_of(sheet)["Total"] == Decimal("142048.08")
+
+
+def test_only_approved_drafts_and_the_engineers_own_files_go_into_the_package(client, tender, tmp_path):
+    tender_id, layla, _, _ = tender
+    checklist(client, tender)
+    with client.app.state.sessions() as session:
+        method = submission.find_requirement(session, tender_id, "Method statement for concrete works")
+        submission.draft(session, method, layla, "Method statement", "Pour sequence.")  # with the Tender Manager
+        bond = submission.find_requirement(session, tender_id, "Bid bond, 1% of the tender price").id
+        session.commit()
+    client.post(f"/requirements/{bond}/file", files={"file": ("scans/Bond.pdf", b"%PDF-1.4 signed")})
+
+    built = client.post(f"/tenders/{tender_id}/export", json={"spread_markups": True}).json()
+    attached = "Documents/Bid bond, 1% of the tender price - Bond.pdf"
+    assert attached in built["files"] and not [f for f in built["files"] if "Method statement" in f]
+    folder = tmp_path / "exports" / built["folder"]
+    assert (folder / attached).read_bytes() == b"%PDF-1.4 signed"  # as the engineer provided it
+    rows = list(openpyxl.load_workbook(folder / "Internal" / "Checklist.xlsx").active.values)
+    assert [
+        (r[1], r[3], r[4]) for r in rows[rows.index(("Section", "Requirement", "Required by", "State", "File")) + 1 :]
+    ] == [
+        ("Bid bond, 1% of the tender price", "Ready", attached),
+        ("Method statement for concrete works", "Draft with the Tender Manager", None),
+    ]
+    assert "Pour sequence." not in "".join(pdf_text(folder / "Synthetic school - Submission.pdf"))
+
+
+def test_arabic_reads_right_to_left_in_word_and_pdf_under_the_firms_logo(client, tender, tmp_path):
+    tender_id, layla, _, _ = tender
+    logo = io.BytesIO()
+    Image.new("RGB", (400, 100), "navy").save(logo, "PNG")
+    client.put("/company/logo", files={"file": ("logo.png", logo.getvalue())})
+    checklist(client, tender)
+    with client.app.state.sessions() as session:
+        method = submission.find_requirement(session, tender_id, "Method statement for concrete works")
+        body = "يجب تقديم ضمان العطاء\n\nThe bond is **1%**."
+        submission.draft(session, method, layla, "Method statement", body, "approved")
+        session.commit()
+    built = client.post(f"/tenders/{tender_id}/export", json={"spread_markups": True}).json()
+    folder = tmp_path / "exports" / built["folder"]
+
+    statement = docx.Document(folder / "Documents" / "Method statement.docx")
+    arabic = next(p for p in statement.paragraphs if p.text == "يجب تقديم ضمان العطاء")
+    english = next(p for p in statement.paragraphs if p.text == "The bond is 1%.")
+    assert arabic.alignment == WD_ALIGN_PARAGRAPH.RIGHT and arabic._p.pPr.find(qn("w:bidi")) is not None
+    assert all(run._r.rPr.find(qn("w:rtl")) is not None for run in arabic.runs)
+    assert (english.alignment, [run.bold for run in english.runs]) == (None, [None, True, None])
+    assert statement.sections[0].header._element.xml.count("<pic:pic") == 1  # the firm's logo
+
+    path = folder / "Documents" / "Method statement.pdf"
+    assert b"NotoSansArabic" in path.read_bytes()  # set in the Arabic font, shaped
+    page = pdfium.PdfDocument(path)[0]
+    text = page.get_textpage()
+    whole = text.get_text_range()
+
+    def line(word):
+        start = whole.index(word)
+        boxes = [text.get_charbox(i) for i in range(start, whole.index("\r", start)) if whole[i].strip()]
+        return min(b[0] for b in boxes), max(b[2] for b in boxes)
+
+    width = page.get_width()
+    assert line("العطاء")[0] > width / 2 and line("العطاء")[1] > width - 70  # at the right margin
+    assert line("The bond")[0] < 60  # against the left margin
+    combined = pdfium.PdfDocument(folder / "Synthetic school - Submission.pdf")
+    images = [
+        sum(o.type == pdfium.raw.FPDF_PAGEOBJ_IMAGE for o in combined[n].get_objects()) for n in range(len(combined))
+    ]
+    assert images == [1] * len(combined)  # on the cover, and in every page's header
+
+
+@pytest.mark.xfail(strict=True, reason="Bug: word.write adds the title and headings without _direction")
+def test_an_arabic_title_and_heading_read_right_to_left_in_word_as_in_the_pdf(tmp_path):
+    from quantix.submission import word
+    from quantix.submission.content import Document, Letterhead, from_markdown
+
+    letter = Document("خطاب الاستفسار", from_markdown("## الجدول الزمني\n\nيرجى التوضيح."))
+    word.write(letter, Letterhead("", [], None, "Synthetic school"), tmp_path / "query.docx")
+    paragraphs = [p for p in docx.Document(tmp_path / "query.docx").paragraphs if p.text]
+    assert [(p.text, p.alignment) for p in paragraphs] == [
+        ("خطاب الاستفسار", WD_ALIGN_PARAGRAPH.RIGHT),
+        ("الجدول الزمني", WD_ALIGN_PARAGRAPH.RIGHT),
+        ("يرجى التوضيح.", WD_ALIGN_PARAGRAPH.RIGHT),
+    ]
+
+
+def test_a_work_schedule_edited_by_hand_is_laid_out_as_its_text(client, tender):
+    tender_id, layla, _, itt = tender
+    activity = submission.ActivityIn
+    with client.app.state.sessions() as session:
+        submission.add_requirements(session, tender_id, "engineer", [requirement("Work programme", "7.1 The", itt)])
+        programme = submission.find_requirement(session, tender_id, "Work programme")
+        rows = submission.durations(session, tender_id, [activity(boq_item="3.1", output=Decimal(100), crews=2)])
+        record = submission.schedule_record(rows, 7)
+        edited = submission.draft(
+            session, programme, layla, "Work programme", "Excavation takes a week.", schedule=record
+        )
+        assert [type(b).__name__ for b in package.draft(session, edited, []).blocks] == [
+            "Paragraph"
+        ]  # read as the office's
+        bare = submission.draft(session, programme, layla, "Work programme", submission.schedule_text(rows, "", 7),
+                                schedule=record)  # fmt: skip
+        blocks = package.draft(session, bare, []).blocks  # no sequence: the durations and the overall duration
+        assert [type(b).__name__ for b in blocks] == ["Paragraph", "Heading", "Table", "Paragraph"]
+        assert blocks[2].rows == [["Bill", "3.1", "Excavation", "1,240", "m3", "100", "2", "7"]]
+
+
+def test_the_engineer_adds_requirements_and_unknown_ones_are_not_found(client, tender, tmp_path):
+    tender_id, layla, _, _ = tender
+    form = {"section": " Commercial ", "title": "Signed form of tender"}
+    assert client.post(f"/tenders/{tender_id}/requirements", json=form).status_code == 201
+    again = client.post(f"/tenders/{tender_id}/requirements", json={**form, "title": "signed form of tender"})
+    assert (again.status_code, again.json()["detail"]) == (400, "The checklist already has that requirement.")
+    [row] = client.get(f"/tenders/{tender_id}/submission").json()["requirements"]
+    assert (row["section"], row["added_by"], row["state"], row["document_name"]) == (
+        "Commercial",
+        "engineer",
+        "missing",
+        None,
+    )
+    assert client.post(f"/requirements/{row['id']}/file", files={"file": ("..", b"x")}).status_code == 400
+    for name in ("Form v1.pdf", "Form.pdf"):  # a newer file replaces the one before
+        client.post(f"/requirements/{row['id']}/file", files={"file": (name, name.encode())})
+    with client.app.state.sessions() as session:
+        requirement_ = session.get(submission.Requirement, row["id"])
+        assert [p.name for p in submission.attachments_dir(tmp_path, requirement_).iterdir()] == ["Form.pdf"]
+        with pytest.raises(ValueError, match="The draft is empty."):
+            submission.draft(session, requirement_, layla, "Form of tender", " \n ")
+        decided = submission.draft(session, requirement_, layla, "Form of tender", "Signed.", "approved").id
+        session.commit()
+    assert client.post(f"/drafts/{decided}/decision", json={"approve": True}).status_code == 400
+    assert client.get("/tenders/nope/submission").status_code == 404
+    assert client.post("/tenders/nope/requirements", json=form).status_code == 404
+    assert client.post("/tenders/nope/export", json={}).status_code == 404
+    assert client.post("/drafts/nope/decision", json={"approve": True}).status_code == 404
+    assert client.post("/requirements/nope/ready", json={"ready": True}).status_code == 404
+    assert client.delete("/requirements/nope").status_code == 404
+
+
+def test_pricing_columns_are_letters_and_the_newest_replaces_the_older(client, tender):
+    tender_id, layla, bill, _ = tender
+    header = "E1=Rate | F1=Amount"
+    with client.app.state.sessions() as session:
+        with pytest.raises(ValueError, match="Give the rate column as a letter, e.g. F."):
+            submission.set_pricing_columns(session, tender_id, layla, bill, 1, "5", "F", header)
+        with pytest.raises(ValueError, match="Give the amount column as a letter, e.g. F."):
+            submission.set_pricing_columns(session, tender_id, layla, bill, 1, "E", "F1", header)
+        submission.set_pricing_columns(session, tender_id, layla, bill, 1, "E", "F", header)
+        submission.set_pricing_columns(session, tender_id, "engineer", bill, 1, "E", "F", header)
+        session.commit()
+    columns = client.get(f"/tenders/{tender_id}/submission").json()["columns"]
+    assert [(c["rate_column"], c["amount_column"], c["proposed_by"]) for c in columns] == [("E", "F", "engineer")]
+
+
+@pytest.mark.parametrize(
+    ("name", "safe"),
+    [
+        ("Riyadh: School/Phase 2 <Lot 3>", "Riyadh School Phase 2 Lot 3"),
+        ("Tender\tA\nB", "Tender A B"),
+        (
+            "King Abdullah Financial District Primary School Extension Works B",
+            "King Abdullah Financial District Primary School Extension",
+        ),
+        ("???", "Tender"),
+        ("", "Tender"),
+    ],
+)
+def test_a_package_folder_is_named_so_windows_accepts_it(name, safe):
+    assert export._safe(name) == safe
+
+
+def test_a_title_line_on_its_own_is_dropped_and_a_code_block_keeps_its_lines():
+    from quantix.submission.content import Paragraph, Run, from_markdown
+
+    assert from_markdown("Bid bond\n\n```\nBank: Riyad Bank\nAmount: 1%\n```\n", "Bid Bond") == [
+        Paragraph([Run("Bank: Riyad Bank")]),
+        Paragraph([Run("Amount: 1%")]),
     ]

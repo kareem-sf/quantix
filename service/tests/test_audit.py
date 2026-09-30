@@ -380,3 +380,38 @@ def test_work_the_manager_made_is_given_out_again_when_the_engineer_reopens_it(c
     assert tools.complete_task(ctx, task.id, "Given to Layla.") == "Done. The Manager has your result."
     with client.app.state.sessions() as session:
         assert session.get(Task, task.id).status == "done"
+
+
+def test_the_audit_clears_once_every_blocker_is_settled_and_every_warning_accepted(client, tender):
+    """The fixture's tender finished: the waterproofing row entered and priced, the programme dated, the warnings
+    accepted with reasons and the engineer's question answered."""
+    tender_id, rania_id, docs = tender
+    home = client.app.state.home
+    with client.app.state.sessions() as session:
+        layla = next(m for m in office.team(session, tender_id) if m.first_name == "Layla")
+        rania = session.get(Staff, rania_id)
+        row = "A4=6.3 | B4=Waterproofing | C4=m2 | D4=980"
+        line = boq.ItemIn(item="6.3", description="Waterproofing", unit="m2", quantity=Decimal(980),
+                          document_id=docs["Bill.xlsx"], page=1, quote=row)  # fmt: skip
+        boq.propose_items(session, tender_id, layla, [line])
+        boq.approve(session, boq.find_item(session, tender_id, "6.3"))
+        estimate.approve(session, estimate.propose_rate(session, tender_id, layla.id, "6.3", "estimate", NOTE, 35))
+        programme = submission.find_requirement(session, tender_id, "Programme")
+        submission.draft(session, programme, ENGINEER, "Programme", "Mobilise on 1 March.", status="approved")
+        question = office.ask(session, tender_id, rania, "Dewatering allowance", "Allow for dewatering?", ["Yes", "No"])
+        session.commit()
+
+        found = audit.open_findings(session, home, tender_id)
+        assert [f.message for f in found if f.severity == "blocker"] == [
+            "1 decision waits for the engineer's answer: “Dewatering allowance”."
+        ]
+        reason = "Checked it: it needs no correction here."
+        warnings = [audit.Accepted(finding=audit.short(f.key), reason=reason) for f in found if f.severity == "warning"]
+        assert len(warnings) == 2  # the KMZ Quantix can't read, and the rebar rate above the firm's own
+        assert audit.accept(session, home, tender_id, rania, warnings) == []
+        office.answer(session, question, "No")
+        session.commit()
+        assert audit.report(audit.open_findings(session, home, tender_id)) == (
+            "The audit is clear: nothing blocks the release. Tell the engineer the tender is ready to build."
+        )
+    assert client.post(f"/tenders/{tender_id}/export", json={"spread_markups": False}).json()["not_ready"] == []

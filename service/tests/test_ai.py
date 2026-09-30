@@ -1,11 +1,26 @@
+import asyncio
 import json
 import re
+from types import SimpleNamespace
 
+import anthropic
+import grpc
+import openai
+import pydantic_ai.providers.anthropic
+import pydantic_ai.providers.google
+import pydantic_ai.providers.openai
+import pydantic_ai.providers.xai
 import pytest
+import xai_sdk.aio.client
+from google import genai
 from pydantic_ai import BinaryContent
 from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, UserPromptPart
+from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.function import FunctionModel
+from pydantic_ai.models.google import GoogleModel
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
+from pydantic_ai.models.xai import XaiModel
 
 from quantix.ai import check, providers
 
@@ -167,6 +182,23 @@ def test_removing_a_connection_clears_the_office_ai(client, models, monkeypatch)
     assert client.delete(f"/ai/connections/{connection['id']}").status_code == 404
 
 
+def test_removing_another_connection_keeps_the_office_ai(client, models, monkeypatch):
+    kept, other = add(client).json(), add(client, provider="openai").json()
+    use_model(monkeypatch, follows_instructions)
+    client.post(f"/ai/connections/{kept['id']}/checks", json={"model": "model-a"})
+    office_ai = {"connection_id": kept["id"], "model": "model-a"}
+    client.patch("/settings", json={"office_ai": office_ai})
+
+    assert client.delete(f"/ai/connections/{other['id']}").status_code == 204
+    assert client.get("/settings").json()["office_ai"] == office_ai
+    assert [c["id"] for c in client.get("/ai/connections").json()] == [kept["id"]]
+
+
+def grpc_error(code: grpc.StatusCode) -> Exception:
+    """xAI's client fails with gRPC errors, whose status is a method."""
+    return type("AioRpcError", (Exception,), {"code": lambda self: code})()
+
+
 @pytest.mark.parametrize(
     ("error", "message"),
     [
@@ -175,10 +207,133 @@ def test_removing_a_connection_clears_the_office_ai(client, models, monkeypatch)
         (type("Limited", (Exception,), {"status_code": 429})(), "The service is limiting requests"),
         (type("APIConnectionError", (Exception,), {})(), "Couldn't reach the service."),
         (type("APITimeoutError", (Exception,), {})(), "The AI service took too long to answer."),
+        (type("ClientError", (Exception,), {"code": 402})(), "The service is limiting requests"),
+        (type("ClientError", (Exception,), {"status": "PERMISSION_DENIED"})(), "The key was refused."),
+        (ValueError("Missing API key for this project"), "The key was refused."),
+        (grpc_error(grpc.StatusCode.UNAUTHENTICATED), "The key was refused."),
+        (grpc_error(grpc.StatusCode.NOT_FOUND), "This model isn't available on this account."),
+        (grpc_error(grpc.StatusCode.RESOURCE_EXHAUSTED), "The service is limiting requests"),
+        (grpc_error(grpc.StatusCode.UNAVAILABLE), "Couldn't reach the service."),
+        (grpc_error(grpc.StatusCode.DEADLINE_EXCEEDED), "Couldn't reach the service."),
+        (type("Upstream", (Exception,), {"status_code": 500})(), "The service answered with an error (500)."),
+        (type("Odd", (Exception,), {"code": lambda self, detail: 1})(), "The service answered with an error (Odd)."),
     ],
 )
 def test_failures_are_explained_plainly(error, message):
     assert providers.explain(error).startswith(message)
+
+
+def test_an_explanation_never_repeats_the_key_or_the_services_answer():
+    for error in (
+        RuntimeError('{"error": "invalid x-api-key sk-test-1234abcd"}'),
+        type("Upstream", (Exception,), {"status_code": 503})('{"error": "overloaded", "key": "sk-test-1234abcd"}'),
+        Refused("Incorrect API key provided: sk-test-1234abcd"),
+    ):
+        explained = providers.explain(error)
+        assert "sk-test" not in explained and "{" not in explained
+
+
+@pytest.mark.parametrize(
+    ("provider", "base_url", "module", "name", "built"),
+    [
+        ("anthropic", None, pydantic_ai.providers.anthropic, "AnthropicProvider", AnthropicModel),
+        ("openai", None, pydantic_ai.providers.openai, "OpenAIProvider", OpenAIResponsesModel),
+        ("google", None, pydantic_ai.providers.google, "GoogleProvider", GoogleModel),
+        ("xai", None, pydantic_ai.providers.xai, "XaiProvider", XaiModel),
+        (
+            "openai_compatible",
+            "https://api.example.com/v1",
+            pydantic_ai.providers.openai,
+            "OpenAIProvider",
+            OpenAIChatModel,
+        ),
+    ],
+)
+def test_each_provider_builds_its_own_model_from_the_connections_key(
+    monkeypatch, provider, base_url, module, name, built
+):
+    real, given = getattr(module, name), []
+    monkeypatch.setattr(module, name, lambda **options: given.append(options) or real(**options))
+    model = providers.build_model(provider, "model-a", "sk-test-1234abcd", base_url)
+    assert type(model) is built and model.model_name == "model-a"
+    assert given == [{"api_key": "sk-test-1234abcd"} | ({"base_url": base_url} if base_url else {})]
+
+
+def listing(*items):
+    async def each():
+        for item in items:
+            yield item
+
+    return each()
+
+
+def test_each_provider_lists_the_accounts_chat_models_with_its_own_key(monkeypatch):
+    made = []
+
+    def client(models):
+        def make(**options):
+            made.append(options)
+            return SimpleNamespace(models=models, aio=SimpleNamespace(models=models))
+
+        return make
+
+    async def google_models():
+        return listing(
+            SimpleNamespace(name="models/gemini-pro", supported_actions=["generateContent", "countTokens"]),
+            SimpleNamespace(name="models/text-embedding", supported_actions=["embedContent"]),
+            SimpleNamespace(name="models/aqa", supported_actions=None),
+        )
+
+    async def grok_models():
+        return [SimpleNamespace(name="grok-4"), SimpleNamespace(name="grok-3-mini")]
+
+    claude = [SimpleNamespace(id=i) for i in ("claude-sonnet-5", "claude-haiku-5")]
+    ids = [SimpleNamespace(id=i) for i in ("gpt-4o", "o3", "gpt-5")]
+    monkeypatch.setattr(anthropic, "AsyncAnthropic", client(SimpleNamespace(list=lambda limit: listing(*claude))))
+    monkeypatch.setattr(openai, "AsyncOpenAI", client(SimpleNamespace(list=lambda: listing(*ids))))
+    monkeypatch.setattr(genai, "Client", client(SimpleNamespace(list=google_models)))
+    monkeypatch.setattr(xai_sdk.aio.client, "Client", client(SimpleNamespace(list_language_models=grok_models)))
+
+    def listed(provider, base_url=None):
+        return asyncio.run(providers.list_models(provider, "sk-test-1234abcd", base_url))
+
+    assert listed("anthropic") == ["claude-sonnet-5", "claude-haiku-5"]  # as the service orders them
+    assert listed("google") == ["gemini-pro"]  # only models that chat
+    assert listed("xai") == ["grok-4", "grok-3-mini"]
+    assert listed("openai") == ["o3", "gpt-5", "gpt-4o"]  # newest names first
+    assert listed("openai_compatible", "https://api.example.com/v1") == ["o3", "gpt-5", "gpt-4o"]
+    key = {"api_key": "sk-test-1234abcd"}
+    assert made == [key, key, key, key | {"base_url": None}, key | {"base_url": "https://api.example.com/v1"}]
+
+
+@pytest.mark.parametrize("provider", ["codex", "chatgpt", "grok"])
+def test_a_subscription_is_never_taken_as_an_api_key(client, models, tmp_path, provider):
+    """ChatGPT/Codex and Grok subscriptions work only through their official clients: their tokens are no API key."""
+    assert add(client, provider=provider, api_key="subscription-token").status_code == 422
+    assert not (tmp_path / "auth.json").exists()
+
+
+def test_a_connection_whose_key_stopped_working_says_so(client, models):
+    connection = add(client).json()
+    models.error = Refused("invalid x-api-key")
+    refused = client.get(f"/ai/connections/{connection['id']}/models")
+    assert (refused.status_code, refused.json()["detail"]) == (400, "The key was refused. Check it and try again.")
+
+
+def test_a_model_that_fails_the_check_says_why_in_plain_words(client, models, monkeypatch):
+    connection = add(client).json()
+
+    def refuses(messages, info):
+        raise Refused("invalid x-api-key sk-test-1234abcd")
+
+    use_model(monkeypatch, refuses)
+    checked = client.post(f"/ai/connections/{connection['id']}/checks", json={"model": "model-a"}).json()
+    assert checked["checks"]["model-a"] | {"checked_at": ""} == {
+        "ok": False,
+        "message": "The key was refused. Check it and try again.",
+        "sees_images": False,
+        "checked_at": "",
+    }
 
 
 def test_a_wrapped_provider_error_is_explained_from_its_cause():

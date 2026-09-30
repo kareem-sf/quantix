@@ -41,6 +41,56 @@ describe("Company rules", () => {
     await userEvent.click(screen.getAllByRole("button", { name: "Remove" })[0]);
     await waitFor(() => expect(service.state.rules.map((r) => r.topic)).toEqual(["Markups"]));
   });
+
+  it("says when there are no rules yet", async () => {
+    fakeService({ tenders: [tender] });
+    openApp("/rules");
+
+    expect(await screen.findByText("No rules yet. Add the first one below.")).toBeInTheDocument();
+    expect(screen.queryByText(/Rules marked Example/)).not.toBeInTheDocument();
+  });
+
+  it("leaves a rule as it was when the edit is cancelled, and won't save it empty", async () => {
+    const text = "Always exclude dewatering below 2 m.";
+    const service = fakeService({ tenders: [tender], rules: [{ id: "r1", topic: "Exclusions", text, example: false, created_at: "" }] });
+    openApp("/rules");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    await userEvent.clear(screen.getByRole("textbox", { name: "Edit the rule" }));
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByText(text)).toBeInTheDocument();
+    expect(service.state.rules[0].text).toBe(text);
+  });
+
+  it("says why a rule couldn't be changed or added", async () => {
+    fakeService({
+      tenders: [tender],
+      rules: [{ id: "r1", topic: "Exclusions", text: "Always exclude dewatering below 2 m.", example: false, created_at: "" }],
+      fail: { "/rules/r1": "Rules can't be changed while a tender is exporting.", "/rules": "That rule is already kept." },
+    });
+    openApp("/rules");
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Edit the rule" }), " Or 3 m.");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Rules can't be changed while a tender is exporting.")).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText("Topic"), "Exclusions");
+    await userEvent.type(screen.getByLabelText("Rule"), "Always exclude dewatering below 2 m.");
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(await screen.findByText("That rule is already kept.")).toBeInTheDocument();
+  });
+
+  it("says why a suggested rule couldn't be kept", async () => {
+    const lesson = { id: "l1", text: "Price the cubic metre.", topic: "Rates", source: "the rate for C.2.7.3", status: "tender", created_at: "" };
+    fakeService({ tenders: [tender], lessons: [lesson], fail: { "/lessons/l1": "The lesson was already dropped." } });
+    openApp("/rules");
+
+    expect(await screen.findByText(/1 lesson from work that needed correcting\./)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Keep as a rule" }));
+    expect(await screen.findByText("The lesson was already dropped.")).toBeInTheDocument();
+  });
 });
 
 describe("Tender outcome", () => {

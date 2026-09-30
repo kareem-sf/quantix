@@ -428,4 +428,122 @@ describe("Office", () => {
     expect(await screen.findByRole("heading", { name: "Omar Haddad" })).toBeInTheDocument();
     expect(screen.queryByRole("complementary", { name: "Omar Haddad" })).not.toBeInTheDocument();
   });
+
+  it("says how the team starts before anyone has joined", async () => {
+    fakeService({ tenders: [tender], settings: ready });
+    openApp("/tenders/t1/office");
+
+    const panel = await screen.findByRole("complementary", { name: "Team" });
+    expect(within(panel).getByText(/The Tender Manager joins when you first write to the office/)).toBeInTheDocument();
+    expect(await within(panel).findByText("No messages yet.")).toBeInTheDocument();
+    expect(within(panel).getByRole("tab", { name: "Team room" })).toHaveAttribute("aria-selected", "true");
+    expect(within(panel).getByLabelText("Message")).toHaveAttribute("placeholder", "Message the team room");
+  });
+
+  it("folds three or more turns in a row to one line, keeping the latest in view", async () => {
+    const worked = (id: number, minute: number, doing: string) => ({
+      id, staff_id: "s1", started_at: `2026-09-23T10:4${minute}:00Z`, ended_at: `2026-09-23T10:4${minute}:30Z`, running: false,
+      ended: "done", note: null, doing, steps: 0, log: [],
+    });
+    fakeService({
+      tenders: [tender], settings: ready, staff: [rania, omar],
+      turns: [worked(1, 3, "Reading the ITT"), worked(2, 4, "Briefing Omar"), worked(3, 5, "Checking the BOQ")],
+    });
+    openApp("/tenders/t1/office?with=s1");
+
+    const room = await screen.findByRole("region", { name: "Conversation" });
+    const earlier = await within(room).findByRole("button", { name: "2 earlier turns at work" });
+    expect(within(room).getByRole("button", { name: "Worked for 30 s · Checking the BOQ" })).toBeInTheDocument();
+    expect(within(room).queryByRole("button", { name: /Reading the ITT/ })).not.toBeInTheDocument();
+
+    await userEvent.click(earlier);
+    expect(within(room).getAllByRole("button", { name: /^Worked for 30 s/ }).map((b) => b.textContent)).toEqual([
+      "Worked for 30 s · Reading the ITT",
+      "Worked for 30 s · Briefing Omar",
+      "Worked for 30 s · Checking the BOQ",
+    ]);
+    await userEvent.click(within(room).getByRole("button", { name: "Fold" }));
+    expect(within(room).getByRole("button", { name: "2 earlier turns at work" })).toBeInTheDocument();
+  });
+
+  it("shows the office's notes on their own, apart from what people said", async () => {
+    fakeService({
+      tenders: [tender], settings: ready, staff: [rania, omar],
+      messages: [
+        said(1, "s1", "team", "Omar, measure the slab on A-201."),
+        said(2, "office", "team", "The office paused: the AI allowance for this tender is used.", "note"),
+      ],
+    });
+    openApp("/tenders/t1/office");
+
+    const room = await screen.findByRole("region", { name: "Conversation" });
+    const note = await within(room).findByText("The office paused: the AI allowance for this tender is used.");
+    const heading = within(room).getByRole("button", { name: "About Rania Farouk" }).parentElement!;
+    expect(heading).not.toContainElement(note);
+    expect(heading).toHaveTextContent("Omar, measure the slab on A-201.");
+  });
+
+  it("shows a question the engineer already answered, with the answer", async () => {
+    fakeService({
+      tenders: [tender], settings: ready, staff: [rania, omar],
+      decisions: [{ ...question, status: "answered", answer: "Yes, 1%" }],
+    });
+    openApp("/tenders/t1/office?with=s1");
+
+    const card = await screen.findByRole("group", { name: "Tender security wording" });
+    expect(within(card).getByText("You decided")).toBeInTheDocument();
+    expect(within(card).getByText("Yes, 1%")).toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: "Send answer" })).not.toBeInTheDocument();
+  });
+
+  it("sends no answer until one is chosen or written", async () => {
+    fakeService({ tenders: [tender], settings: ready, staff: [rania, omar], decisions: [{ ...question, status: "waiting", answer: null }] });
+    openApp("/tenders/t1/office?with=s1");
+
+    const card = await screen.findByRole("group", { name: "Tender security wording" });
+    expect(within(card).getByRole("button", { name: "Send answer" })).toBeDisabled();
+    await userEvent.click(within(card).getByRole("button", { name: "Answer in your own words" }));
+    await userEvent.type(within(card).getByLabelText("Your answer"), "   ");
+    expect(within(card).getByRole("button", { name: "Send answer" })).toBeDisabled();
+    await userEvent.click(within(card).getByRole("button", { name: "Ask the client first" }));
+    expect(within(card).queryByLabelText("Your answer")).not.toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Send answer" })).toBeEnabled();
+  });
+
+  it("says why an answer or a message couldn't be sent", async () => {
+    fakeService({
+      tenders: [tender], settings: ready, staff: [rania, omar], decisions: [{ ...question, status: "waiting", answer: null }],
+      fail: { "/decisions/q1/answer": "The question was withdrawn.", "/tenders/t1/messages": "The office has used its AI allowance." },
+    });
+    openApp("/tenders/t1/office?with=s1");
+
+    const card = await screen.findByRole("group", { name: "Tender security wording" });
+    await userEvent.click(within(card).getByRole("button", { name: "Yes, 1%" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Send answer" }));
+    expect(await within(card).findByText("The question was withdrawn.")).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText("Message"), "Carry on{Enter}");
+    expect(await screen.findByText("The office has used its AI allowance.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Message")).toHaveValue("Carry on"); // kept, to send again
+  });
+
+  it("shows only what a profile says in words, and where each task stands", async () => {
+    const profiled: Staff = { ...omar, profile: { experience_years: 11, background: "Character_Overview", working_style: "Measures twice." } };
+    fakeService({
+      tenders: [tender], settings: ready, staff: [rania, profiled],
+      tasks: [
+        { id: "k1", staff_id: "s2", title: "Measure the slab", brief: "A-201.", status: "done", result: null },
+        { id: "k2", staff_id: "s2", title: "Measure the walls", brief: "A-202.", status: "open", result: null },
+      ],
+    });
+    openApp("/tenders/t1/office?with=s2");
+
+    await userEvent.click(await screen.findByRole("button", { name: "About Omar" }));
+    const card = await screen.findByRole("complementary", { name: "Omar Haddad" });
+    expect(within(card).getByText("Quantity Surveyor · 11 years")).toBeInTheDocument();
+    expect(within(card).getByText("Measures twice.")).toBeInTheDocument();
+    expect(within(card).queryByText("Background")).not.toBeInTheDocument(); // a placeholder, not words
+    expect((await within(card).findByText("Measure the slab")).parentElement).toHaveTextContent("Measure the slabdone");
+    expect(within(card).getByText("Measure the walls").parentElement).toHaveTextContent("Measure the wallsworking");
+  });
 });

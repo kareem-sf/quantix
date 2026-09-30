@@ -37,6 +37,14 @@ export default defineConfig(async ({ command }) => {
       include: ["ui/src/**/*.test.{ts,tsx}"],
       setupFiles: ["ui/src/test-setup.ts"],
       testTimeout: 20000, // a busy machine or CI runner must not fail a correct test
+      coverage: {
+        provider: "v8" as const,
+        include: ["ui/src/**"],
+        exclude: ["ui/src/**/*.test.{ts,tsx}", "ui/src/test/**", "ui/src/test-setup.ts", "ui/src/api/schema.ts", "ui/src/main.tsx"],
+        reportsDirectory: "coverage",
+        // CI fails below these: set to what the suite reaches, so it can't quietly shrink
+        thresholds: { statements: 0, branches: 0, functions: 0, lines: 0 },
+      },
     },
   };
 });

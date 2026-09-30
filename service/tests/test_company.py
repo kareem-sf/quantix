@@ -1,4 +1,5 @@
 import io
+from datetime import date
 from decimal import Decimal
 
 from conftest import TOKEN
@@ -10,6 +11,7 @@ from test_estimate import bill
 from quantix import company
 from quantix.api.app import create_app
 from quantix.boq import records as boq
+from quantix.estimate import analysis
 from quantix.estimate import records as estimate
 from quantix.office import agents
 from quantix.office import records as office
@@ -123,3 +125,46 @@ def test_the_company_details_and_logo_are_kept_for_every_document(client):
 
     assert client.delete("/company/logo").status_code == 204
     assert client.get("/company/logo").status_code == 404
+
+
+def test_past_rates_come_newest_tender_first_up_to_the_limit(client):
+    priced_tender(client, "Riyadh school 2025", "18.50", "approved")
+    priced_tender(client, "Dammam school 2026", "19.25", "office_approved")
+    current = client.post("/tenders", json={"name": "Synthetic school"}).json()["id"]
+    with client.app.state.sessions() as session:
+        newest = company.past_rates(session, current, "excavation", limit=1)
+        assert [(p.tender, p.rate) for p in newest] == [("Dammam school 2026", Decimal("19.25"))]
+        assert [p.tender for p in company.past_rates(session, current, "excavation")] == [
+            "Dammam school 2026",
+            "Riyadh school 2025",
+        ]
+
+
+def test_a_rate_beside_the_library_and_the_firms_earlier_tenders(client):
+    old, _ = priced_tender(client, "Riyadh school 2025", "18.50", "approved")
+    client.patch(f"/tenders/{old}", json={"outcome": "lost"})
+    current, _ = priced_tender(client, "Synthetic school", "18.50", "proposed")
+    today = date.today()
+    entry = {"kind": "unit_rate", "unit": "m3", "currency": "SAR", "source": "Engineer", "dated": today.isoformat()}
+    client.post("/library", json={**entry, "name": "Excavation in soft ground", "rate": "17"})
+    client.post("/library", json={**entry, "name": "Excavation in rock", "rate": "37", "dated": "2024-01-10"})
+    client.post("/library", json={**entry, "name": "Excavation by hand", "unit": "m2", "rate": "9"})  # another unit
+    with client.app.state.sessions() as session:
+        text = analysis.compare_rate(session, current, "3.1")
+    months = (today.year - 2024) * 12 + today.month - 1
+    assert text.splitlines() == [
+        "3.1 Excavation: ours 18.50 per m3 (estimate).",
+        f"- Library: Excavation in rock 37 per m3, dated Jan 2024, {months} months old: check it is still current: "
+        "ours is 50% below",
+        f"- Library: Excavation in soft ground 17 per m3, dated {today:%b %Y}: ours is 9% above",
+        f"- Riyadh school 2025 (lost, {today:%b %Y}): 3.1 18.50 per m3: the same as ours",
+    ]
+
+
+def test_a_rule_is_adjusted_one_part_at_a_time_and_an_unknown_rule_is_not_found(client):
+    rule = client.post("/rules", json={"topic": "Markups", "text": "Overheads 5%, profit 7%."}).json()
+    changed = client.patch(f"/rules/{rule['id']}", json={"topic": " Pricing "}).json()
+    assert (changed["topic"], changed["text"], changed["example"]) == ("Pricing", "Overheads 5%, profit 7%.", False)
+    assert client.delete("/rules/nope").status_code == 404
+    assert client.post("/rules", json={"topic": "x" * 101, "text": "Too long a topic."}).status_code == 422
+    assert client.post("/rules", json={"topic": "Markups", "text": ""}).status_code == 422

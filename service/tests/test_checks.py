@@ -8,16 +8,21 @@ from pathlib import Path
 
 import openpyxl
 import pytest
+import test_subcontract
 from test_documents import make_pdf, read_all, upload
 
 from quantix.boq import records as boq
+from quantix.boq.models import BoqItem
 from quantix.estimate import records as estimate
 from quantix.estimate.models import LibraryResource
 from quantix.office import records as office
 from quantix.office.models import ENGINEER, Staff
 from quantix.review import records as reviews
+from quantix.subcontract import records as subcontract
 from quantix.submission import records as submission
 from quantix.takeoff import records as takeoff
+
+subcontracted = test_subcontract.tender  # the fixture: a school's groundworks, with Omar's own rates for 3.1 and 6.3
 
 PLAN = (Path(__file__).parent / "fixtures" / "synthetic-plan.pdf").read_bytes()  # a 40 × 20 m yard, 800 m²
 CONDITIONS = make_pdf([["VAT at fifteen percent", "12.3 The tenderer shall submit a work programme."]])
@@ -307,3 +312,153 @@ def test_a_draft_with_notes_to_the_office_is_flagged(client, tender):
             "out.",
         )
     ]  # "the Engineer" is the contract's own word, so it stays
+
+
+def test_the_same_area_measured_on_another_sheet_is_a_warning(client, tender):
+    tender_id, omar, docs = tender
+    upload(client, tender_id, {"A-103.pdf": PLAN})  # the same yard, on the next sheet of the set
+    sheets = [docs["A-102.pdf"], read_all(client, tender_id)["A-103.pdf"]["id"]]
+    for sheet in sheets:
+        body = {"document_id": sheet, "page": 1, "line": [[85.04, 141.73], [481.89, 141.73]], "length_m": 40}
+        assert client.post(f"/tenders/{tender_id}/scales", json={**body, "dimension": "40.00"}).status_code == 201
+    asphalt = "8485 · Earthwork / C.2"
+    patch = [[500, 700], [550, 700], [550, 750]]  # on the first sheet, clear of the yard
+    with client.app.state.sessions() as session:
+        yard = takeoff.measure(session, tender_id, omar, sheets[0], 1, "area", "Yard", YARD, "m2", None, asphalt)
+        again = takeoff.measure(session, tender_id, omar, sheets[1], 1, "area", "Yard", YARD, "m2", None, asphalt)
+        small = takeoff.measure(session, tender_id, omar, sheets[0], 1, "area", "Patch", patch, "m2", None, asphalt)
+        text = [[100, 700], [300, 700]]  # a page of words, with no lines drawn to check the points against
+        clause = takeoff.measure(session, tender_id, omar, docs["Conditions.pdf"], 1, "length", "Note", text, "m", None,
+                                 None)  # fmt: skip
+        session.commit()
+        yard_id, again_id, small_id, clause_id = yard.id, again.id, small.id, clause.id
+
+    [alike, differs] = client.get(f"/records/measurement/{again_id}/findings").json()
+    assert (alike["severity"], alike["message"]) == (
+        "warning",
+        "“Yard” for 8485 · Earthwork / C.2 measures within 5% of this 800.02 m2: check it isn't the same area "
+        "measured twice.",
+    )
+    assert [r["label"] for r in alike["refs"]] == ["A-103.pdf, page 1", "A-102.pdf, page 1"]
+    assert differs["message"] == (  # the yard twice and the patch
+        "The drawings measure 1,612.739 m2 for 8485 · Earthwork / C.2, +101.6% from the BOQ's 800."
+    )
+    patched = findings(client, "measurement", small_id)
+    assert [m for _, m in patched if "twice" in m] == []  # clear of the yard, and a fraction of its area
+    assert ("warning", "None of its points is on a line of the drawing: check them against the sheet.") in patched
+    assert findings(client, "measurement", clause_id) == []
+    assert "“Yard” for 8485" in findings(client, "measurement", yard_id)[0][1]
+
+
+def test_a_rate_is_compared_only_with_the_same_work_in_the_same_unit(client, tender):
+    tender_id, omar, docs = tender
+    with client.app.state.sessions() as session:
+        c1 = boq.find_item(session, tender_id, "8485 · Earthwork / C.1")
+        session.add(
+            BoqItem(tender_id=tender_id, section="8487 · Earthwork", item="C.1", description="Excavation in all soils",
+                    unit="m2", quantity=Decimal(50), document_id=c1.document_id, page=1, quote=c1.quote, position=9,
+                    proposed_by=omar, status="approved")
+        )  # fmt: skip
+        entry = LibraryResource(kind="unit_rate", name="Asphalt wearing course", unit="m2", rate=Decimal("40"),
+                                currency="SAR", source="Jeddah tender", dated=date(2026, 3, 1))  # fmt: skip
+        session.add(entry)
+        session.flush()
+        estimate.propose_rate(session, tender_id, omar, "8485 · Earthwork / C.1", "estimate", NOTE, Decimal(25))
+        close = estimate.propose_rate(
+            session, tender_id, omar, "8486 · Earthwork / C.1", "estimate", NOTE, Decimal("25.20")
+        )  # within 1% of 25.00
+        estimate.propose_rate(session, tender_id, omar, "8487 · Earthwork / C.1", "estimate", NOTE, Decimal(90))
+        library = estimate.propose_rate(
+            session, tender_id, omar, "8485 · Earthwork / C.2", "library", "", Decimal(40), library_id=entry.id
+        )
+        session.commit()
+        close_id, library_id = close.id, library.id
+    assert findings(client, "rate", close_id) == []  # 90.00 is per m2: a different measure of the same words
+    assert findings(client, "rate", library_id) == []  # the library entry is per m2 too, and it is the benchmark
+
+
+def test_markups_are_compared_with_the_net_cost_and_the_schedule_only_where_they_can_be(client, tender):
+    tender_id, omar, docs = tender
+    quote = "12.3 The tenderer shall submit a work programme."
+    wanted = submission.RequirementIn(
+        section="Technical", title="Work programme", document_id=docs["Conditions.pdf"], page=1, quote=quote
+    )
+    heads = [
+        estimate.PreliminaryIn(item="Site engineer", quantity=1, unit="month", rate=10000),  # 26 days, near the 8
+        estimate.PreliminaryIn(item="Insurance", quantity=1, unit="sum", rate=2500),  # not a time
+    ]
+    with client.app.state.sessions() as session:
+        zero = Decimal(0)
+        markups = estimate.propose_markups(session, tender_id, omar, heads, zero, zero, zero, "Site staff.")
+        submission.add_requirements(session, tender_id, omar, [wanted])
+        requirement = submission.find_requirement(session, tender_id, "Work programme")
+        every_line = [
+            submission.ActivityIn(boq_item="8485 · Earthwork / C.1", output=100, crews=2),  # 5 days
+            submission.ActivityIn(boq_item="8485 · Earthwork / C.2", output=400, crews=1),  # 2 days
+            submission.ActivityIn(boq_item="8486 · Earthwork / C.1", output=100, crews=2),  # 3 days
+        ]
+        record = submission.schedule_record(submission.durations(session, tender_id, every_line), 8)
+        programme = submission.draft(
+            session, requirement, omar, "Programme", "Earthworks, then asphalt.", schedule=record
+        )
+        session.commit()
+        markups_id, programme_id = markups.id, programme.id
+    assert findings(client, "markups", markups_id) == []  # nothing priced yet, so no net cost to compare with
+    assert findings(client, "draft", programme_id) == []  # every line, 8 days between the longest and all in turn
+
+
+def test_a_recommendation_is_checked_for_what_its_quote_leaves_out(client, subcontracted):
+    tender_id, _, omar, gulf, _ = subcontracted
+    left_out = subcontract.Exclusion(description="Dewatering", amount=Decimal(0), page=1, quote="Excludes dewatering")
+    with client.app.state.sessions() as session:
+        firm = subcontract.add_company(session, omar, "Gulf Groundworks", "subcontractor", "Earthworks")
+        package = subcontract.create_package(session, tender_id, omar, "Groundworks", "subcontract", ["3.1", "4.3"])
+        line = test_subcontract.quoted("3.1", "17.00", "3.1 Excavation 17.00")
+        subcontract.record_quote(session, package, firm, omar, gulf, [line], [left_out])
+        subcontract.recommend(session, package, omar, firm, "The only quote.")
+        session.commit()
+        package_id = package.id
+    found = findings(client, "recommendation", package_id)
+    assert (
+        "warning",
+        "Gulf Groundworks's quote can't be levelled: a line it left out has no rate of ours to fill it.",
+    ) in found  # 4.3 has no rate of ours
+    assert (
+        "warning",
+        "Gulf Groundworks excludes Dewatering with nothing allowed for it, so the comparison isn't like with like.",
+    ) in found
+    [unpriced] = [
+        f for f in client.get(f"/records/recommendation/{package_id}/findings").json() if "Dewatering" in f["message"]
+    ]
+    assert [r["label"] for r in unpriced["refs"]] == ["Gulf.pdf, page 1"]
+
+
+@pytest.mark.xfail(strict=True, reason="Bug: a gap no rate of ours fills is said to be filled by our own rate")
+def test_a_gap_nothing_of_ours_can_fill_is_not_said_to_be_filled(client, subcontracted):
+    tender_id, _, omar, gulf, _ = subcontracted
+    with client.app.state.sessions() as session:
+        firm = subcontract.add_company(session, omar, "Gulf Groundworks", "subcontractor", "Earthworks")
+        package = subcontract.create_package(session, tender_id, omar, "Groundworks", "subcontract", ["3.1", "4.3"])
+        line = test_subcontract.quoted("3.1", "17.00", "3.1 Excavation 17.00")
+        subcontract.record_quote(session, package, firm, omar, gulf, [line], [])
+        subcontract.recommend(session, package, omar, firm, "The only quote.")
+        session.commit()
+        package_id = package.id
+    assert not [m for _, m in findings(client, "recommendation", package_id) if "our own rate stands in" in m]
+
+
+@pytest.mark.xfail(strict=True, reason="Bug: a revised quote from the recommended firm breaks the Manager's queue")
+def test_a_revised_quote_from_the_recommended_firm_leaves_the_queue_readable(client, subcontracted):
+    tender_id, _, omar, gulf, _ = subcontracted
+    with client.app.state.sessions() as session:
+        firm = subcontract.add_company(session, omar, "Gulf Groundworks", "subcontractor", "Earthworks")
+        package = subcontract.create_package(session, tender_id, omar, "Groundworks", "subcontract", ["3.1"])
+        line = test_subcontract.quoted("3.1", "17.00", "3.1 Excavation 17.00")
+        subcontract.record_quote(session, package, firm, omar, gulf, [line], [])
+        subcontract.recommend(session, package, omar, firm, "The only quote.")
+        subcontract.record_quote(session, package, firm, omar, gulf, [line], [])  # revised: it replaces the first
+        session.commit()
+        package_id = package.id
+    queue = client.get(f"/tenders/{tender_id}/review")
+    assert queue.status_code == 200
+    assert client.get(f"/records/recommendation/{package_id}/findings").status_code == 200
